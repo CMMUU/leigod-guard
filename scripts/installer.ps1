@@ -8,8 +8,10 @@ downloaded or installed by this script. The Microsoft WebView2 bootstrapper is
 downloaded from Microsoft's distribution link unless BootstrapperPath is supplied.
 Both downloaded and supplied bootstrappers must have a valid Microsoft signature.
 Use -SkipBuild only after testing and building the same source and target yourself.
-Use -CheckCompilerOnly to validate compiler discovery without building, downloading,
-creating output directories, or running the compiler.
+Use -CheckCompilerOnly to discover the compiler and verify its identity by calling
+ISCC /?. It does not build, download, install, or create output directories. Inno
+6 reports only its major version in help; the .iss preprocessor enforces 6.4+ at
+compile time using its authoritative Ver constant.
 #>
 [CmdletBinding()]
 param(
@@ -35,14 +37,43 @@ function Resolve-RepositoryPath {
     return [System.IO.Path]::GetFullPath((Join-Path $repositoryRoot $Path))
 }
 
+function Get-InnoCompilerProbe {
+    param([string]$Path)
+    # Inno 6's PE FileVersion is not the compiler engine version. Its /? handler
+    # prints a recognizable banner and exits 1 (newer versions may exit 0).
+    # https://github.com/jrsoftware/issrc/blob/is-6_7_1/Projects/ISCC.dpr
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $Path
+    $startInfo.Arguments = '/?'
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) { throw 'Could not start the compiler help command.' }
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit(10000)) {
+            $process.Kill()
+            throw 'The compiler help command did not finish within 10 seconds.'
+        }
+        return [pscustomobject]@{
+            ExitCode = $process.ExitCode
+            Output = $stdout.GetAwaiter().GetResult() + "`n" + $stderr.GetAwaiter().GetResult()
+        }
+    } finally {
+        $process.Dispose()
+    }
+}
+
 function Find-InnoCompiler {
     if ($InnoCompiler) {
         $candidates = @(Resolve-RepositoryPath -Path $InnoCompiler)
     } else {
         $candidates = @()
-        # Chocolatey's PATH entry may be a shim whose own version is 0.0.0.0.
-        # Prefer the installed compiler and examine every PATH candidate only
-        # after the standard installation directories.
+        # Prefer the installed compiler over Chocolatey's PATH launcher shim.
         foreach ($programDirectory in @(${env:ProgramFiles(x86)}, $env:ProgramFiles)) {
             if ($programDirectory) { $candidates += Join-Path $programDirectory 'Inno Setup 6\ISCC.exe' }
         }
@@ -52,18 +83,27 @@ function Find-InnoCompiler {
     $rejectedCandidates = @()
     foreach ($candidate in @($candidates | Select-Object -Unique)) {
         if (Test-Path -LiteralPath $candidate -PathType Leaf) {
-            $info = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($candidate)
-            if (($info.FileMajorPart -lt 6) -or
-                (($info.FileMajorPart -eq 6) -and ($info.FileMinorPart -lt 4))) {
-                $reason = "Unsupported or wrapper version '$($info.FileVersion)' at $candidate"
+            $reason = ''
+            try {
+                $probe = Get-InnoCompilerProbe -Path $candidate
+                $banner = [regex]::Match($probe.Output, '(?m)^Inno Setup (?<major>[0-9]+)(?:\.[0-9]+)* Command-Line Compiler\s*$')
+                if ($probe.ExitCode -notin @(0, 1) -or -not $banner.Success) {
+                    $reason = "The help command did not identify a working Inno Setup compiler (exit $($probe.ExitCode)) at $candidate"
+                } elseif ([int]$banner.Groups['major'].Value -lt 6) {
+                    $reason = "Inno Setup $($banner.Groups['major'].Value) is too old at $candidate"
+                }
+            } catch {
+                $reason = "Could not verify the Inno Setup compiler at ${candidate}: $($_.Exception.Message)"
+            }
+            if ($reason) {
                 if ($InnoCompiler) {
-                    throw "$reason. -InnoCompiler must point directly to a real Inno Setup 6.4 or later ISCC.exe, not a launcher shim."
+                    throw "$reason. -InnoCompiler must point to a working Inno Setup 6.4 or later ISCC.exe."
                 }
                 $rejectedCandidates += $reason
                 Write-Verbose "Skipping compiler candidate: $reason"
                 continue
             }
-            Write-Host "Inno Setup compiler: $candidate ($($info.FileVersion))"
+            Write-Host "Inno Setup compiler: $candidate (help identity verified; exact minimum 6.4 is checked during .iss preprocessing)"
             return $candidate
         } elseif ($InnoCompiler) {
             throw "The explicitly supplied -InnoCompiler file does not exist: $candidate. Supply the real Inno Setup 6.4 or later ISCC.exe path."
@@ -94,7 +134,12 @@ function Assert-MicrosoftBootstrapper {
 }
 
 $compiler = Find-InnoCompiler
-if ($CheckCompilerOnly) { return }
+if ($CheckCompilerOnly) {
+    # The help probe's exit 1 is expected on Inno 6, not a failed preflight.
+    # Also clear any stale native exit code before GitHub's pwsh wrapper reads it.
+    $global:LASTEXITCODE = 0
+    return
+}
 $outputRoot = Resolve-RepositoryPath -Path $OutputDirectory
 [System.IO.Directory]::CreateDirectory($outputRoot) | Out-Null
 

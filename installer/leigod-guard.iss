@@ -1,5 +1,8 @@
 ; Build with Inno Setup 6.4 or newer. All payload paths are provided by
 ; scripts/installer.ps1; never point SourceDir at a user's data directory.
+#if Ver < 0x06040000
+  #error Inno Setup 6.4 or newer is required
+#endif
 #ifndef AppVersion
   #error AppVersion must be supplied
 #endif
