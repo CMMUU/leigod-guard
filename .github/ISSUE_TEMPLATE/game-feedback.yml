@@ -1,0 +1,56 @@
+name: 游戏配置与兼容性反馈
+description: 分享游戏进程配置、实际使用结果，或反馈检测与暂停问题。
+title: "[游戏反馈] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请填写实际观察到的情况，反馈不代表该游戏已获得兼容性认证。
+        **此处公开可见：不要上传账号、密码、token、验证码、完整个人路径或原始配置文件。截图与日志请先去除这些信息。**
+  - type: input
+    id: game-name
+    attributes:
+      label: 游戏名称
+      description: 请写游戏中文名和英文名；只知道其中一种也可以。
+      placeholder: 例如：绝地求生 / PUBG
+    validations:
+      required: true
+  - type: input
+    id: platform-region
+    attributes:
+      label: 启动平台与区服
+      description: 填写实际平台（如 Steam、Epic Games 或独立启动器）及区服；不清楚的部分可留空。
+      placeholder: 启动平台；区服
+  - type: input
+    id: executable
+    attributes:
+      label: 实际游戏进程文件名
+      description: 从「游戏名单 → 从运行进程选择」或任务管理器「详细信息」复制实际 .exe 文件名；不要填写完整路径。不确定时可留空。
+      placeholder: 填写实际观察到的 .exe 文件名；多个文件用逗号分隔
+  - type: textarea
+    id: environment
+    attributes:
+      label: 应用与 Windows 版本
+      description: 应用版本见「关于与更新」；Windows 版本可运行 winver 查看。请同时注明安装版或绿色免安装版。
+      placeholder: |
+        雷神守护版本：
+        安装版 / 绿色免安装版：
+        Windows 版本（如 Windows 11 24H2，x64）：
+    validations:
+      required: true
+  - type: textarea
+    id: steps-results
+    attributes:
+      label: 操作步骤与实际结果
+      description: 可报告成功或失败。请说明游戏是否被识别、退出后等待多久、是否还有其他名单游戏运行，以及雷神客户端中核对到的计时状态。
+      placeholder: |
+        操作步骤与宽限期设置：
+        预期结果：
+        实际结果 / 提示内容：
+    validations:
+      required: true
+  - type: textarea
+    id: additional
+    attributes:
+      label: 补充信息（可选）
+      description: 可附已去除账号、token、验证码及个人路径的截图或少量相关日志；请勿上传完整配置目录。

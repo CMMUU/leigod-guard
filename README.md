@@ -1,10 +1,39 @@
-# 雷神守护 · Leigod Guard
+# 雷神守护 Leigod Guard · 雷神加速器自动暂停工具
 
 一个运行在 Windows 上的雷神加速器**自动暂停计时工具**：观察你设置的游戏进程，在这些游戏全部退出、宽限期结束后，向雷神账户发送暂停计时请求，减少忘记手动暂停造成的时长消耗。
 
-**本项目是个人维护的第三方开源工具，不是雷神加速器官方产品，与雷神加速器运营方没有隶属、合作或授权关系。** 此 README 是本项目的使用说明；雷神的账户服务、计时规则及客服仍以其官方渠道为准。
+**Windows 10 / 11 x64 · MIT 开源 · 安装版 EXE / 绿色免安装 ZIP · 应用内更新**
 
 [下载 Windows 安装版（推荐）](https://github.com/CMMUU/leigod-guard/releases/download/v0.6.0/leigod-guard-v0.6.0-windows-x64-setup.exe) · [下载绿色免安装版](https://github.com/CMMUU/leigod-guard/releases/download/v0.6.0/leigod-guard-v0.6.0-windows-x64.zip) · [全部下载与校验文件](https://github.com/CMMUU/leigod-guard/releases/latest) · [版本记录](CHANGELOG.md) · [隐私与本地数据](docs/PRIVACY.md) · [问题反馈](https://github.com/CMMUU/leigod-guard/issues)
+
+Leigod Guard is an unofficial, open-source Windows companion for the Leigod game accelerator. It requests a pause of account time after all configured game processes exit and the grace period ends. Installer and portable downloads are available above.
+
+**本项目是个人维护的第三方开源工具，不是雷神加速器官方产品，与雷神加速器运营方没有隶属、合作或授权关系。** 此 README 是本项目的使用说明；雷神的账户服务、计时规则及客服仍以其官方渠道为准。
+
+## 三步开始使用
+
+1. **下载并打开**：选择上方安装版，双击完成安装；或下载绿色版并完整解压。打开雷神守护后，登录自己的雷神账户。
+2. **加入游戏名单**：在雷神官方客户端开启所需加速并启动游戏，再在本工具中点击「从运行进程选择…」，把实际的游戏进程加入名单。
+3. **后台守护计时**：保持工具运行。它观察到游戏运行后，在名单内所有游戏退出、宽限期结束时请求暂停计时（默认宽限期为 90 秒）。首次使用请在雷神客户端核对一次暂停结果。
+
+安装、验证码、托盘操作和更新方法见下方「下载与首次使用」。
+
+## 常见游戏使用场景
+
+如果你平时使用雷神加速器游玩下列 Windows 游戏，可以参考这些场景设置游戏名单。是否需要网络加速、游戏和区服是否可用，请先在雷神官方客户端确认。
+
+| 场景 | 游戏举例与常用名称 |
+| --- | --- |
+| 竞技射击 | 绝地求生（PUBG / PUBG: BATTLEGROUNDS）、反恐精英 2（CS2 / Counter-Strike 2）、Apex 英雄（Apex Legends） |
+| 战术射击 | 彩虹六号：围攻 X（Rainbow Six Siege X）、逃离塔科夫（Escape from Tarkov） |
+| 生存联机 | Rust（腐蚀）、DayZ、幻兽帕鲁（Palworld） |
+| 动作与合作 | 永劫无间（NARAKA: BLADEPOINT）、怪物猎人：世界（Monster Hunter: World） |
+
+游戏名称用于说明使用场景；本项目采用通用进程监控，**尚未逐款验证上述游戏及其反作弊兼容性**。请通过「从运行进程选择…」确认实际 `.exe` 文件名，并按首次使用步骤核对暂停结果。游戏、启动平台或版本不同，进程名也可能不同；无需在代码中为每款游戏单独添加支持。
+
+雷神提供的游戏与线路信息可查阅[官方 PC 游戏目录](https://www.leigod.com/pcgame/)和[官方帮助中心](https://www.leigod.com/help-center/)。游戏名称与商标归各自权利人所有。
+
+遇到某款游戏无法识别或暂停时，可提交[游戏配置与兼容反馈](https://github.com/CMMUU/leigod-guard/issues/new?template=game-feedback.yml)，附上游戏名称、启动平台、实际进程文件名和操作结果，帮助完善配置经验。
 
 ## 适用范围
 
@@ -100,6 +129,10 @@ Get-FileHash .\leigod-guard-v0.6.0-windows-x64-setup.exe -Algorithm SHA256
 
 ## 边界与常见问题
 
+**Steam、Epic Games Launcher 等启动器也要加入名单吗？**
+
+优先选择真正的游戏进程。平台客户端和启动器可能在游戏退出后继续运行；若把它们也加入名单，工具会认为仍有名单内程序运行，因而不会开始暂停倒计时。仅进行商店浏览或游戏下载时，本工具没有「下载完成后暂停」功能。
+
 **退出游戏后没有暂停？**
 
 检查是否已登录、总开关是否开启、进程名是否正确、其他名单游戏是否仍在运行，以及宽限期是否结束。游戏启动器、反作弊启动器或后台辅助程序可能与游戏主体名称不同，应以实际退出时会结束的游戏进程为准。看到失败提示时，请在雷神官方客户端或官方账户页面手动确认并暂停。
@@ -156,6 +189,8 @@ Windows MSVC 自动构建与发布流程见 [发布说明](docs/RELEASING.md)。
 ## 参与维护
 
 欢迎通过 [Issues](https://github.com/CMMUU/leigod-guard/issues) 提交可复现的问题，通过 Pull Request 改进代码与文档。反馈请附上版本、Windows 版本、操作步骤、预期结果和实际结果。截图或日志请先移除手机号、账户详情、token、验证码及个人目录信息。
+
+游戏识别、退出检测或暂停结果相关问题，可使用[游戏配置与兼容反馈表单](https://github.com/CMMUU/leigod-guard/issues/new?template=game-feedback.yml)。欢迎分享可复现的配置经验，方便其他玩家按实际游戏版本核对。
 
 接口研究参考：[XuHandsome/leigod-helper](https://github.com/XuHandsome/leigod-helper)。该链接用于说明协议研究来源，不代表上游维护者参与、支持或授权本项目，也不为其代码重新授予许可证。第三方依赖及其许可证按各自项目声明执行，另见 [第三方说明](THIRD_PARTY_NOTICES.txt)。
 
