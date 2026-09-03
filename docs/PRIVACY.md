@@ -21,6 +21,8 @@
 
 Windows 默认配置目录为 `%APPDATA%\leigod-guard\`。
 
+安装版的程序文件默认位于 `%LOCALAPPDATA%\Programs\LeigodGuard\`，与上述用户数据分开保存。安装器为当前 Windows 用户创建快捷方式和卸载记录，并将已有的本工具自启项迁移到安装目录；未开启自启时不会自动创建自启项。卸载器仅清理指向当前安装目录的自启项。升级及卸载时保留用户数据，不会自动退出雷神账户或删除游戏名单；便携版与安装版在同一 Windows 用户下使用同一份应用配置。
+
 | 文件 | 内容及保留方式 |
 | --- | --- |
 | `config.toml` | 游戏名单、策略、明文账户名称、加密 token 和可选的加密密码哈希；保留到被修改或删除 |
@@ -41,16 +43,23 @@ Windows 默认配置目录为 `%APPDATA%\leigod-guard\`。
 
 ## 网络访问
 
+- 安装版检测到 WebView2 Runtime 缺失时，会运行随包的微软安装引导程序，由它联网下载并安装运行时。此过程访问微软的下载服务，运行时及其更新按微软自身的许可和隐私政策处理。
 - 登录、短信、验证码配置、账户查询和暂停操作会访问 `https://webapi.leigod.com` 及雷神服务使用的验证接口。
 - 内嵌验证码窗口加载极验验证组件及其相关资源。验证服务可能按其自身政策处理网络地址、浏览器环境和验证交互等数据。
 - 验证页面由程序通过本机回环地址提供，用于承载内嵌窗口，不是供局域网设备访问的控制页面。
 - 当前源码没有设置项目维护者的账户数据收集服务器或遥测上传功能。用户向 Issues 主动提交的内容会按 GitHub 的规则公开展示。
+
+内嵌 WebView2 组件包含默认启用的 **Microsoft Defender SmartScreen**，会收集并向微软发送用户信息，具体范围及用途见 [微软隐私声明](https://privacy.microsoft.com/en-us/privacystatement) 和 [SmartScreen 隐私说明](https://learn.microsoft.com/en-us/microsoft-edge/privacy-whitepaper#smartscreen)。WebView2 也会收集必要诊断数据；可选诊断数据由 Windows 的「诊断和反馈」设置控制，关闭可选数据并不代表关闭全部必要数据。详见 [微软 WebView2 数据与隐私文档](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/data-privacy)。
+
+安装引导程序及 WebView2 Runtime 适用单独的微软条款，随包保存的 [许可全文与来源](../licenses/webview2-runtime/README.md) 不属于本项目 MIT 许可的授权范围。
 
 HTTPS 不代表服务提供方看不到请求，也不阻止本机代理、企业网络配置或诊断工具在其权限范围内处理网络数据。非公开接口的格式和可用性由服务提供方决定。
 
 ## 退出登录与清除
 
 在「账户」页使用「退出登录」会清空应用持有的 token、已保存的账户名与加密凭据。它是本地清除操作，**不等于撤销服务端已签发的 token**，也不会自动删除全部历史日志或浏览器缓存。
+
+仅卸载雷神守护不会清除 `%APPDATA%\leigod-guard\`。如需在卸载前清除账户信息，可先在应用中退出登录。卸载本工具也不会卸载可能由其他应用共用的 WebView2 Runtime。
 
 需要清除本工具的配置和诊断文件时：
 

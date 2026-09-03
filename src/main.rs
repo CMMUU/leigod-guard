@@ -7,6 +7,7 @@ mod autostart;
 mod captcha;
 mod config;
 mod dpapi;
+mod instance;
 mod leigod_api;
 mod monitor;
 mod osd;
@@ -37,6 +38,20 @@ fn main() {
     }
 
     let minimized = args.iter().any(|a| a == "--minimized");
+
+    let _instance = match instance::InstanceGuard::acquire() {
+        Ok(Some(guard)) => guard,
+        Ok(None) => {
+            if !minimized {
+                ui::activate_existing_window();
+            }
+            return;
+        }
+        Err(_) => {
+            ui::msgbox_warn("启动失败", "无法确认程序运行状态，请退出已有实例后重试。");
+            std::process::exit(1);
+        }
+    };
 
     let config = Arc::new(Mutex::new(config::Config::load()));
     let shared = Arc::new(Mutex::new(shared::Shared::default()));

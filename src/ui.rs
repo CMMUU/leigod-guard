@@ -253,6 +253,17 @@ fn find_main_hwnd() -> Option<windows::Win32::Foundation::HWND> {
     }
 }
 
+/// A second shortcut launch brings the running instance to the foreground.
+pub fn activate_existing_window() {
+    use windows::Win32::UI::WindowsAndMessaging::{SetForegroundWindow, ShowWindow, SW_RESTORE};
+    if let Some(hwnd) = find_main_hwnd() {
+        unsafe {
+            let _ = ShowWindow(hwnd, SW_RESTORE);
+            let _ = SetForegroundWindow(hwnd);
+        }
+    }
+}
+
 /// 原生隐藏主窗口。winit 0.30 在 Windows 下 set_visible(false) 不会真正隐藏窗口
 /// （apply_diff 只处理"变可见"，漏了 SW_HIDE 分支），导致 egui 以为窗口已隐藏而
 /// 停止重绘、窗口却还停在屏幕上"假死"。所以隐藏必须走原生 ShowWindow(SW_HIDE)。

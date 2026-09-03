@@ -1,0 +1,18 @@
+Microsoft Edge WebView2 Runtime
+
+LeigodGuard Setup contains Microsoft's unmodified Evergreen WebView2
+Bootstrapper. If WebView2 is not already installed, the bootstrapper downloads
+and installs the Runtime from Microsoft. The Runtime is a shared Microsoft
+component and is not removed when LeigodGuard is uninstalled.
+
+Microsoft Edge WebView2 is licensed by Microsoft under its own license terms;
+the LeigodGuard MIT license does not apply to Microsoft's components.
+
+Runtime downloads and applicable terms:
+https://developer.microsoft.com/microsoft-edge/webview2/
+
+Official redistribution and installation documentation:
+https://learn.microsoft.com/microsoft-edge/webview2/concepts/distribution
+
+Microsoft privacy statement:
+https://privacy.microsoft.com/privacystatement

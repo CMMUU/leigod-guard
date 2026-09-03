@@ -3,6 +3,7 @@
 *.log
 *.log.*
 config.toml
+!.cargo/config.toml
 captcha-result*
 captcha-test*
 .env

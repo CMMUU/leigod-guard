@@ -4,7 +4,7 @@
 
 **本项目是个人维护的第三方开源工具，不是雷神加速器官方产品，与雷神加速器运营方没有隶属、合作或授权关系。** 此 README 是本项目的使用说明；雷神的账户服务、计时规则及客服仍以其官方渠道为准。
 
-[下载 Windows 版](https://github.com/CMMUU/leigod-guard/releases/latest) · [版本记录](CHANGELOG.md) · [隐私与本地数据](docs/PRIVACY.md) · [问题反馈](https://github.com/CMMUU/leigod-guard/issues)
+[下载 Windows 安装版](https://github.com/CMMUU/leigod-guard/releases/download/v0.5.1/leigod-guard-v0.5.1-windows-x64-setup.exe) · [全部下载与校验文件](https://github.com/CMMUU/leigod-guard/releases/latest) · [版本记录](CHANGELOG.md) · [隐私与本地数据](docs/PRIVACY.md) · [问题反馈](https://github.com/CMMUU/leigod-guard/issues)
 
 ## 适用范围
 
@@ -40,34 +40,40 @@ Windows 10 / 11 x64 是当前支持目标，并不表示所有系统版本、驱
 
 ## 下载与首次使用
 
-1. 打开 [Releases](https://github.com/CMMUU/leigod-guard/releases)，下载 `leigod-guard-v0.5.0-windows-x64.zip`。页面中的 `Source code` 是源码，不是可直接运行的程序。
-2. 解压到固定目录，保留包内文件并运行 `leigod-guard.exe`。如果要开启自启，请先确定目录，之后移动程序需要重新设置自启。
+1. 下载 [Windows x64 安装包](https://github.com/CMMUU/leigod-guard/releases/download/v0.5.1/leigod-guard-v0.5.1-windows-x64-setup.exe)：`leigod-guard-v0.5.1-windows-x64-setup.exe`。页面中的 `Source code` 是源码，不是安装程序。
+2. 双击安装包，按向导完成安装，然后从开始菜单或桌面快捷方式打开「雷神守护」。**不需要解压或手动配置运行库。** 安装器会在需要时自动安装验证码窗口所需的 WebView2 Runtime；首次补装运行时需要联网。
 3. 打开「账户」页，用自己的雷神账户登录。提供密码、短信验证码和已有 token 三种方式；遇到人机验证时按窗口提示完成。不要把密码、短信验证码或 token 发到 Issues。
 4. 打开「游戏名单」，先启动一次游戏，再用「从运行进程选择…」选择真正的游戏进程。手动添加时填写例如 `ExampleGame.exe` 的文件名，不填完整路径、桌面快捷方式名称或 `*.exe`。
 5. 在「策略」中确认「启用自动暂停」及宽限期设置。随后在雷神官方客户端中手动开启所需加速。
 6. 首次使用请观察一次「游戏运行中 → 游戏退出 → 宽限期 → 已暂停」完整流程，并在雷神官方客户端或账户页面核对计时状态。
 
-当前发布形式是便携 ZIP，没有安装器或应用内自动更新，程序未进行 Windows 代码签名，系统可能显示未知发布者。请从本仓库的 Release 下载并按下文校验文件。
+安装版默认安装到当前用户的 `%LOCALAPPDATA%\Programs\LeigodGuard\`，无需管理员权限，创建开始菜单快捷方式，并可选择是否创建桌面快捷方式。安装程序与应用尚未进行 Windows 代码签名，系统可能显示未知发布者；请从本仓库的 Release 下载并按下文校验文件。目前没有应用内自动更新。
 
-程序需要可访问雷神服务的网络连接和有效登录状态。验证码窗口使用 [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/)；若提示运行时缺失，请从微软页面安装。MSVC 构建如提示缺少 `VCRUNTIME` / `MSVCP` DLL，可安装微软提供的 [Visual C++ v14 x64 运行库](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170)。
+程序需要可访问雷神服务的网络连接和有效登录状态。安装器包含微软的 [WebView2 Runtime 安装引导程序](https://developer.microsoft.com/en-us/microsoft-edge/webview2/)，检测到运行时缺失时自动联网补装；它不是包含全部运行时的离线安装包。当前 MSVC 发布构建静态链接 C/C++ 运行库，不需要另行安装 Visual C++ 运行库。安装失败时按提示检查网络后重试，不必手动寻找 DLL。
+
+WebView2 Runtime 适用独立的 [微软许可条款](licenses/webview2-runtime/LICENSE.txt)。安装向导会展示相应条款；其中默认启用的 Microsoft Defender SmartScreen 会按微软隐私声明处理并向微软发送信息，详见 [隐私说明](docs/PRIVACY.md)。
+
+需要便携版的用户，可在同一 Release 下载 `leigod-guard-v0.5.1-windows-x64.zip`，解压到固定目录后运行 `leigod-guard.exe`。便携版不提供安装和卸载向导，验证码功能需要系统已经安装 WebView2 Runtime；普通用户建议使用上面的安装版。
 
 ### 关闭窗口、退出与升级
 
 - 点击主窗口右上角 **X** 或「隐藏到托盘」会隐藏窗口，后台监控继续运行。
 - 点击托盘图标可重新打开窗口；真正退出请使用托盘菜单「退出」或账户页「退出程序」。
 - 退出时若已登录，会提供「暂停并退出」「直接退出」「取消」，因为账户计时可能仍在继续。直接退出后，工具不再监控或重试暂停；暂停未能确认成功时，会再次询问是否继续退出。
-- 更新时先退出旧程序，再将新版解压到固定目录。配置保存在用户目录，通常无需复制到程序目录。若更换了程序路径，请在新版中关闭再开启自启。
-- 移除工具前先关闭自启并退出程序，再删除程序目录。若还需要清除账户信息，先使用「退出登录」，或在程序退出后删除下文所述本地数据目录。
+- 更新安装版时，先完全退出旧程序，再运行新版安装包。配置保存在用户目录，更新时会保留游戏名单、策略与登录配置。
+- 从旧便携版升级到安装版时，先退出旧程序，再运行安装包。新程序会读取同一 Windows 用户的原有配置，无须复制配置文件；安装器会把已有的本工具自启路径更新到安装目录，没有开启自启时不会自行开启。
+- 卸载安装版时，先退出程序，再到 Windows「设置 → 应用」中找到「雷神守护」（英文界面为 `LeigodGuard`）卸载。卸载器会清理指向本安装目录的自启项，并保留 `%APPDATA%\leigod-guard\` 中的用户数据，便于重装；若需清除账户信息，可先使用「退出登录」，更多清理方法见 [隐私说明](docs/PRIVACY.md)。便携版应先关闭自启，再退出并删除程序目录。
+- 当前版本重复打开时会尝试唤起已运行的主窗口。安装或卸载提示程序仍在运行时，请先通过托盘菜单完全退出后重试；旧版便携程序也应先手动退出。
 
 ### 校验下载文件
 
 在下载目录的 PowerShell 中运行：
 
 ```powershell
-Get-FileHash .\leigod-guard-v0.5.0-windows-x64.zip -Algorithm SHA256
+Get-FileHash .\leigod-guard-v0.5.1-windows-x64-setup.exe -Algorithm SHA256
 ```
 
-将结果与同一 Release 提供的 `SHA256SUMS.txt` 核对。哈希校验用于确认下载内容一致，不等同于 Windows 代码签名。
+将结果与同一 Release 提供的 `SHA256SUMS.txt` 中相同文件名的记录核对。便携 ZIP 也可用同样方式校验。哈希校验用于确认下载内容一致，不等同于 Windows 代码签名。
 
 ## 边界与常见问题
 
@@ -116,7 +122,7 @@ rustup target add x86_64-pc-windows-msvc
 cargo build --release --locked --target x86_64-pc-windows-msvc
 ```
 
-输出程序：`target\x86_64-pc-windows-msvc\release\leigod-guard.exe`。
+输出程序：`target\x86_64-pc-windows-msvc\release\leigod-guard.exe`。仓库的 MSVC 目标配置启用静态 C/C++ 运行库链接，供安装版与便携版共用。
 
 命令行参数：`--minimized` 启动到托盘；`--version` 显示版本后退出；`--help` 显示帮助后退出。后两者在读取账户配置和启动监控之前退出，可用于检查下载的程序版本。
 

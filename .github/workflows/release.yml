@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag, for example v0.5.0
+        description: Existing stable release tag, for example v0.5.1
         required: true
         type: string
 
@@ -31,8 +31,8 @@ jobs:
     steps:
       - name: Validate tag format
         run: |
-          if ($env:RELEASE_TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$') {
-            throw 'Expected a semantic version tag beginning with v.'
+          if ($env:RELEASE_TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') {
+            throw 'Expected a stable major.minor.patch version tag beginning with v.'
           }
       - name: Check out the exact release tag
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -64,8 +64,18 @@ jobs:
         run: cargo test --locked --offline --target $env:RUST_TARGET
       - name: Build release executable
         run: cargo build --release --locked --offline --target $env:RUST_TARGET
-      - name: Package executable and documents
-        run: ./scripts/package.ps1 -Target $env:RUST_TARGET -OutputDirectory dist -SkipBuild
+      - name: Build Windows installer and portable package
+        run: ./scripts/installer.ps1 -Target $env:RUST_TARGET -OutputDirectory dist -SkipBuild
+      - name: Test silent installation, upgrade, and uninstall
+        run: ./scripts/test-installer.ps1 -OutputDirectory dist
+      - name: Upload installer test logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: installer-test-logs-${{ github.ref_name }}
+          path: dist/installer-test-logs/
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Prepare release notes
         run: |
           $version = $env:RELEASE_TAG.Substring(1)
@@ -74,11 +84,13 @@ jobs:
           $section = [regex]::Match($changelog, $pattern)
           if (-not $section.Success) { throw "Missing CHANGELOG entry for $version." }
           $notes = @"
-          Windows x64 便携版；由 GitHub Actions 在 Windows Server 2022 上构建，目标为 ``$env:RUST_TARGET``。
+          **推荐下载安装版：``leigod-guard-$env:RELEASE_TAG-windows-x64-setup.exe``。** 双击后按安装向导操作，完成后可从桌面或开始菜单打开。
 
-          已完成本工作流中的代码格式检查、离线单元测试和 release 编译。本工作流不验证真实账户登录、验证码、实际暂停请求、关机行为或图形界面交互。
+          适用于 Windows 10 / 11 x64。安装程序自动检查 Microsoft WebView2 Runtime；缺少时调用包内的微软官方安装器联网补齐。已有运行库时直接安装应用。登录雷神账号并添加需要监控的游戏后即可使用。安装版和便携版均为独立第三方工具，与雷神官方无隶属或背书关系。
 
-          请下载 ``leigod-guard-$env:RELEASE_TAG-windows-x64.zip`` 和 ``SHA256SUMS.txt``。这是独立第三方项目，与雷神官方无隶属或背书关系。使用方式、自动暂停的触发条件和限制见包内 README。
+          需要免安装时，可下载备选的 ``leigod-guard-$env:RELEASE_TAG-windows-x64.zip``。``SHA256SUMS.txt`` 包含安装版和便携包的 SHA-256 校验值。程序尚未代码签名，Windows 可能提示未知发布者。
+
+          本工作流在 Windows Server 2022 上构建 ``$env:RUST_TARGET``，已通过代码格式、离线单元测试、release 编译、静态 CRT 依赖检查，以及静默安装、快捷方式、版本号、覆盖升级、卸载和配置保留检查。未验证真实账户登录、验证码、实际暂停请求、关机行为或图形界面交互。使用方法、触发条件及限制见仓库 README。
 
           $($section.Groups[1].Value.Trim())
           "@
@@ -89,14 +101,13 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           $zip = Join-Path $PWD "dist/leigod-guard-$env:RELEASE_TAG-windows-x64.zip"
+          $setup = Join-Path $PWD "dist/leigod-guard-$env:RELEASE_TAG-windows-x64-setup.exe"
           $sums = Join-Path $PWD 'dist/SHA256SUMS.txt'
           $arguments = @(
-            'release', 'create', $env:RELEASE_TAG, $zip, $sums,
+            'release', 'create', $env:RELEASE_TAG, $setup, $zip, $sums,
             '--verify-tag', '--draft', '--title', "Leigod Guard $env:RELEASE_TAG",
             '--notes-file', 'dist/release-notes.md'
           )
-          $isPrerelease = $env:RELEASE_TAG -match '^v[0-9]+\.[0-9]+\.[0-9]+-'
-          if ($isPrerelease) { $arguments += '--prerelease' }
           # An existing release causes this to fail instead of silently replacing assets.
           gh @arguments
           if ($LASTEXITCODE -ne 0) { throw 'Release creation failed. Inspect any existing release before retrying.' }
