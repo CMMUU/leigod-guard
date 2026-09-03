@@ -39,7 +39,16 @@ $uninstaller = Join-Path $installRoot 'unins000.exe'
 $ownedStartup = '"' + $installedExecutable + '" --minimized'
 
 function Get-StartupValue {
-    return Get-ItemPropertyValue -LiteralPath $runKey -Name 'LeigodGuard' -ErrorAction SilentlyContinue
+    if (-not (Test-Path -LiteralPath $runKey -ErrorAction Stop)) { return $null }
+    $registryKey = Get-Item -LiteralPath $runKey -ErrorAction Stop
+    try {
+        # RegistryKey.GetValue returns the explicit default for a missing value;
+        # Get-ItemPropertyValue can still throw for that expected clean state.
+        return $registryKey.GetValue('LeigodGuard', $null,
+            [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+    } finally {
+        $registryKey.Dispose()
+    }
 }
 
 function Assert-NoGuiProcess {
