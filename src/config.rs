@@ -68,6 +68,13 @@ pub struct Account {
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct Updates {
+    /// 仅检查公开版本信息；下载安装仍需用户点击。
+    pub check_on_startup: bool,
+}
+
+#[derive(Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     pub games: Vec<GameEntry>,
     pub plans: Vec<AccelPlan>,
@@ -75,6 +82,29 @@ pub struct Config {
     pub strategy: Strategy,
     #[serde(default)]
     pub account: Account,
+    #[serde(default)]
+    pub updates: Updates,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Config;
+
+    #[test]
+    fn older_config_does_not_enable_update_requests() {
+        let cfg: Config = toml::from_str("games = []\nplans = []\n").unwrap();
+        assert!(!cfg.updates.check_on_startup);
+        assert!(cfg.strategy.enabled);
+    }
+
+    #[test]
+    fn update_preference_survives_serialization() {
+        let mut cfg = Config::default();
+        cfg.updates.check_on_startup = true;
+        let text = toml::to_string(&cfg).unwrap();
+        let restored: Config = toml::from_str(&text).unwrap();
+        assert!(restored.updates.check_on_startup);
+    }
 }
 
 impl Config {

@@ -5,6 +5,9 @@ use crate::dpapi;
 use crate::leigod_api as api;
 use crate::osd;
 use crate::shared::{ManualCmd, Shared};
+use crate::updater::{DownloadProgress, DownloadedUpdate, PackageKind, ReleaseInfo};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
@@ -17,6 +20,14 @@ enum Page {
     Account,
     Strategy,
     Logs,
+    Updates,
+}
+
+enum UpdateEvent {
+    Checked(Result<Option<ReleaseInfo>, String>),
+    Progress(DownloadProgress),
+    Downloaded(Result<DownloadedUpdate, String>),
+    PreparationFailed(String),
 }
 
 /// 已保存密码的占位显示（密码框里展示，不代表真实密码）
@@ -31,6 +42,15 @@ pub struct App {
     page: Page,
     dirty: bool,
     status_msg: String,
+
+    update_events: Option<Receiver<UpdateEvent>>,
+    update_release: Option<ReleaseInfo>,
+    update_kind: Result<PackageKind, String>,
+    update_busy: bool,
+    update_preparing: Arc<AtomicBool>,
+    update_progress: Option<DownloadProgress>,
+    update_message: String,
+    update_error: bool,
 
     // 添加游戏表单
     new_name: String,
@@ -320,6 +340,7 @@ fn tray_event_loop(
     ctx: egui::Context,
     shared: Arc<Mutex<Shared>>,
     config: Arc<Mutex<Config>>,
+    update_preparing: Arc<AtomicBool>,
     ids: TrayIds,
 ) {
     dbglog("tray event loop started");
@@ -358,6 +379,10 @@ fn tray_event_loop(
         while let Ok(event) = MenuEvent::receiver().try_recv() {
             dbglog(&format!("menu event: {:?}", event.id));
             let id = event.id;
+            if update_preparing.load(Ordering::Acquire) && (id == ids.pause || id == ids.quit) {
+                show_window(&ctx, &mut hwnd);
+                continue;
+            }
             if id == ids.open {
                 show_window(&ctx, &mut hwnd);
             } else if id == ids.pause {
@@ -366,7 +391,7 @@ fn tray_event_loop(
                     s.log("托盘指令：立即暂停");
                 }
             } else if id == ids.quit {
-                try_exit(&shared, &config);
+                try_exit(&shared, &config, &update_preparing);
             }
         }
         std::thread::sleep(Duration::from_millis(120));
@@ -374,13 +399,25 @@ fn tray_event_loop(
 }
 
 /// 托盘「退出」：确认对话框；若正在加速，可先自动暂停再退出
-fn try_exit(shared: &Arc<Mutex<Shared>>, config: &Arc<Mutex<Config>>) {
+fn try_exit(
+    shared: &Arc<Mutex<Shared>>,
+    config: &Arc<Mutex<Config>>,
+    update_preparing: &AtomicBool,
+) {
+    if update_preparing.load(Ordering::Acquire) {
+        return;
+    }
     dbglog("try_exit enter");
     let accelerating = shared
         .lock()
         .map(|s| s.token.is_some() || s.status.contains("加速中"))
         .unwrap_or(false);
-    match msgbox_exit(accelerating) {
+    let choice = msgbox_exit(accelerating);
+    // A tray confirmation can remain open while the UI finishes downloading.
+    if update_preparing.load(Ordering::Acquire) {
+        return;
+    }
+    match choice {
         ExitChoice::Cancel => dbglog("exit cancelled"),
         ExitChoice::ExitNow => do_exit(config),
         ExitChoice::PauseThenExit => {
@@ -394,6 +431,9 @@ fn try_exit(shared: &Arc<Mutex<Shared>>, config: &Arc<Mutex<Config>>) {
             let deadline = std::time::Instant::now() + Duration::from_secs(12);
             let mut paused = false;
             while std::time::Instant::now() < deadline {
+                if update_preparing.load(Ordering::Acquire) {
+                    return;
+                }
                 std::thread::sleep(Duration::from_millis(300));
                 let result = shared.lock().ok().and_then(|s| s.manual_pause_result);
                 if let Some(success) = result {
@@ -401,13 +441,17 @@ fn try_exit(shared: &Arc<Mutex<Shared>>, config: &Arc<Mutex<Config>>) {
                     break;
                 }
             }
+            if update_preparing.load(Ordering::Acquire) {
+                return;
+            }
             if paused {
                 do_exit(config);
             } else if msgbox_yesno(
                 "暂停未确认",
                 "暂停计时未能确认成功（可能已失败，详见日志）。\n仍要退出吗？退出后工具不会再尝试暂停，时长可能继续消耗。",
                 true,
-            ) {
+            ) && !update_preparing.load(Ordering::Acquire)
+            {
                 do_exit(config);
             }
         }
@@ -430,6 +474,7 @@ impl App {
         config: Arc<Mutex<Config>>,
     ) -> Self {
         load_cjk_fonts(&cc.egui_ctx);
+        let update_preparing = Arc::new(AtomicBool::new(false));
 
         // 托盘
         let menu = Menu::new();
@@ -467,21 +512,36 @@ impl App {
             let ctx = cc.egui_ctx.clone();
             let shared = Arc::clone(&shared);
             let config = Arc::clone(&config);
-            std::thread::spawn(move || tray_event_loop(ctx, shared, config, ids));
+            let update_preparing = Arc::clone(&update_preparing);
+            std::thread::spawn(move || tray_event_loop(ctx, shared, config, update_preparing, ids));
         }
 
-        let (acc_user, has_saved_pwd) = config
+        let (acc_user, has_saved_pwd, check_on_startup) = config
             .lock()
-            .map(|c| (c.account.username.clone(), !c.account.cred_enc.is_empty()))
+            .map(|c| {
+                (
+                    c.account.username.clone(),
+                    !c.account.cred_enc.is_empty(),
+                    c.updates.check_on_startup,
+                )
+            })
             .unwrap_or_default();
 
-        Self {
+        let mut app = Self {
             shared,
             config,
             _tray: tray,
             page: Page::Games,
             dirty: false,
             status_msg: String::new(),
+            update_events: None,
+            update_release: None,
+            update_kind: crate::update_apply::detect_package_kind(),
+            update_busy: false,
+            update_preparing,
+            update_progress: None,
+            update_message: "尚未检查更新".into(),
+            update_error: false,
             new_name: String::new(),
             new_exe: String::new(),
             new_plan: String::new(),
@@ -511,12 +571,172 @@ impl App {
             plan_node: String::new(),
             plan_mode: String::new(),
             plan_note: String::new(),
+        };
+        if check_on_startup {
+            app.start_update_check(cc.egui_ctx.clone());
+        }
+        app
+    }
+
+    fn start_update_check(&mut self, ctx: egui::Context) {
+        if self.update_busy {
+            return;
+        }
+        let (sender, receiver) = mpsc::channel();
+        self.update_events = Some(receiver);
+        self.update_busy = true;
+        self.update_progress = None;
+        self.update_message = "正在检查新版本…".into();
+        self.update_error = false;
+        std::thread::spawn(move || {
+            let result = crate::updater::check_latest(env!("CARGO_PKG_VERSION"));
+            let _ = sender.send(UpdateEvent::Checked(result));
+            ctx.request_repaint();
+        });
+    }
+
+    fn start_update_download(&mut self, ctx: egui::Context) {
+        if self.update_busy {
+            return;
+        }
+        let kind = match &self.update_kind {
+            Ok(kind) => *kind,
+            Err(message) => {
+                self.update_message =
+                    format!("无法确认当前安装方式：{message}。请使用手动下载入口。");
+                self.update_error = true;
+                return;
+            }
+        };
+        let Some(release) = self.update_release.clone() else {
+            return;
+        };
+        if self.pending_captcha != 0 {
+            self.update_message = "请先完成或关闭当前验证码窗口，再开始更新。".into();
+            self.update_error = true;
+            return;
+        }
+        let (sender, receiver) = mpsc::channel();
+        self.update_events = Some(receiver);
+        self.update_busy = true;
+        self.update_progress = None;
+        self.update_message = format!("正在下载 v{}，下载完成后将校验并更新…", release.version);
+        self.update_error = false;
+        std::thread::spawn(move || {
+            let result = crate::update_apply::create_staging().and_then(|staging| {
+                crate::updater::download_update(&release, kind, &staging, &|progress| {
+                    let _ = sender.send(UpdateEvent::Progress(progress));
+                    ctx.request_repaint();
+                })
+            });
+            let succeeded = result.is_ok();
+            if sender.send(UpdateEvent::Downloaded(result)).is_ok() && succeeded {
+                // Hidden windows can stop egui polling. The user requested an
+                // update, so show its progress and let the UI perform handoff.
+                activate_existing_window();
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            }
+            ctx.request_repaint();
+        });
+    }
+
+    fn poll_update_events(&mut self, ctx: &egui::Context) {
+        let events: Vec<_> = self
+            .update_events
+            .as_ref()
+            .map(|receiver| receiver.try_iter().collect())
+            .unwrap_or_default();
+        for event in events {
+            match event {
+                UpdateEvent::Checked(result) => {
+                    self.update_events = None;
+                    self.update_busy = false;
+                    match result {
+                        Ok(Some(release)) => {
+                            self.update_message = format!("发现新版本 v{}", release.version);
+                            self.update_release = Some(release);
+                            self.update_error = false;
+                        }
+                        Ok(None) => {
+                            self.update_message = "当前没有可用的新版本。".into();
+                            self.update_release = None;
+                            self.update_error = false;
+                        }
+                        Err(message) => {
+                            self.update_message = message;
+                            self.update_error = true;
+                        }
+                    }
+                }
+                UpdateEvent::Progress(progress) => self.update_progress = Some(progress),
+                UpdateEvent::Downloaded(result) => {
+                    self.update_events = None;
+                    self.update_busy = false;
+                    self.update_progress = None;
+                    match result {
+                        Ok(downloaded) => {
+                            if self.pending_captcha != 0 {
+                                self.update_message =
+                                    "请先完成或关闭当前验证码窗口，再尝试更新。".into();
+                                self.update_error = true;
+                                continue;
+                            }
+                            self.update_busy = true;
+                            self.update_preparing.store(true, Ordering::Release);
+                            self.update_message = "文件已校验，正在保存配置并准备更新…".into();
+                            let (sender, receiver) = mpsc::channel();
+                            self.update_events = Some(receiver);
+                            let ctx = ctx.clone();
+                            let config = Arc::clone(&self.config);
+                            let preparing = Arc::clone(&self.update_preparing);
+                            std::thread::spawn(move || {
+                                let prepare = || -> Result<(), String> {
+                                    // Keep the successfully saved state locked through handoff.
+                                    // This also prevents process exit interrupting a worker save.
+                                    // The preparing UI below never acquires this lock.
+                                    let saved_config = config
+                                        .lock()
+                                        .map_err(|_| "无法读取待保存的配置".to_string())?;
+                                    saved_config.save()?;
+                                    crate::update_apply::prepare_and_launch_helper(&downloaded)?;
+                                    dbglog("Starting verified application update");
+                                    // Do not use do_exit: it would write the configuration a
+                                    // second time, ignore a failure, and drop the guard first.
+                                    std::process::exit(0)
+                                };
+                                if let Err(message) = prepare() {
+                                    // The closure has already released the configuration lock.
+                                    preparing.store(false, Ordering::Release);
+                                    let _ = sender.send(UpdateEvent::PreparationFailed(message));
+                                    ctx.request_repaint();
+                                }
+                            });
+                        }
+                        Err(message) => {
+                            self.update_message = message;
+                            self.update_error = true;
+                        }
+                    }
+                }
+                UpdateEvent::PreparationFailed(message) => {
+                    self.update_events = None;
+                    self.update_busy = false;
+                    self.update_preparing.store(false, Ordering::Release);
+                    self.update_message =
+                        format!("未能开始更新，程序仍在运行：{message}。可重试或手动下载。");
+                    self.update_error = true;
+                }
+            }
         }
     }
 
     /// 触发风控时：取极验 server_status 并以独立子进程弹出 v4 验证窗口，结果回来后自动重试。
     /// kind: 1=重试发短信 2=重试密码登录（两者用不同的极验 captchaId，与官网一致）
     fn start_captcha(&mut self, kind: u8, user: &str, md5: &str) {
+        if self.update_preparing.load(Ordering::Acquire) {
+            self.status_msg = "正在准备更新，请等待更新完成后再登录。".into();
+            return;
+        }
         let captcha_id = if kind == 2 {
             api::GEETEST_V4_CAPTCHA_ID_PWD
         } else {
@@ -636,7 +856,28 @@ impl eframe::App for App {
             hide_window_native();
         }
 
-        self.poll_captcha();
+        if !self.update_preparing.load(Ordering::Acquire) {
+            self.poll_captcha();
+        }
+        self.poll_update_events(ctx);
+
+        if self.update_preparing.load(Ordering::Acquire) {
+            // Handoff holds the config mutex. Do not render normal pages,
+            // account actions, process pickers, or autosave until it finishes.
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(70.0);
+                    ui.heading("正在准备更新");
+                    ui.add_space(12.0);
+                    ui.spinner();
+                    ui.label("正在保存配置并检查更新文件，请稍候。");
+                    ui.label("监控将短暂停止，更新完成后程序会重新打开。");
+                    ui.label("当前阶段已暂停账户和配置操作，雷神账户计时不会被更新操作改变。");
+                });
+            });
+            ctx.request_repaint_after(Duration::from_millis(200));
+            return;
+        }
 
         // OSD 排除配置提权写入后，轮询一段时间等待配置文件落盘以刷新页面状态
         if let Some(deadline) = self.osd_poll_until {
@@ -676,6 +917,11 @@ impl eframe::App for App {
             .resizable(false)
             .show(ctx, |ui| {
                 ui.add_space(8.0);
+                let update_label = if self.update_release.is_some() {
+                    "↑ 关于与更新 · 有新版"
+                } else {
+                    "↑ 关于与更新"
+                };
                 for (page, label) in [
                     (Page::Games, "🎮 游戏名单"),
                     // 二期功能（加速方案/自动开启加速）暂时隐藏，只保留自动暂停
@@ -683,6 +929,7 @@ impl eframe::App for App {
                     (Page::Account, "👤 账户"),
                     (Page::Strategy, "⚙ 策略"),
                     (Page::Logs, "📜 日志"),
+                    (Page::Updates, update_label),
                 ] {
                     if ui.selectable_label(self.page == page, label).clicked() {
                         self.page = page;
@@ -697,6 +944,7 @@ impl eframe::App for App {
             Page::Account => self.page_account(ui),
             Page::Strategy => self.page_strategy(ui),
             Page::Logs => self.page_logs(ui),
+            Page::Updates => self.page_updates(ui),
         });
 
         // 进程选择弹窗
@@ -1234,7 +1482,7 @@ impl App {
             }
             if ui.button("退出程序").clicked() {
                 // 与托盘「退出」同一逻辑：加速中会先询问是否暂停计时
-                try_exit(&self.shared, &self.config);
+                try_exit(&self.shared, &self.config, &self.update_preparing);
             }
             ui.label(
                 egui::RichText::new(
@@ -1270,6 +1518,83 @@ impl App {
             ui.colored_label(color, txt);
             ui.label("账户响应中的个人资料和凭据不在此展示。");
         }
+    }
+
+    fn page_updates(&mut self, ui: &mut egui::Ui) {
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.heading("关于与更新");
+            ui.add_space(8.0);
+            ui.label(format!("雷神守护 v{} · Windows x64", env!("CARGO_PKG_VERSION")));
+            match &self.update_kind {
+                Ok(PackageKind::Installer) => { ui.label("当前使用方式：安装版"); }
+                Ok(PackageKind::Portable) => { ui.label("当前使用方式：绿色免安装版"); }
+                Err(_) => { ui.label("当前使用方式：未能确认，请使用手动下载"); }
+            }
+            ui.label("个人维护的第三方开源工具，与雷神加速器官方无隶属关系。");
+            ui.add_space(12.0);
+            ui.separator();
+            ui.add_space(8.0);
+            if let Ok(mut config) = self.config.lock() {
+                if ui.checkbox(&mut config.updates.check_on_startup, "启动时自动检查更新").changed() {
+                    self.dirty = true;
+                }
+            }
+            ui.label(egui::RichText::new(
+                "开启后，每次启动在后台检查一次 GitHub 公开版本信息。只有点击更新才会下载和安装。"
+            ).weak().small());
+            ui.add_space(8.0);
+            ui.horizontal_wrapped(|ui| {
+                if ui.add_enabled(!self.update_busy, egui::Button::new("检查更新")).clicked() {
+                    self.start_update_check(ui.ctx().clone());
+                }
+                ui.hyperlink_to("手动下载 / 发布记录", "https://github.com/CMMUU/leigod-guard/releases/latest");
+                ui.hyperlink_to("项目使用说明", "https://github.com/CMMUU/leigod-guard#readme");
+            });
+            ui.add_space(8.0);
+            if self.update_error {
+                ui.colored_label(egui::Color32::from_rgb(230, 100, 70), &self.update_message);
+            } else {
+                ui.label(&self.update_message);
+            }
+            if self.update_busy {
+                if let Some(progress) = self.update_progress {
+                    if let Some(total) = progress.total.filter(|total| *total > 0) {
+                        ui.add(egui::ProgressBar::new(
+                            (progress.downloaded as f32 / total as f32).clamp(0.0, 1.0)
+                        ).show_percentage().desired_width(340.0));
+                    } else {
+                        ui.spinner();
+                    }
+                    ui.label(format!("已下载 {:.1} MiB", progress.downloaded as f64 / 1_048_576.0));
+                } else {
+                    ui.spinner();
+                }
+            }
+            if let Some(release) = self.update_release.clone() {
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(8.0);
+                ui.heading(format!("可更新至 v{}", release.version));
+                ui.label("更新会保留配置和当前使用方式：安装版继续使用安装版，绿色版继续免安装。");
+                ui.label("点击后会下载并校验文件，再关闭当前程序完成更新并重新打开。更新期间监控会短暂停止，雷神账户计时保持原状。");
+                ui.add_space(8.0);
+                ui.horizontal_wrapped(|ui| {
+                    if ui.add_enabled(!self.update_busy && self.update_kind.is_ok(),
+                        egui::Button::new("下载并更新")).clicked() {
+                        self.start_update_download(ui.ctx().clone());
+                    }
+                    ui.hyperlink_to("查看此版本说明", &release.page_url);
+                });
+                if !release.notes.trim().is_empty() {
+                    ui.add_space(8.0);
+                    ui.collapsing("更新内容", |ui| { ui.label(&release.notes); });
+                }
+            }
+            if self.status_msg.starts_with("保存配置失败") {
+                ui.add_space(8.0);
+                ui.colored_label(egui::Color32::from_rgb(230, 100, 70), &self.status_msg);
+            }
+        });
     }
 
     fn page_strategy(&mut self, ui: &mut egui::Ui) {

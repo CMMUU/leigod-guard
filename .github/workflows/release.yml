@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing stable release tag, for example v0.5.1
+        description: Existing stable release tag, for example v0.6.0
         required: true
         type: string
 
@@ -60,6 +60,8 @@ jobs:
             ~/.cargo/git
             target
           key: windows-msvc-${{ steps.rust.outputs.compiler }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/config.toml', 'src/**') }}
+          restore-keys: |
+            windows-msvc-${{ steps.rust.outputs.compiler }}-
       - name: Check package version against tag
         run: |
           $metadataText = cargo metadata --locked --no-deps --format-version 1
@@ -92,12 +94,22 @@ jobs:
         run: ./scripts/installer.ps1 -Target $env:RUST_TARGET -OutputDirectory dist -SkipBuild
       - name: Test silent installation, upgrade, and uninstall
         run: ./scripts/test-installer.ps1 -OutputDirectory dist
+      - name: Test installed and portable application updates
+        run: ./scripts/test-updater.ps1 -OutputDirectory dist
       - name: Upload installer test logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: installer-test-logs-${{ github.ref_name }}
           path: dist/installer-test-logs/
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload updater test logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: updater-test-logs-${{ github.ref_name }}
+          path: dist/updater-test-logs/
           if-no-files-found: ignore
           retention-days: 7
       - name: Prepare release notes
@@ -112,9 +124,11 @@ jobs:
 
           适用于 Windows 10 / 11 x64。安装程序自动检查 Microsoft WebView2 Runtime；缺少时调用包内的微软官方安装器联网补齐。已有运行库时直接安装应用。登录雷神账号并添加需要监控的游戏后即可使用。安装版和便携版均为独立第三方工具，与雷神官方无隶属或背书关系。
 
-          需要免安装时，可下载备选的 ``leigod-guard-$env:RELEASE_TAG-windows-x64.zip``。``SHA256SUMS.txt`` 包含安装版和便携包的 SHA-256 校验值。程序尚未代码签名，Windows 可能提示未知发布者。
+          需要绿色免安装版时，下载 ``leigod-guard-$env:RELEASE_TAG-windows-x64.zip``，完整解压后打开 ``leigod-guard.exe``。每次发版同时提供安装版和绿色版；``SHA256SUMS.txt`` 包含两个包的 SHA-256 校验值。程序尚未代码签名，Windows 可能提示未知发布者。
 
-          本工作流在 Windows Server 2022 上构建 ``$env:RUST_TARGET``，已通过代码格式、离线单元测试、release 编译、静态 CRT 依赖检查，以及静默安装、快捷方式、版本号、覆盖升级、卸载和配置保留检查。未验证真实账户登录、验证码、实际暂停请求、关机行为或图形界面交互。使用方法、触发条件及限制见仓库 README。
+          在“关于与更新”中可手动“检查更新”，也可选择开启“启动时自动检查更新”（默认关闭）。发现新版本后点击“下载并更新”，程序会校验下载文件、保留配置、完成更新并重新打开，安装版和绿色版各自保持原来的使用方式。v0.5.x 用户首次升级到本版需手动下载安装或解压新包。
+
+          本工作流在 Windows Server 2022 上构建 ``$env:RUST_TARGET``，已通过代码格式、离线单元测试、release 编译、静态 CRT 依赖检查，以及静默安装、快捷方式、版本号、覆盖升级、卸载和配置保留检查。更新集成测试使用无账号操作的下一版本测试程序，验证真实更新辅助进程的等待退出、安装版升级、绿色版替换、配置保留和重新启动。未验证真实账户登录、验证码、实际暂停请求、关机行为或图形界面交互。使用方法、触发条件及限制见仓库 README。
 
           $($section.Groups[1].Value.Trim())
           "@

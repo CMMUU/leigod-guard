@@ -4,7 +4,7 @@
 
 **本项目是个人维护的第三方开源工具，不是雷神加速器官方产品，与雷神加速器运营方没有隶属、合作或授权关系。** 此 README 是本项目的使用说明；雷神的账户服务、计时规则及客服仍以其官方渠道为准。
 
-[下载 Windows 安装版](https://github.com/CMMUU/leigod-guard/releases/download/v0.5.1/leigod-guard-v0.5.1-windows-x64-setup.exe) · [全部下载与校验文件](https://github.com/CMMUU/leigod-guard/releases/latest) · [版本记录](CHANGELOG.md) · [隐私与本地数据](docs/PRIVACY.md) · [问题反馈](https://github.com/CMMUU/leigod-guard/issues)
+[下载 Windows 安装版（推荐）](https://github.com/CMMUU/leigod-guard/releases/download/v0.6.0/leigod-guard-v0.6.0-windows-x64-setup.exe) · [下载绿色免安装版](https://github.com/CMMUU/leigod-guard/releases/download/v0.6.0/leigod-guard-v0.6.0-windows-x64.zip) · [全部下载与校验文件](https://github.com/CMMUU/leigod-guard/releases/latest) · [版本记录](CHANGELOG.md) · [隐私与本地数据](docs/PRIVACY.md) · [问题反馈](https://github.com/CMMUU/leigod-guard/issues)
 
 ## 适用范围
 
@@ -35,32 +35,55 @@ Windows 10 / 11 x64 是当前支持目标，并不表示所有系统版本、驱
 - 当前 Windows 用户登录时自动启动，并隐藏到托盘。
 - 收到 Windows 关机或注销通知时，尝试暂停计时。
 - 查看账户状态与运行日志。
+- 手动检查新版本，或选择启动时自动检查；发现新版后点击「下载并更新」完成升级。
 
 主界面只提供本版本已启用的暂停功能。源码中保留的加速方案、恢复计时和最短运行时间字段属于预留实现，不表示本版本支持自动启动加速或自动选线路。
 
 ## 下载与首次使用
 
-1. 下载 [Windows x64 安装包](https://github.com/CMMUU/leigod-guard/releases/download/v0.5.1/leigod-guard-v0.5.1-windows-x64-setup.exe)：`leigod-guard-v0.5.1-windows-x64-setup.exe`。页面中的 `Source code` 是源码，不是安装程序。
+每次发布同时提供两种 Windows x64 成品：
+
+| 版本 | 下载后怎样使用 | 适合谁 |
+| --- | --- | --- |
+| [安装版 EXE](https://github.com/CMMUU/leigod-guard/releases/download/v0.6.0/leigod-guard-v0.6.0-windows-x64-setup.exe) | 双击安装，按需自动补装 WebView2，提供快捷方式和卸载入口 | 普通用户，推荐 |
+| [绿色免安装版 ZIP](https://github.com/CMMUU/leigod-guard/releases/download/v0.6.0/leigod-guard-v0.6.0-windows-x64.zip) | 解压到固定且可写的目录，运行 `leigod-guard.exe`；验证码需要已有 WebView2 Runtime | 希望自行管理程序目录的用户 |
+
+两种版本功能相同，都支持应用内更新。这里的「绿色免安装」指不需要安装向导：配置和日志仍保存在 `%APPDATA%\leigod-guard\`；若主动开启开机自启，也会写入当前用户的 Windows 自启注册表项。它不是将所有数据保存到程序目录、完全不写注册表的移动应用。
+
+1. 下载 [Windows x64 安装包](https://github.com/CMMUU/leigod-guard/releases/download/v0.6.0/leigod-guard-v0.6.0-windows-x64-setup.exe)：`leigod-guard-v0.6.0-windows-x64-setup.exe`。页面中的 `Source code` 是源码，不是安装程序。
 2. 双击安装包，按向导完成安装，然后从开始菜单或桌面快捷方式打开「雷神守护」。**不需要解压或手动配置运行库。** 安装器会在需要时自动安装验证码窗口所需的 WebView2 Runtime；首次补装运行时需要联网。
 3. 打开「账户」页，用自己的雷神账户登录。提供密码、短信验证码和已有 token 三种方式；遇到人机验证时按窗口提示完成。不要把密码、短信验证码或 token 发到 Issues。
 4. 打开「游戏名单」，先启动一次游戏，再用「从运行进程选择…」选择真正的游戏进程。手动添加时填写例如 `ExampleGame.exe` 的文件名，不填完整路径、桌面快捷方式名称或 `*.exe`。
 5. 在「策略」中确认「启用自动暂停」及宽限期设置。随后在雷神官方客户端中手动开启所需加速。
 6. 首次使用请观察一次「游戏运行中 → 游戏退出 → 宽限期 → 已暂停」完整流程，并在雷神官方客户端或账户页面核对计时状态。
 
-安装版默认安装到当前用户的 `%LOCALAPPDATA%\Programs\LeigodGuard\`，无需管理员权限，创建开始菜单快捷方式，并可选择是否创建桌面快捷方式。安装程序与应用尚未进行 Windows 代码签名，系统可能显示未知发布者；请从本仓库的 Release 下载并按下文校验文件。目前没有应用内自动更新。
+安装版默认安装到当前用户的 `%LOCALAPPDATA%\Programs\LeigodGuard\`，无需管理员权限，创建开始菜单快捷方式，并可选择是否创建桌面快捷方式。安装程序与应用尚未进行 Windows 代码签名，系统可能显示未知发布者；请从本仓库的 Release 下载并按下文校验文件。
 
 程序需要可访问雷神服务的网络连接和有效登录状态。安装器包含微软的 [WebView2 Runtime 安装引导程序](https://developer.microsoft.com/en-us/microsoft-edge/webview2/)，检测到运行时缺失时自动联网补装；它不是包含全部运行时的离线安装包。当前 MSVC 发布构建静态链接 C/C++ 运行库，不需要另行安装 Visual C++ 运行库。安装失败时按提示检查网络后重试，不必手动寻找 DLL。
 
 WebView2 Runtime 适用独立的 [微软许可条款](licenses/webview2-runtime/LICENSE.txt)。安装向导会展示相应条款；其中默认启用的 Microsoft Defender SmartScreen 会按微软隐私声明处理并向微软发送信息，详见 [隐私说明](docs/PRIVACY.md)。
 
-需要便携版的用户，可在同一 Release 下载 `leigod-guard-v0.5.1-windows-x64.zip`，解压到固定目录后运行 `leigod-guard.exe`。便携版不提供安装和卸载向导，验证码功能需要系统已经安装 WebView2 Runtime；普通用户建议使用上面的安装版。
+绿色免安装版下载文件为 `leigod-guard-v0.6.0-windows-x64.zip`，请完整解压后运行，不要直接从 ZIP 预览窗口启动。该版本不提供安装和卸载向导；普通用户建议使用上面的安装版。
+
+### 应用内更新
+
+1. 打开左侧「关于与更新」，点击「检查更新」。也可以勾选「启动时自动检查更新」，此选项默认关闭；开启后每次启动会联网检查新版本。
+2. 发现新版后查看版本信息，点击「下载并更新」。自动检查只负责提示，**不会未经点击就下载或安装新版**。若正在登录验证，请先完成或关闭验证码窗口。
+3. 程序下载并校验发布文件，然后关闭当前程序、完成升级并重新打开。安装版使用新版安装 EXE；绿色免安装版使用新版 ZIP 更新原目录，保持原有发行方式。
+
+升级保留用户配置、游戏名单和登录数据。**应用退出到重新打开之间不会监控游戏，也不会因为更新而自动暂停雷神账户计时。** 如需确保计时暂停，请先手动暂停并确认后再更新；重新打开后，自动暂停仍需先观察到名单内游戏运行。
+
+检查与下载需要连接 GitHub，使用本仓库正式 Release 的公开信息和文件，不向 GitHub 发送雷神账户凭据。只提示版本号更高的正式版本，不自动降级或升级到预发布版本。下载会与同一 Release 的 `SHA256SUMS.txt` 核对；校验失败时不继续应用。SHA-256 用于校验文件完整性，不能替代发布者代码签名。网络、目录权限或文件被占用导致更新失败时，请按界面提示重试，或前往 [Release 下载页](https://github.com/CMMUU/leigod-guard/releases/latest) 手动下载。
+
+自动更新需要程序位于本机可写目录，并保留 `leigod-guard.exe` 文件名。网络共享、符号链接或目录联接中的程序请手动更新。更新缓存和绿色版旧文件备份的保留及清理方法见 [隐私说明](docs/PRIVACY.md)。
 
 ### 关闭窗口、退出与升级
 
 - 点击主窗口右上角 **X** 或「隐藏到托盘」会隐藏窗口，后台监控继续运行。
 - 点击托盘图标可重新打开窗口；真正退出请使用托盘菜单「退出」或账户页「退出程序」。
 - 退出时若已登录，会提供「暂停并退出」「直接退出」「取消」，因为账户计时可能仍在继续。直接退出后，工具不再监控或重试暂停；暂停未能确认成功时，会再次询问是否继续退出。
-- 更新安装版时，先完全退出旧程序，再运行新版安装包。配置保存在用户目录，更新时会保留游戏名单、策略与登录配置。
+- 0.6.0 起可通过「关于与更新」完成应用内升级。手动更新安装版时，先完全退出旧程序，再运行新版安装包。配置保存在用户目录，更新时会保留游戏名单、策略与登录配置。
+- 0.5.x 没有应用内更新，需要先手动下载新版安装 EXE，或完全退出后将新版绿色 ZIP 解压覆盖原程序目录。
 - 从旧便携版升级到安装版时，先退出旧程序，再运行安装包。新程序会读取同一 Windows 用户的原有配置，无须复制配置文件；安装器会把已有的本工具自启路径更新到安装目录，没有开启自启时不会自行开启。
 - 卸载安装版时，先退出程序，再到 Windows「设置 → 应用」中找到「雷神守护」（英文界面为 `LeigodGuard`）卸载。卸载器会清理指向本安装目录的自启项，并保留 `%APPDATA%\leigod-guard\` 中的用户数据，便于重装；若需清除账户信息，可先使用「退出登录」，更多清理方法见 [隐私说明](docs/PRIVACY.md)。便携版应先关闭自启，再退出并删除程序目录。
 - 当前版本重复打开时会尝试唤起已运行的主窗口。安装或卸载提示程序仍在运行时，请先通过托盘菜单完全退出后重试；旧版便携程序也应先手动退出。
@@ -70,7 +93,7 @@ WebView2 Runtime 适用独立的 [微软许可条款](licenses/webview2-runtime/
 在下载目录的 PowerShell 中运行：
 
 ```powershell
-Get-FileHash .\leigod-guard-v0.5.1-windows-x64-setup.exe -Algorithm SHA256
+Get-FileHash .\leigod-guard-v0.6.0-windows-x64-setup.exe -Algorithm SHA256
 ```
 
 将结果与同一 Release 提供的 `SHA256SUMS.txt` 中相同文件名的记录核对。便携 ZIP 也可用同样方式校验。哈希校验用于确认下载内容一致，不等同于 Windows 代码签名。
@@ -105,7 +128,7 @@ token 有效期由服务端决定。短信或手动 token 登录失效后通常�
 
 默认数据目录为 `%APPDATA%\leigod-guard\`：
 
-- `config.toml`：游戏名单、策略与账户配置。账户名称以明文保存；保存的密码 MD5 凭据和 token 使用 Windows DPAPI 加密。
+- `config.toml`：游戏名单、策略、更新检查选项与账户配置。账户名称以明文保存；保存的密码 MD5 凭据和 token 使用 Windows DPAPI 加密。
 - `debug.log` / `debug.log.1`：当前与上一份本机诊断日志，单文件达到约 1 MiB 时尝试轮转。
 - `captcha-result.txt` / `captcha-result.tmp`：验证码子进程短暂交换验证结果的文件，正常读取后删除；异常中断时可能残留。
 

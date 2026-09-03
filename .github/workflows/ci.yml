@@ -49,6 +49,8 @@ jobs:
             ~/.cargo/git
             target
           key: windows-msvc-${{ steps.rust.outputs.compiler }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/config.toml', 'src/**') }}
+          restore-keys: |
+            windows-msvc-${{ steps.rust.outputs.compiler }}-
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Fetch locked dependencies
@@ -70,6 +72,8 @@ jobs:
         run: ./scripts/installer.ps1 -Target $env:RUST_TARGET -OutputDirectory dist -SkipBuild
       - name: Test silent installation, upgrade, and uninstall
         run: ./scripts/test-installer.ps1 -OutputDirectory dist
+      - name: Test installed and portable application updates
+        run: ./scripts/test-updater.ps1 -OutputDirectory dist
       - name: Upload verified Windows packages
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -87,5 +91,13 @@ jobs:
         with:
           name: installer-test-logs-${{ github.sha }}
           path: dist/installer-test-logs/
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload updater test logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: updater-test-logs-${{ github.sha }}
+          path: dist/updater-test-logs/
           if-no-files-found: ignore
           retention-days: 7

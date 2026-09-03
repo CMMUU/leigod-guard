@@ -14,6 +14,8 @@ mod osd;
 mod shared;
 mod shutdown;
 mod ui;
+mod update_apply;
+mod updater;
 mod worker;
 
 use std::sync::{Arc, Mutex};
@@ -30,6 +32,19 @@ fn main() {
             "LeigodGuard {} (Windows)\nUsage: leigod-guard [--minimized] [--version] [--help]",
             env!("CARGO_PKG_VERSION")
         );
+        return;
+    }
+    // Helpers must not read account settings, start monitoring, or hold the
+    // main application's mutex while waiting for its process to exit.
+    if args.get(1).map(String::as_str) == Some("--apply-update") {
+        if args.len() != 3 {
+            ui::msgbox_warn("更新失败", "缺少有效的更新计划，请从应用内重新检查更新。");
+            std::process::exit(2);
+        }
+        if let Err(message) = update_apply::run_helper(std::path::Path::new(&args[2])) {
+            ui::msgbox_warn("更新失败", &message);
+            std::process::exit(1);
+        }
         return;
     }
     if args.len() >= 4 && args[1] == "--captcha" {
