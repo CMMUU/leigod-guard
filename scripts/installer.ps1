@@ -202,6 +202,7 @@ try {
 
     $compilerArguments = @(
         '/Qp', "/DAppVersion=$version", "/DSourceDir=$payloadRoot",
+        "/DSourceRoot=$repositoryRoot",
         "/DOutputDir=$compilerOutput", "/DBootstrapperFile=$bootstrapper",
         (Join-Path $repositoryRoot 'installer/leigod-guard.iss')
     )

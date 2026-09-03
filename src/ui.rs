@@ -5,12 +5,12 @@ use crate::dpapi;
 use crate::game_presets::{self, PRESETS};
 use crate::leigod_api as api;
 use crate::osd;
-use crate::shared::{ManualCmd, Shared};
+use crate::shared::{ManualCmd, Shared, StartupPauseStatus};
 use crate::updater::{DownloadProgress, DownloadedUpdate, PackageKind, ReleaseInfo};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
@@ -91,29 +91,14 @@ pub struct App {
 }
 
 pub fn make_icon_rgba() -> (Vec<u8>, u32, u32) {
-    // 程序生成 64x64 图标：深底 + 亮色圆点
-    let size = 64u32;
-    let mut rgba = vec![0u8; (size * size * 4) as usize];
-    for y in 0..size {
-        for x in 0..size {
-            let idx = ((y * size + x) * 4) as usize;
-            let cx = x as f32 - 31.5;
-            let cy = y as f32 - 31.5;
-            let dist = (cx * cx + cy * cy).sqrt();
-            let (r, g, b, a) = if dist < 20.0 {
-                (250u8, 90u8, 60u8, 255u8) // 橙红圆点
-            } else if dist < 30.0 {
-                (40u8, 44u8, 60u8, 255u8) // 深色底
-            } else {
-                (0, 0, 0, 0)
-            };
-            rgba[idx] = r;
-            rgba[idx + 1] = g;
-            rgba[idx + 2] = b;
-            rgba[idx + 3] = a;
-        }
-    }
-    (rgba, size, size)
+    // 与 EXE/安装器的 ICO 共用设计；内嵌 RGBA，无需运行时解码或读取文件。
+    const PIXELS: &[u8; 256 * 256 * 4] = include_bytes!("../assets/app-icon-256.rgba");
+    (PIXELS.to_vec(), 256, 256)
+}
+
+fn make_tray_icon_rgba() -> (Vec<u8>, u32, u32) {
+    const PIXELS: &[u8; 32 * 32 * 4] = include_bytes!("../assets/app-icon-32.rgba");
+    (PIXELS.to_vec(), 32, 32)
 }
 
 fn load_cjk_fonts(ctx: &egui::Context) {
@@ -259,8 +244,19 @@ fn msgbox_exit(accelerating: bool) -> ExitChoice {
 /// 托盘菜单项 ID 集合（MenuId 内部是 String，可跨线程）
 struct TrayIds {
     open: tray_icon::menu::MenuId,
+    defer_startup: tray_icon::menu::MenuId,
     pause: tray_icon::menu::MenuId,
     quit: tray_icon::menu::MenuId,
+}
+
+/// Both entry points only queue a request. The worker owns timing and account actions.
+fn request_startup_defer(shared: &mut Shared, requested_at: Instant) -> bool {
+    if !shared.startup_pause_status.pending {
+        return false;
+    }
+    shared.startup_defer_requested_at = Some(requested_at);
+    shared.log("准备游戏：请求将启动检查延后至至少10分钟后");
+    true
 }
 
 /// 查找主窗口句柄（按窗口标题）
@@ -381,12 +377,21 @@ fn tray_event_loop(
         while let Ok(event) = MenuEvent::receiver().try_recv() {
             dbglog(&format!("menu event: {:?}", event.id));
             let id = event.id;
+            if update_preparing.load(Ordering::Acquire) && id == ids.defer_startup {
+                continue;
+            }
             if update_preparing.load(Ordering::Acquire) && (id == ids.pause || id == ids.quit) {
                 show_window(&ctx, &mut hwnd);
                 continue;
             }
             if id == ids.open {
                 show_window(&ctx, &mut hwnd);
+            } else if id == ids.defer_startup {
+                if let Ok(mut s) = shared.lock() {
+                    request_startup_defer(&mut s, Instant::now());
+                }
+                // Keep the current game in the foreground; no window or popup.
+                ctx.request_repaint();
             } else if id == ids.pause {
                 if let Ok(mut s) = shared.lock() {
                     s.manual_cmd = Some(ManualCmd::Pause);
@@ -482,17 +487,19 @@ impl App {
         // 托盘
         let menu = Menu::new();
         let menu_open = MenuItem::new("打开面板", true, None);
+        let menu_defer_startup = MenuItem::new("准备游戏：延后启动检查10分钟", true, None);
         let menu_pause = MenuItem::new("立即暂停计时", true, None);
-        // 二期功能（自动恢复/开启加速）暂时停用，托盘只保留暂停入口
+        // 延后入口只保护待处理的启动检查，不会开启或恢复加速。
         let menu_quit = MenuItem::new("退出", true, None);
         let _ = menu.append_items(&[
             &menu_open,
             &PredefinedMenuItem::separator(),
+            &menu_defer_startup,
             &menu_pause,
             &PredefinedMenuItem::separator(),
             &menu_quit,
         ]);
-        let (rgba, w, h) = make_icon_rgba();
+        let (rgba, w, h) = make_tray_icon_rgba();
         let tray = tray_icon::Icon::from_rgba(rgba, w, h)
             .ok()
             .and_then(|icon| {
@@ -509,6 +516,7 @@ impl App {
         {
             let ids = TrayIds {
                 open: menu_open.id().clone(),
+                defer_startup: menu_defer_startup.id().clone(),
                 pause: menu_pause.id().clone(),
                 quit: menu_quit.id().clone(),
             };
@@ -876,7 +884,7 @@ impl eframe::App for App {
                     ui.spinner();
                     ui.label("正在保存配置并检查更新文件，请稍候。");
                     ui.label("监控将短暂停止，更新完成后程序会重新打开。");
-                    ui.label("更新程序本身不暂停计时；重新打开后会按启动暂停设置检查。");
+                    ui.label("更新程序本身不暂停计时；重新打开后会按启动设置等待并检查。");
                 });
             });
             ctx.request_repaint_after(Duration::from_millis(200));
@@ -896,23 +904,24 @@ impl eframe::App for App {
         egui::TopBottomPanel::top("status_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.strong("雷神守护");
-                ui.separator();
-                let (status, games) = self
-                    .shared
-                    .lock()
-                    .map(|s| (s.status.clone(), s.running_games.join("、")))
-                    .unwrap_or_default();
-                ui.label(format!("状态：{status}"));
-                if !games.is_empty() {
-                    ui.separator();
-                    ui.label(format!("运行中：{games}"));
-                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("隐藏到托盘").clicked() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
                         hide_window_native();
                     }
                 });
+            });
+            let (status, games) = self
+                .shared
+                .lock()
+                .map(|s| (s.status.clone(), s.running_games.join("、")))
+                .unwrap_or_default();
+            ui.horizontal_wrapped(|ui| {
+                ui.label(format!("状态：{status}"));
+                if !games.is_empty() {
+                    ui.separator();
+                    ui.label(format!("运行中：{games}"));
+                }
             });
         });
 
@@ -927,7 +936,7 @@ impl eframe::App for App {
                     "↑ 关于与更新"
                 };
                 for (page, label) in [
-                    (Page::Games, "🎮 游戏名单"),
+                    (Page::Games, "🎮 首页与游戏"),
                     // 二期功能（加速方案/自动开启加速）暂时隐藏，只保留自动暂停
                     // (Page::Plans, "🚀 加速方案"),
                     (Page::Account, "👤 账户"),
@@ -971,6 +980,107 @@ impl eframe::App for App {
 
         ctx.request_repaint_after(Duration::from_millis(500));
     }
+}
+
+fn startup_status_copy(
+    status: StartupPauseStatus,
+    request_pending: bool,
+) -> (String, &'static str) {
+    if !status.pending {
+        return (
+            "本次启动检查已结束".into(),
+            "已完成或跳过，本次运行不会重复启动检查。游戏退出监控继续按策略执行。",
+        );
+    }
+    if request_pending {
+        return (
+            "正在延后启动检查…".into(),
+            "请求已交给监控处理，不会开启或恢复加速。",
+        );
+    }
+    match status.remaining_secs {
+        Some(0) => (
+            "正在复核游戏与账户状态".into(),
+            "确认名单中的游戏未运行后，才会尝试暂停计时。此时仍可延后。",
+        ),
+        Some(seconds) => {
+            let prefix = if status.preparing_game {
+                "准备游戏中"
+            } else {
+                "距离启动检查"
+            };
+            (
+                format!("{prefix}  {:02}:{:02}", seconds / 60, seconds % 60),
+                "等待结束后再次检查名单；仍无游戏运行时，才尝试暂停计时。",
+            )
+        }
+        None => ("等待有效检测".into(), "检测尚未就绪，暂不据此暂停计时。"),
+    }
+}
+
+/// Native egui presentation only; safe to exercise without accounts or a window.
+fn guardian_home(ui: &mut egui::Ui, startup: Option<(StartupPauseStatus, bool)>) -> bool {
+    let accent = if ui.visuals().dark_mode {
+        egui::Color32::from_rgb(119, 210, 204)
+    } else {
+        egui::Color32::from_rgb(0, 109, 105)
+    };
+    egui::Frame::group(ui.style())
+        .fill(ui.visuals().faint_bg_color)
+        .inner_margin(16)
+        .corner_radius(12)
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new("启动缓冲 · 自动暂停")
+                    .color(accent)
+                    .small(),
+            );
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new("让加速时长，留给真正开玩的时刻")
+                    .size(25.0)
+                    .strong(),
+            );
+            ui.add_space(8.0);
+            ui.label("异常关机后，重启只是办公或处理其他任务？启动检查会先等待，再确认名单游戏是否运行，帮你减少未暂停造成的时长消耗。");
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new("等待期间仍可能计时，已消耗的时长无法追回。")
+                    .weak()
+                    .small(),
+            );
+        });
+    ui.add_space(10.0);
+    let mut defer = false;
+    egui::Frame::group(ui.style())
+        .inner_margin(12)
+        .corner_radius(10)
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new("本次启动检查").small().weak());
+            let Some((status, request_pending)) = startup else {
+                ui.label("暂时无法读取检查状态");
+                return;
+            };
+            let (title, detail) = startup_status_copy(status, request_pending);
+            ui.label(
+                egui::RichText::new(title)
+                    .size(21.0)
+                    .strong()
+                    .color(accent),
+            );
+            ui.label(detail);
+            if status.pending {
+                ui.add_space(8.0);
+                defer = ui
+                    .button("准备游戏，延后10分钟")
+                    .on_hover_text("延后到至少从现在起10分钟；重复点击重新计算10分钟，不会累加，也不会开启或恢复加速。")
+                    .clicked();
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("检测到名单中的游戏后，结束启动检查，转入游戏退出监控。").weak().small());
+                ui.label(egui::RichText::new("刚手动开启加速？请在倒计时结束前延后，工具无法识别雷神的加速按钮。其他任务也需要持续加速时，可在策略中关闭启动检查。").weak().small());
+            }
+        });
+    defer
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1074,8 +1184,98 @@ fn game_entry_form(
 }
 
 #[cfg(test)]
-mod game_form_tests {
-    use super::{game_entry_form, GameFormAction, PRESETS};
+mod ui_tests {
+    use super::{
+        game_entry_form, guardian_home, request_startup_defer, startup_status_copy, GameFormAction,
+        ManualCmd, Shared, StartupPauseStatus, PRESETS,
+    };
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn startup_defer_only_queues_for_a_pending_check() {
+        let now = Instant::now();
+        let mut shared = Shared::default();
+        shared.startup_pause_status.pending = false;
+        assert!(!request_startup_defer(&mut shared, now));
+        assert!(shared.startup_defer_requested_at.is_none());
+
+        shared.startup_pause_status.pending = true;
+        shared.manual_cmd = Some(ManualCmd::Pause);
+        assert!(request_startup_defer(&mut shared, now));
+        let next_click = now + Duration::from_secs(30);
+        assert!(request_startup_defer(&mut shared, next_click));
+        assert_eq!(shared.startup_defer_requested_at, Some(next_click));
+        assert!(matches!(shared.manual_cmd, Some(ManualCmd::Pause)));
+        assert!(shared.alert.is_none(), "deferral must not show a popup");
+
+        shared.startup_pause_status.pending = false;
+        shared.startup_defer_requested_at = None;
+        assert!(!request_startup_defer(&mut shared, next_click));
+        assert!(shared.startup_defer_requested_at.is_none());
+    }
+
+    #[test]
+    fn startup_status_distinguishes_countdown_unknown_and_finished() {
+        let mut status = StartupPauseStatus {
+            pending: true,
+            remaining_secs: Some(180),
+            preparing_game: false,
+        };
+        assert_eq!(startup_status_copy(status, false).0, "距离启动检查  03:00");
+        status.preparing_game = true;
+        status.remaining_secs = Some(600);
+        assert_eq!(startup_status_copy(status, false).0, "准备游戏中  10:00");
+        status.remaining_secs = Some(0);
+        assert_eq!(
+            startup_status_copy(status, false).0,
+            "正在复核游戏与账户状态"
+        );
+        status.remaining_secs = None;
+        assert_eq!(startup_status_copy(status, false).0, "等待有效检测");
+        assert_eq!(startup_status_copy(status, true).0, "正在延后启动检查…");
+        status.pending = false;
+        assert_eq!(startup_status_copy(status, true).0, "本次启动检查已结束");
+        assert!(!startup_status_copy(status, false).1.contains("已暂停"));
+    }
+
+    #[test]
+    fn home_cards_fit_narrow_scrolling_content_without_native_app() {
+        let pending = StartupPauseStatus {
+            pending: true,
+            remaining_secs: Some(180),
+            preparing_game: false,
+        };
+        for startup in [
+            None,
+            Some((pending, false)),
+            Some((pending, true)),
+            Some((StartupPauseStatus::default(), false)),
+        ] {
+            let context = egui::Context::default();
+            let output = context.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(440.0, 400.0),
+                    )),
+                    ..Default::default()
+                },
+                |context| {
+                    egui::CentralPanel::default().show(context, |ui| {
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            let right = ui.max_rect().right();
+                            assert!(!guardian_home(ui, startup));
+                            assert!(
+                                ui.min_rect().right() <= right + 1.0,
+                                "home cards overflow horizontally"
+                            );
+                        });
+                    });
+                },
+            );
+            assert!(!output.shapes.is_empty());
+        }
+    }
 
     #[test]
     fn add_game_form_fits_narrow_content_area_without_native_app() {
@@ -1131,8 +1331,31 @@ mod game_form_tests {
 
 impl App {
     fn page_games(&mut self, ui: &mut egui::Ui) {
+        let startup = self.shared.lock().ok().map(|s| {
+            (
+                s.startup_pause_status,
+                s.startup_defer_requested_at.is_some(),
+            )
+        });
+        if guardian_home(ui, startup) {
+            if let Ok(mut s) = self.shared.lock() {
+                request_startup_defer(&mut s, Instant::now());
+            }
+            ui.ctx().request_repaint();
+        }
+        ui.add_space(18.0);
         ui.heading("游戏名单");
-        ui.label("名单内的游戏全部退出后自动暂停雷神计时；也可在策略中启用启动时的空闲检查。");
+        ui.label("添加要守护的游戏。启动等待后仍未运行，或游戏全部退出并超过宽限期时，按策略自动暂停计时。");
+        let game_count = self.config.lock().ok().map(|c| c.games.len());
+        if game_count == Some(0) {
+            ui.label(
+                egui::RichText::new(
+                    "名单还是空的，先在下面选择常用游戏或填写进程名。空名单不会触发启动暂停。",
+                )
+                .weak()
+                .small(),
+            );
+        }
         ui.add_space(8.0);
 
         // 二期功能：加速方案相关 UI 暂时隐藏（plan_names 保留字段）
@@ -1772,7 +1995,7 @@ impl App {
                 ui.add_space(8.0);
                 ui.heading(format!("可更新至 v{}", release.version));
                 ui.label("更新会保留配置和当前使用方式：安装版继续使用安装版，绿色版继续免安装。");
-                    ui.label("点击后会下载并校验文件，再关闭当前程序完成更新并重新打开。监控会短暂停止；更新程序本身不暂停计时，重新打开后按启动暂停设置检查。");
+                ui.label("点击后会下载并校验文件，再关闭当前程序完成更新并重新打开。监控会短暂停止；更新程序本身不暂停计时，重新打开后按启动设置等待并检查。");
                 ui.add_space(8.0);
                 ui.horizontal_wrapped(|ui| {
                     if ui.add_enabled(!self.update_busy && self.update_kind.is_ok(),
@@ -1804,7 +2027,7 @@ impl App {
                 self.dirty = true;
             }
             ui.label(
-                egui::RichText::new("控制游戏全部退出后的暂停，以及下方的启动空闲检查。")
+                egui::RichText::new("控制启动等待后的检查，以及游戏全部退出后的暂停。")
                     .weak()
                     .small(),
             );
@@ -1818,9 +2041,31 @@ impl App {
             {
                 self.dirty = true;
             }
-            ui.label(egui::RichText::new("默认开启，下次启动检查名单中的游戏。总开关开启且名单有效时，无游戏运行便尝试暂停；空名单或检测失败不会当作无游戏。").weak().small());
+            ui.label(egui::RichText::new("默认开启。启动后先等待，再检查名单中的游戏。关闭会结束本次等待，重新开启要下次启动才检查；空名单或检测失败不会被当作无游戏。").weak().small());
             ui.add_space(4.0);
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label("启动等待（秒）:");
+                if ui
+                    .add(egui::DragValue::new(&mut c.strategy.startup_grace_secs).range(0..=3600))
+                    .changed()
+                {
+                    self.dirty = true;
+                }
+            });
+            ui.label(egui::RichText::new("默认180秒（3分钟），调整会影响尚未完成的启动等待。正在准备游戏时，可在首页或托盘延后10分钟；检测到游戏就结束本次启动检查。").weak().small());
+            ui.add_space(8.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.label("游戏退出宽限期（秒）:");
+                if ui
+                    .add(egui::DragValue::new(&mut c.strategy.grace_secs).range(0..=3600))
+                    .changed()
+                {
+                    self.dirty = true;
+                }
+            });
+            ui.label(egui::RichText::new("默认90秒。名单中的游戏全部退出后，连续等待这段时间再暂停，给切换游戏留出余地。").weak().small());
+            ui.add_space(8.0);
+            ui.horizontal_wrapped(|ui| {
                 ui.label("进程检测间隔（秒）:");
                 if ui
                     .add(egui::DragValue::new(&mut c.strategy.check_interval_secs).range(1..=60))
@@ -1828,16 +2073,6 @@ impl App {
                 {
                     self.dirty = true;
                 }
-            });
-            ui.horizontal(|ui| {
-                ui.label("暂停宽限期（秒）:");
-                if ui
-                    .add(egui::DragValue::new(&mut c.strategy.grace_secs).range(0..=3600))
-                    .changed()
-                {
-                    self.dirty = true;
-                }
-                ui.label("游戏退出后等待这么久才暂停，防误停");
             });
             // 二期功能：最短运行时间与自动恢复配套，暂时隐藏（字段保留在配置中）
             ui.add_space(8.0);

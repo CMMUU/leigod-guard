@@ -20,6 +20,12 @@
 #define ProductExe "leigod-guard.exe"
 #define ProjectURL "https://github.com/CMMUU/leigod-guard"
 #define InstallerDir AddBackslash(SourcePath)
+#ifndef SourceRoot
+  ; Fixture installers compile this same .iss against a temporary payload; the
+  ; branding asset always comes from the checkout, not the payload directory.
+  #define SourceRoot InstallerDir + ".."
+#endif
+#define AppIconFile AddBackslash(SourceRoot) + "assets\app-icon.ico"
 
 [Setup]
 ; Keep this identifier unchanged so future versions upgrade this installation.
@@ -46,6 +52,7 @@ MinVersion=10.0
 UsePreviousAppDir=yes
 UsePreviousTasks=yes
 UninstallDisplayIcon={app}\{#ProductExe}
+SetupIconFile={#AppIconFile}
 UninstallDisplayName={cm:AppDisplayName}
 AppMutex=Local\LeigodGuard
 ; Never ask Restart Manager to close a process, even during a silent upgrade.

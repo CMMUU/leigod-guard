@@ -3,7 +3,7 @@ use crate::config::Config;
 use crate::dpapi;
 use crate::leigod_api as api;
 use crate::monitor;
-use crate::shared::{ManualCmd, Shared};
+use crate::shared::{ManualCmd, Shared, StartupPauseStatus};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 const MAX_RETRY: usize = 3;
 /// 失败后的冷却时间（秒），避免每个 tick 都打 API
 const FAIL_COOLDOWN_SECS: u64 = 60;
+const PREPARING_GAME_SECS: u64 = 600;
 
 #[derive(Debug, PartialEq, Eq)]
 enum PauseDecision {
@@ -20,6 +21,10 @@ enum PauseDecision {
     Waiting(u64),
     Pause,
     StartupPause,
+    StartupWaiting {
+        remaining_secs: u64,
+        preparing_game: bool,
+    },
     RetryWaiting,
 }
 
@@ -28,6 +33,9 @@ enum PauseDecision {
 struct AutoPauseWatch {
     exit: PauseWatch,
     startup_pending: bool,
+    startup_empty_since: Option<Instant>,
+    startup_deferred_at: Option<Instant>,
+    startup_grace_secs: u64,
     active: bool,
     next_retry: Option<Instant>,
 }
@@ -37,6 +45,9 @@ impl Default for AutoPauseWatch {
         Self {
             exit: PauseWatch::default(),
             startup_pending: true,
+            startup_empty_since: None,
+            startup_deferred_at: None,
+            startup_grace_secs: crate::config::DEFAULT_STARTUP_GRACE_SECS,
             active: false,
             next_retry: None,
         }
@@ -49,7 +60,7 @@ impl AutoPauseWatch {
         if !self.active {
             self.exit.reset();
             self.next_retry = None;
-            self.startup_pending = false;
+            self.disable_startup();
         } else if !startup_enabled {
             self.disable_startup();
         }
@@ -60,15 +71,18 @@ impl AutoPauseWatch {
             self.next_retry = None;
         }
         self.startup_pending = false;
+        self.startup_empty_since = None;
+        self.startup_deferred_at = None;
     }
 
     fn observation_failed(&mut self) {
         self.exit.observation_failed();
+        self.startup_empty_since = None;
     }
 
     fn pause_succeeded(&mut self) {
         self.exit.reset();
-        self.startup_pending = false;
+        self.disable_startup();
         self.next_retry = None;
     }
 
@@ -76,16 +90,69 @@ impl AutoPauseWatch {
         self.next_retry = Some(now + Duration::from_secs(FAIL_COOLDOWN_SECS));
     }
 
+    fn defer_startup(&mut self, clicked_at: Instant) {
+        if self.active && self.startup_pending {
+            self.startup_deferred_at = Some(
+                self.startup_deferred_at
+                    .map_or(clicked_at, |previous| previous.max(clicked_at)),
+            );
+        }
+    }
+
+    fn deferral_remaining(&self, now: Instant) -> Duration {
+        self.startup_deferred_at
+            .map_or(Duration::ZERO, |clicked_at| {
+                Duration::from_secs(PREPARING_GAME_SECS)
+                    .saturating_sub(now.saturating_duration_since(clicked_at))
+            })
+    }
+
+    fn startup_protection_remaining(&self, now: Instant) -> Option<Duration> {
+        self.startup_empty_since.map(|since| {
+            let grace = Duration::from_secs(self.startup_grace_secs)
+                .saturating_sub(now.saturating_duration_since(since));
+            grace.max(self.deferral_remaining(now))
+        })
+    }
+
+    fn startup_remaining(&self, now: Instant) -> Option<Duration> {
+        self.startup_protection_remaining(now).map(|protection| {
+            let retry = self
+                .next_retry
+                .map_or(Duration::ZERO, |retry| retry.saturating_duration_since(now));
+            protection.max(retry)
+        })
+    }
+
+    fn startup_status(&self, now: Instant) -> StartupPauseStatus {
+        if !self.active || !self.startup_pending {
+            return StartupPauseStatus::default();
+        }
+        StartupPauseStatus {
+            pending: true,
+            remaining_secs: self.startup_remaining(now).map(ceil_secs),
+            preparing_game: !self.deferral_remaining(now).is_zero(),
+        }
+    }
+
     fn observe(&mut self, now: Instant, has_games: bool, grace_secs: u64) -> PauseDecision {
         if !self.active {
             return PauseDecision::Idle;
         }
         if has_games {
-            self.startup_pending = false;
+            self.disable_startup();
             self.next_retry = None;
             return self.exit.observe(now, true, grace_secs);
         }
         let decision = if self.startup_pending {
+            self.startup_empty_since.get_or_insert(now);
+            let remaining = self.startup_protection_remaining(now).unwrap_or_default();
+            if !remaining.is_zero() {
+                return PauseDecision::StartupWaiting {
+                    remaining_secs: ceil_secs(remaining),
+                    preparing_game: !self.deferral_remaining(now).is_zero(),
+                };
+            }
             PauseDecision::StartupPause
         } else {
             self.exit.observe(now, false, grace_secs)
@@ -98,6 +165,33 @@ impl AutoPauseWatch {
             decision
         }
     }
+}
+
+fn ceil_secs(duration: Duration) -> u64 {
+    duration
+        .as_secs()
+        .saturating_add(u64::from(duration.subsec_nanos() != 0))
+}
+
+fn publish_startup_status(shared: &Arc<Mutex<Shared>>, watch: &AutoPauseWatch, now: Instant) {
+    if let Ok(mut shared) = shared.lock() {
+        shared.startup_pause_status = watch.startup_status(now);
+    }
+}
+
+fn consume_startup_request(
+    shared: &Arc<Mutex<Shared>>,
+    watch: &mut AutoPauseWatch,
+    now: Instant,
+) -> Result<bool, AutoPauseBlock> {
+    let mut shared = shared
+        .lock()
+        .map_err(|_| AutoPauseBlock::ControlUnavailable)?;
+    if let Some(clicked_at) = shared.startup_defer_requested_at.take() {
+        watch.defer_startup(clicked_at);
+    }
+    shared.startup_pause_status = watch.startup_status(now);
+    Ok(matches!(shared.manual_cmd, Some(ManualCmd::Pause)))
 }
 
 fn checked_watch(cfg: &Config) -> Option<Vec<(String, String)>> {
@@ -125,6 +219,9 @@ enum AutoPauseBlock {
     Running(Vec<String>),
     ObservationFailed(String),
     ConfigUnavailable,
+    ControlUnavailable,
+    Protected(PauseDecision),
+    ManualPausePending,
 }
 
 #[derive(Debug)]
@@ -135,34 +232,71 @@ enum CheckedCallError {
 
 /// Called after ensure_token (which may wait for network/login), before EVERY
 /// actual automatic pause attempt, including an internal expired-token retry.
-fn auto_pause_guard(cfg: &Arc<Mutex<Config>>, startup: bool) -> Result<(), AutoPauseBlock> {
-    auto_pause_guard_with_snapshot(cfg, startup, || {
+fn auto_pause_guard(
+    cfg: &Arc<Mutex<Config>>,
+    shared: &Arc<Mutex<Shared>>,
+    watch: &mut AutoPauseWatch,
+    startup: bool,
+) -> Result<(), AutoPauseBlock> {
+    auto_pause_guard_with_snapshot(cfg, shared, watch, startup, Instant::now(), || {
         monitor::try_running_process_names().map_err(|error| error.to_string())
     })
 }
 
 fn auto_pause_guard_with_snapshot(
     cfg: &Arc<Mutex<Config>>,
+    shared: &Arc<Mutex<Shared>>,
+    pause_watch: &mut AutoPauseWatch,
     startup: bool,
+    now: Instant,
     snapshot: impl FnOnce() -> Result<Vec<String>, String>,
 ) -> Result<(), AutoPauseBlock> {
     let cfg = cfg
         .lock()
         .map_err(|_| AutoPauseBlock::ConfigUnavailable)?
         .clone();
+    let watch = checked_watch(&cfg);
+    pause_watch.configure(
+        cfg.strategy.enabled,
+        cfg.strategy.pause_on_startup,
+        watch.is_some(),
+    );
+    pause_watch.startup_grace_secs = cfg.strategy.startup_grace_secs;
     if !cfg.strategy.enabled {
         return Err(AutoPauseBlock::Disabled);
     }
     if startup && !cfg.strategy.pause_on_startup {
         return Err(AutoPauseBlock::StartupDisabled);
     }
-    let watch = checked_watch(&cfg).ok_or(AutoPauseBlock::InvalidWatch)?;
-    let processes = snapshot().map_err(AutoPauseBlock::ObservationFailed)?;
+    let watch = watch.ok_or(AutoPauseBlock::InvalidWatch)?;
+    let processes = match snapshot() {
+        Ok(processes) => processes,
+        Err(error) => {
+            pause_watch.observation_failed();
+            publish_startup_status(shared, pause_watch, now);
+            return Err(AutoPauseBlock::ObservationFailed(error));
+        }
+    };
     let matched = monitor::match_games(&processes, &watch);
-    if matched.is_empty() {
+    if !matched.is_empty() {
+        pause_watch.observe(now, true, cfg.strategy.grace_secs);
+        // Discard a stale deferral if a game has already settled startup recovery.
+        consume_startup_request(shared, pause_watch, now)?;
+        return Err(AutoPauseBlock::Running(matched));
+    }
+    // Do this after the potentially slow login AND the fresh snapshot, as close
+    // as possible to the API request. A UI/tray click during login must win.
+    if consume_startup_request(shared, pause_watch, now)? {
+        return Err(AutoPauseBlock::ManualPausePending);
+    }
+    let decision = pause_watch.observe(now, false, cfg.strategy.grace_secs);
+    publish_startup_status(shared, pause_watch, now);
+    if (startup && decision == PauseDecision::StartupPause)
+        || (!startup && decision == PauseDecision::Pause)
+    {
         Ok(())
     } else {
-        Err(AutoPauseBlock::Running(matched))
+        Err(AutoPauseBlock::Protected(decision))
     }
 }
 
@@ -291,10 +425,12 @@ pub fn run(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
     let mut monitor_failed = false;
 
     loop {
-        let (interval, enabled, startup_enabled, grace_secs, watch) = {
+        let (interval, enabled, startup_enabled, startup_grace_secs, grace_secs, watch) = {
             let c = match cfg.lock() {
                 Ok(c) => c.clone(),
                 Err(_) => {
+                    pause_watch.observation_failed();
+                    publish_startup_status(&shared, &pause_watch, Instant::now());
                     std::thread::sleep(Duration::from_secs(3));
                     continue;
                 }
@@ -304,11 +440,14 @@ pub fn run(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
                 c.strategy.check_interval_secs.max(1),
                 c.strategy.enabled,
                 c.strategy.pause_on_startup,
+                c.strategy.startup_grace_secs,
                 c.strategy.grace_secs,
                 watch,
             )
         };
         pause_watch.configure(enabled, startup_enabled, watch.is_some());
+        pause_watch.startup_grace_secs = startup_grace_secs;
+        let _ = consume_startup_request(&shared, &mut pause_watch, Instant::now());
 
         // 处理 UI 手动指令
         let cmd = shared.lock().ok().and_then(|mut s| s.manual_cmd.take());
@@ -317,6 +456,7 @@ pub fn run(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
                 ManualCmd::Pause => match call_with_retry(&shared, &cfg, api::pause, "暂停") {
                     Ok(msg) => {
                         pause_watch.pause_succeeded();
+                        publish_startup_status(&shared, &pause_watch, Instant::now());
                         log(&shared, &format!("手动暂停成功: {msg}"));
                         if let Ok(mut s) = shared.lock() {
                             s.manual_pause_result = Some(true);
@@ -357,6 +497,7 @@ pub fn run(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
             }
             Err(e) => {
                 pause_watch.observation_failed();
+                publish_startup_status(&shared, &pause_watch, Instant::now());
                 if !monitor_failed {
                     log(&shared, &format!("进程检测失败，暂缓自动暂停：{e}"));
                     monitor_failed = true;
@@ -386,7 +527,9 @@ pub fn run(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
         }
 
         let now = Instant::now();
-        match pause_watch.observe(now, !matched.is_empty(), grace_secs) {
+        let decision = pause_watch.observe(now, !matched.is_empty(), grace_secs);
+        publish_startup_status(&shared, &pause_watch, now);
+        match decision {
             PauseDecision::Running => {
                 // 即使在 API 冷却期，也必须观察游戏重新启动并取消旧倒计时。
                 set_status(
@@ -404,14 +547,21 @@ pub fn run(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
             PauseDecision::RetryWaiting => {
                 set_status(&shared, "暂停失败，等待重试");
             }
+            PauseDecision::StartupWaiting {
+                remaining_secs,
+                preparing_game,
+            } => {
+                set_startup_waiting_status(&shared, remaining_secs, preparing_game);
+            }
             decision @ (PauseDecision::Pause | PauseDecision::StartupPause) => {
                 let startup = decision == PauseDecision::StartupPause;
                 let result = call_with_retry_checked(&shared, &cfg, api::pause, "暂停", || {
-                    auto_pause_guard(&cfg, startup)
+                    auto_pause_guard(&cfg, &shared, &mut pause_watch, startup)
                 });
                 match result {
                     Ok(msg) => {
                         pause_watch.pause_succeeded();
+                        publish_startup_status(&shared, &pause_watch, Instant::now());
                         let reason = if startup {
                             "启动检查确认无名单游戏运行，已补暂停计时"
                         } else {
@@ -466,11 +616,34 @@ pub fn run(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
                             pause_watch.observation_failed();
                             set_status(&shared, "暂时无法读取策略，等待下次检测");
                         }
+                        AutoPauseBlock::ControlUnavailable => {
+                            pause_watch.observation_failed();
+                            set_status(&shared, "暂时无法读取启动保护请求，等待下次检测");
+                        }
+                        AutoPauseBlock::Protected(decision) => match decision {
+                            PauseDecision::StartupWaiting {
+                                remaining_secs,
+                                preparing_game,
+                            } => {
+                                set_startup_waiting_status(&shared, remaining_secs, preparing_game);
+                            }
+                            PauseDecision::Waiting(left) => {
+                                set_status(&shared, &format!("游戏已退出，{left} 秒后自动暂停"));
+                            }
+                            PauseDecision::RetryWaiting => {
+                                set_status(&shared, "暂停未确认，等待重试")
+                            }
+                            _ => set_status(&shared, "本次自动暂停已暂缓"),
+                        },
+                        AutoPauseBlock::ManualPausePending => {
+                            set_status(&shared, "正在处理手动暂停请求…");
+                        }
                     },
                 }
             }
             PauseDecision::Idle => set_status(&shared, "空闲（无名单游戏运行）"),
         }
+        publish_startup_status(&shared, &pause_watch, Instant::now());
 
         std::thread::sleep(Duration::from_secs(interval));
     }
@@ -480,6 +653,22 @@ fn set_status(shared: &Arc<Mutex<Shared>>, status: &str) {
     if let Ok(mut s) = shared.lock() {
         s.status = status.to_string();
     }
+}
+
+fn set_startup_waiting_status(
+    shared: &Arc<Mutex<Shared>>,
+    remaining_secs: u64,
+    preparing_game: bool,
+) {
+    let description = if preparing_game {
+        "准备游戏保护中"
+    } else {
+        "启动检查宽限期中"
+    };
+    set_status(
+        shared,
+        &format!("{description}，{remaining_secs} 秒后复查；不会启动或恢复加速"),
+    );
 }
 
 /// 暂停/恢复成功后刷新账户信息，让账户页展示同步更新
@@ -564,10 +753,12 @@ fn request_after_token<R>(
 #[cfg(test)]
 mod tests {
     use super::{
-        auto_pause_guard_with_snapshot, checked_watch, request_after_token, AutoPauseBlock,
-        AutoPauseWatch, CheckedCallError, PauseDecision, PauseWatch,
+        auto_pause_guard_with_snapshot, checked_watch, consume_startup_request,
+        request_after_token, AutoPauseBlock, AutoPauseWatch, CheckedCallError, PauseDecision,
+        PauseWatch,
     };
     use crate::config::{Config, GameEntry};
+    use crate::shared::{ManualCmd, Shared};
     use std::cell::Cell;
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
@@ -673,15 +864,24 @@ mod tests {
     }
 
     #[test]
-    fn startup_recovery_pauses_immediately_once_and_manual_success_settles_it() {
+    fn startup_recovery_requires_180_seconds_then_never_rearms_after_success() {
         let now = Instant::now();
         let mut watch = AutoPauseWatch::default();
         watch.configure(true, true, true);
-        assert_eq!(watch.observe(now, false, 90), PauseDecision::StartupPause);
+        assert_eq!(watch.observe(now, false, 90), startup_wait(180, false));
+        assert_eq!(
+            watch.observe(now + Duration::from_secs(179), false, 90),
+            startup_wait(1, false)
+        );
+        assert_eq!(
+            watch.observe(now + Duration::from_secs(180), false, 90),
+            PauseDecision::StartupPause
+        );
         // The same success path is used by startup, exit, and manual pauses.
         watch.pause_succeeded();
         assert_eq!(watch.observe(now, false, 90), PauseDecision::Idle);
         watch.configure(true, true, true);
+        watch.defer_startup(now + Duration::from_secs(300));
         assert_eq!(
             watch.observe(now + Duration::from_secs(600), false, 90),
             PauseDecision::Idle
@@ -689,15 +889,28 @@ mod tests {
     }
 
     #[test]
-    fn startup_snapshot_failure_retains_recovery_until_a_complete_observation() {
+    fn startup_snapshot_failure_restarts_the_continuous_idle_grace() {
         let now = Instant::now();
         let mut watch = AutoPauseWatch::default();
         watch.configure(true, true, true);
+        assert_eq!(watch.observe(now, false, 90), startup_wait(180, false));
+        assert_eq!(
+            watch.observe(now + Duration::from_secs(100), false, 90),
+            startup_wait(80, false)
+        );
         watch.observation_failed();
         watch.observation_failed();
         assert!(watch.startup_pending);
         assert_eq!(
-            watch.observe(now + Duration::from_secs(20), false, 90),
+            watch.observe(now + Duration::from_secs(120), false, 90),
+            startup_wait(180, false)
+        );
+        assert_eq!(
+            watch.observe(now + Duration::from_secs(299), false, 90),
+            startup_wait(1, false)
+        );
+        assert_eq!(
+            watch.observe(now + Duration::from_secs(300), false, 90),
             PauseDecision::StartupPause
         );
     }
@@ -707,6 +920,8 @@ mod tests {
         let now = Instant::now();
         let mut watch = AutoPauseWatch::default();
         watch.configure(true, true, true);
+        watch.observe(now, false, 90);
+        let now = now + Duration::from_secs(180);
         assert_eq!(watch.observe(now, false, 90), PauseDecision::StartupPause);
         watch.pause_failed(now);
         assert_eq!(
@@ -717,11 +932,15 @@ mod tests {
         watch.observation_failed();
         assert_eq!(
             watch.observe(now + Duration::from_secs(60), false, 90),
+            startup_wait(180, false)
+        );
+        assert_eq!(
+            watch.observe(now + Duration::from_secs(240), false, 90),
             PauseDecision::StartupPause
         );
         watch.pause_succeeded();
         assert_eq!(
-            watch.observe(now + Duration::from_secs(120), false, 90),
+            watch.observe(now + Duration::from_secs(300), false, 90),
             PauseDecision::Idle
         );
     }
@@ -731,6 +950,8 @@ mod tests {
         let now = Instant::now();
         let mut watch = AutoPauseWatch::default();
         watch.configure(true, true, true);
+        watch.observe(now, false, 90);
+        let now = now + Duration::from_secs(180);
         assert_eq!(watch.observe(now, false, 90), PauseDecision::StartupPause);
         watch.pause_failed(now);
         // This fresh observation also represents a game found by the final
@@ -767,8 +988,102 @@ mod tests {
             watch.configure(enabled, startup, valid);
             assert_eq!(watch.observe(now, false, 0), PauseDecision::Idle);
             watch.configure(true, true, true);
+            watch.defer_startup(now);
             assert_eq!(watch.observe(now, false, 0), PauseDecision::Idle);
         }
+    }
+
+    #[test]
+    fn preparing_game_extends_to_latest_click_plus_ten_minutes_without_accumulating() {
+        let now = Instant::now();
+        let mut watch = AutoPauseWatch::default();
+        watch.configure(true, true, true);
+        watch.observe(now, false, 90);
+        watch.defer_startup(now + Duration::from_secs(10));
+        assert_eq!(
+            watch.observe(now + Duration::from_secs(20), false, 90),
+            startup_wait(590, true)
+        );
+        watch.defer_startup(now + Duration::from_secs(100));
+        // Out-of-order/stale UI requests must not shorten the latest protection.
+        watch.defer_startup(now + Duration::from_secs(50));
+        assert_eq!(
+            watch.observe(now + Duration::from_secs(100), false, 90),
+            startup_wait(600, true)
+        );
+        assert_eq!(
+            watch.observe(now + Duration::from_secs(699), false, 90),
+            startup_wait(1, true)
+        );
+        assert_eq!(
+            watch.observe(now + Duration::from_secs(700), false, 90),
+            PauseDecision::StartupPause
+        );
+        assert!(
+            !watch
+                .startup_status(now + Duration::from_secs(700))
+                .preparing_game
+        );
+    }
+
+    #[test]
+    fn failed_scan_preserves_deferral_but_requires_new_continuous_idle_after_recovery() {
+        let now = Instant::now();
+        let mut watch = AutoPauseWatch::default();
+        watch.configure(true, true, true);
+        watch.observe(now, false, 90);
+        watch.defer_startup(now + Duration::from_secs(10));
+        watch.observation_failed();
+        assert!(
+            watch
+                .startup_status(now + Duration::from_secs(600))
+                .preparing_game
+        );
+        assert_eq!(
+            watch
+                .startup_status(now + Duration::from_secs(600))
+                .remaining_secs,
+            None
+        );
+        assert_eq!(
+            watch.observe(now + Duration::from_secs(601), false, 90),
+            startup_wait(180, true)
+        );
+        assert_eq!(
+            watch.observe(now + Duration::from_secs(610), false, 90),
+            startup_wait(171, false)
+        );
+        assert_eq!(
+            watch.observe(now + Duration::from_secs(781), false, 90),
+            PauseDecision::StartupPause
+        );
+    }
+
+    #[test]
+    fn game_during_startup_countdown_settles_deferral_and_restores_normal_exit_grace() {
+        let now = Instant::now();
+        let mut watch = AutoPauseWatch::default();
+        watch.configure(true, true, true);
+        watch.observe(now, false, 90);
+        watch.defer_startup(now + Duration::from_secs(10));
+        assert_eq!(
+            watch.observe(now + Duration::from_secs(30), true, 90),
+            PauseDecision::Running
+        );
+        assert!(!watch.startup_status(now + Duration::from_secs(30)).pending);
+        assert!(watch.startup_deferred_at.is_none());
+        assert_eq!(
+            watch.observe(now + Duration::from_secs(40), false, 90),
+            PauseDecision::GraceStarted
+        );
+        assert_eq!(
+            watch.observe(now + Duration::from_secs(129), false, 90),
+            PauseDecision::Waiting(1)
+        );
+        assert_eq!(
+            watch.observe(now + Duration::from_secs(130), false, 90),
+            PauseDecision::Pause
+        );
     }
 
     #[test]
@@ -821,21 +1136,44 @@ mod tests {
         Arc::new(Mutex::new(cfg))
     }
 
+    fn startup_wait(remaining_secs: u64, preparing_game: bool) -> PauseDecision {
+        PauseDecision::StartupWaiting {
+            remaining_secs,
+            preparing_game,
+        }
+    }
+
     #[test]
     fn valid_empty_snapshot_executes_one_pause_and_normal_exit_ignores_startup_opt_out() {
         for startup in [true, false] {
             let cfg = configured_fixture();
             // Disabling startup recovery must leave normal game-exit pauses enabled.
             cfg.lock().unwrap().strategy.pause_on_startup = startup;
+            let shared = Arc::new(Mutex::new(Shared::default()));
+            let now = Instant::now();
+            let mut watch = AutoPauseWatch::default();
+            watch.configure(true, startup, true);
+            if !startup {
+                watch.observe(now, true, 90);
+            }
+            watch.observe(now, false, 90);
+            let ready_at = now + Duration::from_secs(180);
             let calls = Cell::new(0);
             let snapshots = Cell::new(0);
             let result = request_after_token(
                 || Some("offline-fixture-token".to_string()),
                 || {
-                    auto_pause_guard_with_snapshot(&cfg, startup, || {
-                        snapshots.set(snapshots.get() + 1);
-                        Ok(Vec::new())
-                    })
+                    auto_pause_guard_with_snapshot(
+                        &cfg,
+                        &shared,
+                        &mut watch,
+                        startup,
+                        ready_at,
+                        || {
+                            snapshots.set(snapshots.get() + 1);
+                            Ok(Vec::new())
+                        },
+                    )
                 },
                 |token| {
                     assert_eq!(token, "offline-fixture-token");
@@ -852,6 +1190,8 @@ mod tests {
     #[test]
     fn actual_request_guard_scans_after_token_resolution_and_blocks_a_new_game() {
         let cfg = configured_fixture();
+        let shared = Arc::new(Mutex::new(Shared::default()));
+        let mut watch = AutoPauseWatch::default();
         let game_started = Cell::new(false);
         let calls = Cell::new(0);
         let result = request_after_token(
@@ -861,13 +1201,20 @@ mod tests {
                 Some("offline-fixture-token".to_string())
             },
             || {
-                auto_pause_guard_with_snapshot(&cfg, true, || {
-                    Ok(if game_started.get() {
-                        vec!["FIXTURE.EXE".into()]
-                    } else {
-                        Vec::new()
-                    })
-                })
+                auto_pause_guard_with_snapshot(
+                    &cfg,
+                    &shared,
+                    &mut watch,
+                    true,
+                    Instant::now(),
+                    || {
+                        Ok(if game_started.get() {
+                            vec!["FIXTURE.EXE".into()]
+                        } else {
+                            Vec::new()
+                        })
+                    },
+                )
             },
             |_| calls.set(calls.get() + 1),
         );
@@ -882,6 +1229,8 @@ mod tests {
     fn actual_request_guard_reloads_changed_config_and_never_treats_failed_scan_as_empty() {
         for change in 0..4 {
             let cfg = configured_fixture();
+            let shared = Arc::new(Mutex::new(Shared::default()));
+            let mut watch = AutoPauseWatch::default();
             let calls = Cell::new(0);
             let result = request_after_token(
                 || {
@@ -894,7 +1243,16 @@ mod tests {
                     }
                     Some("offline-fixture-token".to_string())
                 },
-                || auto_pause_guard_with_snapshot(&cfg, true, || Err("fixture scan failed".into())),
+                || {
+                    auto_pause_guard_with_snapshot(
+                        &cfg,
+                        &shared,
+                        &mut watch,
+                        true,
+                        Instant::now(),
+                        || Err("fixture scan failed".into()),
+                    )
+                },
                 |_| calls.set(calls.get() + 1),
             );
             let expected = match (change, result) {
@@ -910,5 +1268,167 @@ mod tests {
             );
             assert_eq!(calls.get(), 0);
         }
+    }
+
+    #[test]
+    fn startup_grace_changed_during_login_protects_the_still_pending_check() {
+        let cfg = configured_fixture();
+        let shared = Arc::new(Mutex::new(Shared::default()));
+        let mut watch = AutoPauseWatch::default();
+        let now = Instant::now();
+        watch.configure(true, true, true);
+        watch.observe(now, false, 90);
+        let calls = Cell::new(0);
+        let result = request_after_token(
+            || {
+                cfg.lock().unwrap().strategy.startup_grace_secs = 300;
+                Some("offline-fixture-token".to_string())
+            },
+            || {
+                auto_pause_guard_with_snapshot(
+                    &cfg,
+                    &shared,
+                    &mut watch,
+                    true,
+                    now + Duration::from_secs(180),
+                    || Ok(Vec::new()),
+                )
+            },
+            |_| calls.set(calls.get() + 1),
+        );
+        assert!(matches!(
+            result,
+            Err(CheckedCallError::Blocked(AutoPauseBlock::Protected(
+                PauseDecision::StartupWaiting {
+                    remaining_secs: 120,
+                    preparing_game: false
+                }
+            )))
+        ));
+        assert_eq!(calls.get(), 0);
+        // Reducing the configurable grace cannot shorten explicit preparation protection.
+        watch.defer_startup(now + Duration::from_secs(180));
+        watch.startup_grace_secs = 0;
+        assert_eq!(
+            watch.observe(now + Duration::from_secs(181), false, 90),
+            startup_wait(599, true)
+        );
+    }
+
+    #[test]
+    fn deferral_clicked_during_token_resolution_blocks_pause_until_its_real_expiry() {
+        let cfg = configured_fixture();
+        let shared = Arc::new(Mutex::new(Shared::default()));
+        let mut watch = AutoPauseWatch::default();
+        let now = Instant::now();
+        watch.configure(true, true, true);
+        watch.observe(now, false, 90);
+        let clicked_at = now + Duration::from_secs(181);
+        let calls = Cell::new(0);
+        let result = request_after_token(
+            || {
+                shared.lock().unwrap().startup_defer_requested_at = Some(clicked_at);
+                Some("offline-fixture-token".to_string())
+            },
+            || {
+                auto_pause_guard_with_snapshot(
+                    &cfg,
+                    &shared,
+                    &mut watch,
+                    true,
+                    clicked_at + Duration::from_secs(1),
+                    || Ok(Vec::new()),
+                )
+            },
+            |_| calls.set(calls.get() + 1),
+        );
+        assert!(matches!(
+            result,
+            Err(CheckedCallError::Blocked(AutoPauseBlock::Protected(
+                PauseDecision::StartupWaiting {
+                    remaining_secs: 599,
+                    preparing_game: true
+                }
+            )))
+        ));
+        assert_eq!(calls.get(), 0);
+        assert_eq!(
+            shared.lock().unwrap().startup_pause_status.remaining_secs,
+            Some(599)
+        );
+        assert!(shared.lock().unwrap().startup_defer_requested_at.is_none());
+        let result = request_after_token(
+            || Some("offline-fixture-token".to_string()),
+            || {
+                auto_pause_guard_with_snapshot(
+                    &cfg,
+                    &shared,
+                    &mut watch,
+                    true,
+                    clicked_at + Duration::from_secs(600),
+                    || Ok(Vec::new()),
+                )
+            },
+            |_| {
+                calls.set(calls.get() + 1);
+                "fixture pause succeeded"
+            },
+        );
+        assert_eq!(result.unwrap(), "fixture pause succeeded");
+        assert_eq!(calls.get(), 1);
+        watch.pause_succeeded();
+        shared.lock().unwrap().startup_defer_requested_at =
+            Some(clicked_at + Duration::from_secs(601));
+        consume_startup_request(&shared, &mut watch, clicked_at + Duration::from_secs(601))
+            .unwrap();
+        assert!(!shared.lock().unwrap().startup_pause_status.pending);
+        assert_eq!(
+            watch.observe(clicked_at + Duration::from_secs(1800), false, 90),
+            PauseDecision::Idle
+        );
+    }
+
+    #[test]
+    fn manual_pause_has_priority_over_startup_even_when_requested_during_login() {
+        let cfg = configured_fixture();
+        let shared = Arc::new(Mutex::new(Shared::default()));
+        let mut watch = AutoPauseWatch::default();
+        let now = Instant::now();
+        watch.configure(true, true, true);
+        watch.observe(now, false, 90);
+        let calls = Cell::new(0);
+        let result = request_after_token(
+            || {
+                let mut shared = shared.lock().unwrap();
+                shared.manual_cmd = Some(ManualCmd::Pause);
+                shared.startup_defer_requested_at = Some(now + Duration::from_secs(180));
+                Some("offline-fixture-token".to_string())
+            },
+            || {
+                auto_pause_guard_with_snapshot(
+                    &cfg,
+                    &shared,
+                    &mut watch,
+                    true,
+                    now + Duration::from_secs(180),
+                    || Ok(Vec::new()),
+                )
+            },
+            |_| calls.set(calls.get() + 1),
+        );
+        assert!(matches!(
+            result,
+            Err(CheckedCallError::Blocked(
+                AutoPauseBlock::ManualPausePending
+            ))
+        ));
+        assert_eq!(calls.get(), 0);
+        assert!(matches!(
+            shared.lock().unwrap().manual_cmd,
+            Some(ManualCmd::Pause)
+        ));
+        watch.pause_succeeded();
+        assert!(!watch.startup_status(now + Duration::from_secs(181)).pending);
+        assert!(watch.startup_deferred_at.is_none());
     }
 }

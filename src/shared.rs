@@ -1,10 +1,20 @@
 //! UI 线程与后台工作线程之间的共享状态。
 use std::collections::VecDeque;
+use std::time::Instant;
 
 #[derive(Clone, Copy, Debug)]
 pub enum ManualCmd {
     Pause,
     Resume,
+}
+
+/// Runtime-only startup protection state. No account or accelerator state is
+/// implied; None means the worker still needs a successful process observation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StartupPauseStatus {
+    pub pending: bool,
+    pub remaining_secs: Option<u64>,
+    pub preparing_game: bool,
 }
 
 pub struct Shared {
@@ -24,6 +34,11 @@ pub struct Shared {
     pub manual_cmd: Option<ManualCmd>,
     /// 最近一次手动暂停的结果；独立于会被监控状态覆盖的展示文本。
     pub manual_pause_result: Option<bool>,
+    /// Published by the worker; controls whether a startup-only deferral is useful.
+    pub startup_pause_status: StartupPauseStatus,
+    /// UI/tray request only: protect startup checks until at least click + 10 min.
+    /// The worker consumes this even while a slow login is completing.
+    pub startup_defer_requested_at: Option<Instant>,
     /// 内存中的 token（不落盘明文）
     pub token: Option<String>,
     /// 极验人机验证结果：Some("")=用户关闭窗口取消；Some(json)=验证通过的三元组
@@ -41,6 +56,11 @@ impl Default for Shared {
             account_info: None,
             manual_cmd: None,
             manual_pause_result: None,
+            startup_pause_status: StartupPauseStatus {
+                pending: true,
+                ..StartupPauseStatus::default()
+            },
+            startup_defer_requested_at: None,
             token: None,
             captcha_result: None,
         }

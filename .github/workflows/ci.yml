@@ -48,7 +48,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: windows-msvc-${{ steps.rust.outputs.compiler }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/config.toml', 'src/**') }}
+          key: windows-msvc-${{ steps.rust.outputs.compiler }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/config.toml', 'build.rs', 'src/**', 'assets/**') }}
           restore-keys: |
             windows-msvc-${{ steps.rust.outputs.compiler }}-
       - name: Check formatting
@@ -70,6 +70,8 @@ jobs:
           key: ${{ steps.rust-cache.outputs.cache-primary-key }}
       - name: Build Windows installer and portable package
         run: ./scripts/installer.ps1 -Target $env:RUST_TARGET -OutputDirectory dist -SkipBuild
+      - name: Verify executable and installer icon resources
+        run: ./scripts/test-icons.ps1 -Target $env:RUST_TARGET -OutputDirectory dist
       - name: Test silent installation, upgrade, and uninstall
         run: ./scripts/test-installer.ps1 -OutputDirectory dist
       - name: Test installed and portable application updates

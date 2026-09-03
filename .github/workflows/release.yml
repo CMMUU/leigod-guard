@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing stable release tag, for example v0.7.0
+        description: Existing stable release tag, for example v0.8.0
         required: true
         type: string
 
@@ -59,7 +59,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: windows-msvc-${{ steps.rust.outputs.compiler }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/config.toml', 'src/**') }}
+          key: windows-msvc-${{ steps.rust.outputs.compiler }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/config.toml', 'build.rs', 'src/**', 'assets/**') }}
           restore-keys: |
             windows-msvc-${{ steps.rust.outputs.compiler }}-
       - name: Check package version against tag
@@ -92,6 +92,8 @@ jobs:
           key: ${{ steps.rust-cache.outputs.cache-primary-key }}
       - name: Build Windows installer and portable package
         run: ./scripts/installer.ps1 -Target $env:RUST_TARGET -OutputDirectory dist -SkipBuild
+      - name: Verify executable and installer icon resources
+        run: ./scripts/test-icons.ps1 -Target $env:RUST_TARGET -OutputDirectory dist
       - name: Test silent installation, upgrade, and uninstall
         run: ./scripts/test-installer.ps1 -OutputDirectory dist
       - name: Test installed and portable application updates
@@ -128,9 +130,9 @@ jobs:
 
           在“关于与更新”中可手动“检查更新”，也可选择开启“启动时自动检查更新”（默认关闭）。发现新版本后点击“下载并更新”，程序会校验下载文件、保留配置、完成更新并重新打开，安装版和绿色版各自保持原来的使用方式。v0.5.x 用户首次升级到本版需手动下载安装或解压新包。
 
-          本版默认开启启动补暂停：在自动暂停开启、游戏名单有效且没有名单游戏运行时，启动后立即尝试暂停雷神计时。名单为空或启动时关闭相关开关则跳过；检测或网络失败时不会假定暂停成功。可在“策略”页关闭此选项。升级完成后重新打开应用，也会遵循这一启动策略。
+          本版启动检查默认等待 3 分钟：自动暂停开启、名单非空且全部有效，连续等待结束仍无名单游戏时，才尝试暂停雷神计时。准备开玩时，可在首页或托盘延后 10 分钟；检测到游戏就转入正常退出监控（默认 90 秒宽限期）。已结束的启动检查不会因之后手动开启加速而重启，程序不能识别雷神加速按钮。旧配置缺少新等待字段时默认 180 秒，可在“策略”页调整或关闭启动检查；更新后重启也遵循该策略。进程或网络失败不视为暂停成功，已经消耗的时长无法追回。
 
-          本工作流在 Windows Server 2022 上构建 ``$env:RUST_TARGET``，已通过代码格式、离线单元测试、release 编译、静态 CRT 依赖检查，以及静默安装、快捷方式、版本号、覆盖升级、卸载和配置保留检查。更新集成测试使用无账号操作的下一版本测试程序，验证真实更新辅助进程的等待退出、安装版升级、绿色版替换、配置保留和重新启动。未验证真实账户登录、验证码、实际暂停请求、关机行为或图形界面交互。使用方法、触发条件及限制见仓库 README。
+          本工作流在 Windows Server 2022 上构建 ``$env:RUST_TARGET``，已通过代码格式、离线单元测试、release 编译、静态 CRT 依赖检查、EXE / 安装器 / 绿色包图标资源校验，以及静默安装、快捷方式、版本号、覆盖升级、卸载和配置保留检查。更新集成测试使用无账号操作的下一版本测试程序，验证真实更新辅助进程的等待退出、安装版升级、绿色版替换、配置保留和重新启动。未验证真实账户登录、验证码、实际暂停请求、关机行为或图形界面交互。使用方法、触发条件及限制见仓库 README。
 
           $($section.Groups[1].Value.Trim())
           "@

@@ -1,6 +1,12 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+pub const DEFAULT_STARTUP_GRACE_SECS: u64 = 180;
+
+fn default_startup_grace_secs() -> u64 {
+    DEFAULT_STARTUP_GRACE_SECS
+}
+
 /// 监控的游戏条目
 #[derive(Clone, Serialize, Deserialize)]
 pub struct GameEntry {
@@ -41,6 +47,9 @@ pub struct Strategy {
     /// 每次启动时，名单有效且无名单游戏运行则补暂停一次。
     #[serde(default = "default_true")]
     pub pause_on_startup: bool,
+    /// 启动后连续确认没有名单游戏的宽限时间，与游戏退出宽限期独立。
+    #[serde(default = "default_startup_grace_secs")]
+    pub startup_grace_secs: u64,
 }
 
 fn default_true() -> bool {
@@ -57,6 +66,7 @@ impl Default for Strategy {
             autostart: false,
             pause_on_shutdown: true,
             pause_on_startup: true,
+            startup_grace_secs: DEFAULT_STARTUP_GRACE_SECS,
         }
     }
 }
@@ -137,11 +147,24 @@ mod tests {
         let cfg: Config = toml::from_str(old).unwrap();
         assert!(cfg.strategy.pause_on_startup);
         assert!(Config::default().strategy.pause_on_startup);
+        assert_eq!(cfg.strategy.startup_grace_secs, 180);
+        assert_eq!(Config::default().strategy.startup_grace_secs, 180);
         let opted_out: Config =
             toml::from_str(&format!("{old}pause_on_startup = false\n")).unwrap();
         assert!(!opted_out.strategy.pause_on_startup);
         let roundtrip: Config = toml::from_str(&toml::to_string(&opted_out).unwrap()).unwrap();
         assert!(!roundtrip.strategy.pause_on_startup);
+    }
+
+    #[test]
+    fn startup_grace_migrates_from_v070_and_is_independent_of_exit_grace() {
+        let old = "games = []\nplans = []\n[strategy]\nenabled = true\ncheck_interval_secs = 3\ngrace_secs = 90\nmin_run_secs = 300\nautostart = false\npause_on_startup = true\n";
+        let mut cfg: Config = toml::from_str(old).unwrap();
+        assert_eq!(cfg.strategy.startup_grace_secs, 180);
+        cfg.strategy.startup_grace_secs = 300;
+        let restored: Config = toml::from_str(&toml::to_string(&cfg).unwrap()).unwrap();
+        assert_eq!(restored.strategy.startup_grace_secs, 300);
+        assert_eq!(restored.strategy.grace_secs, 90);
     }
 
     #[test]
