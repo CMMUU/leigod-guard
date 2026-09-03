@@ -129,7 +129,7 @@ const
 var
   RuntimeProgress: TOutputProgressWizardPage;
 
-function HasRuntimeVersion(RootKey: HKEY): Boolean;
+function HasRuntimeVersion(RootKey: Integer): Boolean;
 var
   VersionText: String;
   VersionNumber: Int64;
