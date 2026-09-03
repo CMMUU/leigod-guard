@@ -8,6 +8,8 @@ downloaded or installed by this script. The Microsoft WebView2 bootstrapper is
 downloaded from Microsoft's distribution link unless BootstrapperPath is supplied.
 Both downloaded and supplied bootstrappers must have a valid Microsoft signature.
 Use -SkipBuild only after testing and building the same source and target yourself.
+Use -CheckCompilerOnly to validate compiler discovery without building, downloading,
+creating output directories, or running the compiler.
 #>
 [CmdletBinding()]
 param(
@@ -16,7 +18,8 @@ param(
     [string]$OutputDirectory = 'dist',
     [switch]$SkipBuild,
     [string]$BootstrapperPath,
-    [string]$InnoCompiler
+    [string]$InnoCompiler,
+    [switch]$CheckCompilerOnly
 )
 
 Set-StrictMode -Version Latest
@@ -37,24 +40,37 @@ function Find-InnoCompiler {
         $candidates = @(Resolve-RepositoryPath -Path $InnoCompiler)
     } else {
         $candidates = @()
-        $command = Get-Command ISCC.exe -ErrorAction SilentlyContinue
-        if ($command) { $candidates += $command.Source }
+        # Chocolatey's PATH entry may be a shim whose own version is 0.0.0.0.
+        # Prefer the installed compiler and examine every PATH candidate only
+        # after the standard installation directories.
         foreach ($programDirectory in @(${env:ProgramFiles(x86)}, $env:ProgramFiles)) {
             if ($programDirectory) { $candidates += Join-Path $programDirectory 'Inno Setup 6\ISCC.exe' }
         }
+        $commands = @(Get-Command ISCC.exe -CommandType Application -All -ErrorAction SilentlyContinue)
+        foreach ($command in $commands) { $candidates += $command.Source }
     }
-    foreach ($candidate in $candidates) {
+    $rejectedCandidates = @()
+    foreach ($candidate in @($candidates | Select-Object -Unique)) {
         if (Test-Path -LiteralPath $candidate -PathType Leaf) {
             $info = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($candidate)
             if (($info.FileMajorPart -lt 6) -or
                 (($info.FileMajorPart -eq 6) -and ($info.FileMinorPart -lt 4))) {
-                throw "Inno Setup 6.4 or later is required; found $($info.FileVersion) at $candidate."
+                $reason = "Unsupported or wrapper version '$($info.FileVersion)' at $candidate"
+                if ($InnoCompiler) {
+                    throw "$reason. -InnoCompiler must point directly to a real Inno Setup 6.4 or later ISCC.exe, not a launcher shim."
+                }
+                $rejectedCandidates += $reason
+                Write-Verbose "Skipping compiler candidate: $reason"
+                continue
             }
             Write-Host "Inno Setup compiler: $candidate ($($info.FileVersion))"
             return $candidate
+        } elseif ($InnoCompiler) {
+            throw "The explicitly supplied -InnoCompiler file does not exist: $candidate. Supply the real Inno Setup 6.4 or later ISCC.exe path."
         }
     }
-    throw 'Inno Setup 6.4 or later was not found. Install it from https://jrsoftware.org/isinfo.php or pass -InnoCompiler with an existing ISCC.exe path.'
+    $details = if ($rejectedCandidates.Count -gt 0) { ' Rejected candidates: ' + ($rejectedCandidates -join '; ') } else { '' }
+    throw "Inno Setup 6.4 or later was not found. Install it from https://jrsoftware.org/isinfo.php or pass -InnoCompiler with an existing real ISCC.exe path.$details"
 }
 
 function Assert-MicrosoftBootstrapper {
@@ -78,6 +94,7 @@ function Assert-MicrosoftBootstrapper {
 }
 
 $compiler = Find-InnoCompiler
+if ($CheckCompilerOnly) { return }
 $outputRoot = Resolve-RepositoryPath -Path $OutputDirectory
 [System.IO.Directory]::CreateDirectory($outputRoot) | Out-Null
 

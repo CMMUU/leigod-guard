@@ -39,12 +39,27 @@ jobs:
         with:
           ref: refs/tags/${{ inputs.tag || github.ref_name }}
           persist-credentials: false
+      - name: Check installer compiler
+        run: ./scripts/installer.ps1 -CheckCompilerOnly
       - name: Install Rust
+        id: rust
         run: |
           rustup toolchain install stable --profile minimal --component rustfmt --target $env:RUST_TARGET
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           rustup default stable
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $compiler = (rustc --version) -replace '[^A-Za-z0-9.-]', '-'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "compiler=$compiler" >> $env:GITHUB_OUTPUT
+      - name: Restore Rust build cache
+        id: rust-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: windows-msvc-${{ steps.rust.outputs.compiler }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/config.toml', 'src/**') }}
       - name: Check package version against tag
         run: |
           $metadataText = cargo metadata --locked --no-deps --format-version 1
@@ -64,6 +79,15 @@ jobs:
         run: cargo test --locked --offline --target $env:RUST_TARGET
       - name: Build release executable
         run: cargo build --release --locked --offline --target $env:RUST_TARGET
+      - name: Save verified Rust build cache
+        if: steps.rust-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ steps.rust-cache.outputs.cache-primary-key }}
       - name: Build Windows installer and portable package
         run: ./scripts/installer.ps1 -Target $env:RUST_TARGET -OutputDirectory dist -SkipBuild
       - name: Test silent installation, upgrade, and uninstall
