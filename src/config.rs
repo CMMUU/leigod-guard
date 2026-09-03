@@ -38,6 +38,9 @@ pub struct Strategy {
     /// 关机/注销前自动暂停计时
     #[serde(default = "default_true")]
     pub pause_on_shutdown: bool,
+    /// 每次启动时，名单有效且无名单游戏运行则补暂停一次。
+    #[serde(default = "default_true")]
+    pub pause_on_startup: bool,
 }
 
 fn default_true() -> bool {
@@ -53,8 +56,30 @@ impl Default for Strategy {
             min_run_secs: 300,
             autostart: false,
             pause_on_shutdown: true,
+            pause_on_startup: true,
         }
     }
+}
+
+/// Process snapshots contain executable basenames, never full paths or patterns.
+/// Use the same validation when adding custom games and deciding pause safety.
+pub fn valid_game_executable(exe: &str) -> bool {
+    let exe = exe.trim();
+    if exe.len() <= 4
+        || !exe.to_ascii_lowercase().ends_with(".exe")
+        || exe
+            .chars()
+            .any(|ch| ch.is_control() || "/\\:<>\"|?*".contains(ch))
+    {
+        return false;
+    }
+    let stem = exe.split('.').next().unwrap_or_default().to_uppercase();
+    let numbered_device = (stem.starts_with("COM") || stem.starts_with("LPT"))
+        && stem.get(3..).is_some_and(|suffix| {
+            suffix.chars().count() == 1
+                && matches!(suffix.chars().next(), Some('1'..='9' | '¹' | '²' | '³'))
+        });
+    !stem.is_empty() && !matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL") && !numbered_device
 }
 
 /// 账户凭据（密码哈希与 token 均经 DPAPI 加密后存储）
@@ -88,7 +113,7 @@ pub struct Config {
 
 #[cfg(test)]
 mod tests {
-    use super::Config;
+    use super::{valid_game_executable, Config};
 
     #[test]
     fn older_config_does_not_enable_update_requests() {
@@ -105,6 +130,47 @@ mod tests {
         let restored: Config = toml::from_str(&text).unwrap();
         assert!(restored.updates.check_on_startup);
     }
+
+    #[test]
+    fn older_strategy_enables_startup_recovery_but_preserves_explicit_opt_out() {
+        let old = "games = []\nplans = []\n[strategy]\nenabled = true\ncheck_interval_secs = 3\ngrace_secs = 90\nmin_run_secs = 300\nautostart = false\n";
+        let cfg: Config = toml::from_str(old).unwrap();
+        assert!(cfg.strategy.pause_on_startup);
+        assert!(Config::default().strategy.pause_on_startup);
+        let opted_out: Config =
+            toml::from_str(&format!("{old}pause_on_startup = false\n")).unwrap();
+        assert!(!opted_out.strategy.pause_on_startup);
+        let roundtrip: Config = toml::from_str(&toml::to_string(&opted_out).unwrap()).unwrap();
+        assert!(!roundtrip.strategy.pause_on_startup);
+    }
+
+    #[test]
+    fn game_executables_are_trimmed_basenames_not_paths_patterns_or_devices() {
+        for valid in [
+            "TslGame.exe",
+            " javaw.EXE ",
+            "Game-Win64-Shipping.exe",
+            "我的游戏.exe",
+        ] {
+            assert!(valid_game_executable(valid), "rejected {valid}");
+        }
+        for invalid in [
+            "",
+            " ",
+            ".exe",
+            "game",
+            "game.*",
+            "a/game.exe",
+            "C:\\game.exe",
+            "game.exe:stream",
+            "CON.exe",
+            "COM1.exe",
+            "LPT³.exe",
+            "game\n.exe",
+        ] {
+            assert!(!valid_game_executable(invalid), "accepted {invalid}");
+        }
+    }
 }
 
 impl Config {
@@ -117,11 +183,9 @@ impl Config {
         let path = Self::path();
         match std::fs::read_to_string(&path) {
             Ok(text) => match toml::from_str::<Config>(&text) {
-                Ok(mut cfg) => {
-                    // serde(default) 仅处理缺失字段，旧文件缺失 strategy 时补默认
-                    cfg.games.retain(|g| !g.exe.trim().is_empty());
-                    cfg
-                }
+                // Preserve invalid entries so the worker can fail closed for
+                // the entire watch list and the user can correct them in the UI.
+                Ok(cfg) => cfg,
                 Err(_) => {
                     eprintln!("配置解析失败，使用默认配置。请检查配置格式。");
                     Config {

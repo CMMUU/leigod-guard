@@ -7,6 +7,7 @@ mod autostart;
 mod captcha;
 mod config;
 mod dpapi;
+mod game_presets;
 mod instance;
 mod leigod_api;
 mod monitor;

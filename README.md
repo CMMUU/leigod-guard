@@ -1,20 +1,22 @@
 # 雷神守护 Leigod Guard · 雷神加速器自动暂停工具
 
-一个运行在 Windows 上的雷神加速器**自动暂停计时工具**：观察你设置的游戏进程，在这些游戏全部退出、宽限期结束后，向雷神账户发送暂停计时请求，减少忘记手动暂停造成的时长消耗。
+一个运行在 Windows 上的雷神加速器**自动暂停计时工具**：启动时检查已配置的游戏，未检测到名单游戏运行时尝试暂停计时；观察到游戏运行后，在名单游戏全部退出、宽限期结束时请求暂停，减少忘记手动暂停造成的时长消耗。
 
 **Windows 10 / 11 x64 · MIT 开源 · 安装版 EXE / 绿色免安装 ZIP · 应用内更新**
 
-[下载 Windows 安装版（推荐）](https://github.com/CMMUU/leigod-guard/releases/download/v0.6.1/leigod-guard-v0.6.1-windows-x64-setup.exe) · [下载绿色免安装版](https://github.com/CMMUU/leigod-guard/releases/download/v0.6.1/leigod-guard-v0.6.1-windows-x64.zip) · [全部下载与校验文件](https://github.com/CMMUU/leigod-guard/releases/latest) · [版本记录](CHANGELOG.md) · [隐私与本地数据](docs/PRIVACY.md) · [问题反馈](https://github.com/CMMUU/leigod-guard/issues)
+[下载 Windows 安装版（推荐）](https://github.com/CMMUU/leigod-guard/releases/download/v0.7.0/leigod-guard-v0.7.0-windows-x64-setup.exe) · [下载绿色免安装版](https://github.com/CMMUU/leigod-guard/releases/download/v0.7.0/leigod-guard-v0.7.0-windows-x64.zip) · [全部下载与校验文件](https://github.com/CMMUU/leigod-guard/releases/latest) · [版本记录](CHANGELOG.md) · [隐私与本地数据](docs/PRIVACY.md) · [问题反馈](https://github.com/CMMUU/leigod-guard/issues)
 
-Leigod Guard is an unofficial, open-source Windows companion for the Leigod game accelerator. It requests a pause of account time after all configured game processes exit and the grace period ends. Installer and portable downloads are available above.
+Leigod Guard is an unofficial, open-source Windows companion for the Leigod game accelerator. With automatic pause enabled and a configured game list, it checks for running games at startup and requests a pause if none are found. After observing a game, it also requests a pause when all configured game processes exit and the grace period ends. The startup check is enabled by default and can be disabled. Installer and portable downloads are available above.
 
 **本项目是个人维护的第三方开源工具，不是雷神加速器官方产品，与雷神加速器运营方没有隶属、合作或授权关系。** 此 README 是本项目的使用说明；雷神的账户服务、计时规则及客服仍以其官方渠道为准。
 
 ## 三步开始使用
 
 1. **下载并打开**：选择上方安装版，双击完成安装；或下载绿色版并完整解压。打开雷神守护后，登录自己的雷神账户。
-2. **加入游戏名单**：在雷神官方客户端开启所需加速并启动游戏，再在本工具中点击「从运行进程选择…」，把实际的游戏进程加入名单。
-3. **后台守护计时**：保持工具运行。它观察到游戏运行后，在名单内所有游戏退出、宽限期结束时请求暂停计时（默认宽限期为 90 秒）。首次使用请在雷神客户端核对一次暂停结果。
+2. **加入游戏名单**：从常用游戏下拉列表选择预设，或自定义进程文件名；也可启动游戏后用「从运行进程选择…」确认实际进程。加速与线路选择仍在雷神官方客户端操作。
+3. **后台守护计时**：保持工具运行。默认启动检查在名单非空且进程名全部有效、自动暂停开启且没有名单游戏运行时立即尝试暂停；正常游玩后，则在所有名单游戏退出、宽限期结束时请求暂停（默认 90 秒）。首次使用请在雷神客户端核对暂停结果。
+
+**0.7.0 新增的启动暂停默认开启，旧配置升级后也采用此默认值。** 不需要启动时暂停时，可在「策略」中关闭「启动时无游戏运行则暂停计时」。这里的“游戏”指名单中的游戏；此选项控制下次启动时的检查。工具无法追回已经消耗的加速时长。
 
 安装、验证码、托盘操作和更新方法见下方「下载与首次使用」。
 
@@ -35,6 +37,25 @@ Leigod Guard is an unofficial, open-source Windows companion for the Leigod game
 
 遇到某款游戏无法识别或暂停时，可提交[游戏配置与兼容反馈](https://github.com/CMMUU/leigod-guard/issues/new?template=game-feedback.yml)，附上游戏名称、启动平台、实际进程文件名和操作结果，帮助完善配置经验。
 
+### 常用游戏预设与自定义名单
+
+在「游戏名单」的「常用游戏」下拉列表中选择游戏，可以预填名称和进程文件名。当前预设如下，预填内容仍可修改：
+
+| 游戏预设 | 预填进程文件名 |
+| --- | --- |
+| PUBG：绝地求生 | `TslGame.exe` |
+| Counter-Strike 2（CS2） | `cs2.exe` |
+| Apex Legends | `r5apex.exe` |
+| 英雄联盟（对局） | `League of Legends.exe` |
+| 无畏契约（国际服） | `VALORANT-Win64-Shipping.exe` |
+| 堡垒之夜 | `FortniteClient-Win64-Shipping.exe` |
+| 火箭联盟 | `RocketLeague.exe` |
+| 守望先锋 | `Overwatch.exe` |
+
+未列出的游戏请选择「自定义 / 手动填写」，或使用「从运行进程选择…」。请用本机实际游戏进程核对预设，特别留意区服、启动平台和客户端版本差异；同一进程不必重复添加。预设只减少输入，不表示已经逐款通过真实游戏、雷神账户暂停或反作弊兼容性测试。
+
+各项文件名的参考资料见 [预设定义与来源](https://github.com/CMMUU/leigod-guard/blob/v0.7.0/src/game_presets.rs)。其中 CS2、守望先锋参考了发行方项目或论坛中的用户运行日志，这些记录不代表发行方对本工具的兼容性认证。
+
 ## 适用范围
 
 | 项目 | 当前范围 |
@@ -50,17 +71,19 @@ Windows 10 / 11 x64 是当前支持目标，并不表示所有系统版本、驱
 ## 它会怎样工作
 
 1. 默认每 **3 秒**检查一次运行中的进程，用 `.exe` 文件名匹配「游戏名单」，忽略大小写，不使用模糊匹配。
-2. 至少检测到一个名单内游戏正在运行后，进入待命状态。**不会自动开启加速，也不会恢复计时。**
-3. 名单内所有游戏退出后，默认等待 **90 秒**宽限期。期间只要重新检测到名单内游戏运行，就取消本次倒计时。
-4. 宽限期结束后，使用登录账户发送暂停请求。成功后更新状态；失败时提示检查，并在需要时重试。
+2. **启动检查**：自动暂停与启动暂停选项均开启、且启动时名单非空、进程名全部有效时，首次成功的进程检查若没有发现任何名单游戏，就立即尝试暂停计时，不等待退出宽限期；若发现游戏正在运行，则结束本次启动检查，按正常退出流程监控。
+3. **正常游戏退出**：观察到名单游戏运行后，等名单内所有游戏退出，默认等待 **90 秒**宽限期。期间只要重新检测到名单游戏运行，就取消本次倒计时。
+4. 满足暂停条件后，使用登录账户发送请求。进程检查失败不会当作没有游戏，登录、网络或暂停请求失败也不会标为成功；启动暂停失败后等待 **60 秒**冷却，再根据新的进程检查结果决定是否重试。冷却期间仍观察游戏，发现名单游戏运行就结束启动检查，转入正常游戏退出监控；手动暂停成功也会结束本次启动检查。
 
-**刚打开工具时，如果没有检测到名单内游戏，不会仅因为电脑空闲就自动暂停。** 名单为空、游戏运行时间短于检测间隔，或游戏没有加入名单，都可能无法触发这套流程。检测和请求存在延迟，实际暂停时间不保证精确到秒。
+启动时名单为空、任一进程名无效、自动暂停关闭或启动暂停关闭，都会跳过本次启动检查。在同一次运行中再添加名单或开启选项，不会补做已经跳过的启动检查；名单有效且总开关开启后，正常游戏退出监控仍可工作。进程名须为有效的 Windows `.exe` 文件名，不含路径、通配符或保留设备名称。
+
+游戏未加入名单或进程名填写错误时，工具可能把正在游玩的电脑判断为「没有名单游戏运行」。请先核对名单；游戏运行时间短于检测间隔，也可能无法被观察到。检测和请求存在延迟，实际暂停时间不保证精确到秒。**本工具不会自动开启加速、恢复计时或追回已消耗时长。**
 
 此外还支持：
 
-- 从正在运行的进程中选择游戏，或手动填写进程文件名。
+- 从常用游戏下拉列表添加预设、从正在运行的进程中选择游戏，或自定义进程文件名。
 - 账户页与托盘菜单的「立即暂停计时」。
-- 自定义检测间隔、退出宽限期和自动暂停开关。
+- 自定义检测间隔、退出宽限期、自动暂停总开关和启动暂停选项。
 - 当前 Windows 用户登录时自动启动，并隐藏到托盘。
 - 收到 Windows 关机或注销通知时，尝试暂停计时。
 - 查看账户状态与运行日志。
@@ -74,16 +97,16 @@ Windows 10 / 11 x64 是当前支持目标，并不表示所有系统版本、驱
 
 | 版本 | 下载后怎样使用 | 适合谁 |
 | --- | --- | --- |
-| [安装版 EXE](https://github.com/CMMUU/leigod-guard/releases/download/v0.6.1/leigod-guard-v0.6.1-windows-x64-setup.exe) | 双击安装，按需自动补装 WebView2，提供快捷方式和卸载入口 | 普通用户，推荐 |
-| [绿色免安装版 ZIP](https://github.com/CMMUU/leigod-guard/releases/download/v0.6.1/leigod-guard-v0.6.1-windows-x64.zip) | 解压到固定且可写的目录，运行 `leigod-guard.exe`；验证码需要已有 WebView2 Runtime | 希望自行管理程序目录的用户 |
+| [安装版 EXE](https://github.com/CMMUU/leigod-guard/releases/download/v0.7.0/leigod-guard-v0.7.0-windows-x64-setup.exe) | 双击安装，按需自动补装 WebView2，提供快捷方式和卸载入口 | 普通用户，推荐 |
+| [绿色免安装版 ZIP](https://github.com/CMMUU/leigod-guard/releases/download/v0.7.0/leigod-guard-v0.7.0-windows-x64.zip) | 解压到固定且可写的目录，运行 `leigod-guard.exe`；验证码需要已有 WebView2 Runtime | 希望自行管理程序目录的用户 |
 
 两种版本功能相同，都支持应用内更新。这里的「绿色免安装」指不需要安装向导：配置和日志仍保存在 `%APPDATA%\leigod-guard\`；若主动开启开机自启，也会写入当前用户的 Windows 自启注册表项。它不是将所有数据保存到程序目录、完全不写注册表的移动应用。
 
-1. 下载 [Windows x64 安装包](https://github.com/CMMUU/leigod-guard/releases/download/v0.6.1/leigod-guard-v0.6.1-windows-x64-setup.exe)：`leigod-guard-v0.6.1-windows-x64-setup.exe`。页面中的 `Source code` 是源码，不是安装程序。
+1. 下载 [Windows x64 安装包](https://github.com/CMMUU/leigod-guard/releases/download/v0.7.0/leigod-guard-v0.7.0-windows-x64-setup.exe)：`leigod-guard-v0.7.0-windows-x64-setup.exe`。页面中的 `Source code` 是源码，不是安装程序。
 2. 双击安装包，按向导完成安装，然后从开始菜单或桌面快捷方式打开「雷神守护」。**不需要解压或手动配置运行库。** 安装器会在需要时自动安装验证码窗口所需的 WebView2 Runtime；首次补装运行时需要联网。
 3. 打开「账户」页，用自己的雷神账户登录。提供密码、短信验证码和已有 token 三种方式；遇到人机验证时按窗口提示完成。不要把密码、短信验证码或 token 发到 Issues。
-4. 打开「游戏名单」，先启动一次游戏，再用「从运行进程选择…」选择真正的游戏进程。手动添加时填写例如 `ExampleGame.exe` 的文件名，不填完整路径、桌面快捷方式名称或 `*.exe`。
-5. 在「策略」中确认「启用自动暂停」及宽限期设置。随后在雷神官方客户端中手动开启所需加速。
+4. 打开「游戏名单」，从「常用游戏」下拉列表选择游戏；未列出的游戏可选择「自定义 / 手动填写」，或先启动一次游戏，再用「从运行进程选择…」选择真正的游戏进程。请核对预设文件名与本机实际进程是否一致；自定义时填写例如 `ExampleGame.exe` 的文件名，不填完整路径、桌面快捷方式名称或 `*.exe`。
+5. 在「策略」中确认「启用自动暂停」、默认开启的「启动时无游戏运行则暂停计时」及宽限期设置。随后在雷神官方客户端中手动开启所需加速。常用游戏预设只帮助填写名单，不代表已逐款通过实际游戏、账户暂停或反作弊测试。
 6. 首次使用请观察一次「游戏运行中 → 游戏退出 → 宽限期 → 已暂停」完整流程，并在雷神官方客户端或账户页面核对计时状态。
 
 安装版默认安装到当前用户的 `%LOCALAPPDATA%\Programs\LeigodGuard\`，无需管理员权限，创建开始菜单快捷方式，并可选择是否创建桌面快捷方式。安装程序与应用尚未进行 Windows 代码签名，系统可能显示未知发布者；请从本仓库的 Release 下载并按下文校验文件。
@@ -92,7 +115,7 @@ Windows 10 / 11 x64 是当前支持目标，并不表示所有系统版本、驱
 
 WebView2 Runtime 适用独立的 [微软许可条款](licenses/webview2-runtime/LICENSE.txt)。安装向导会展示相应条款；其中默认启用的 Microsoft Defender SmartScreen 会按微软隐私声明处理并向微软发送信息，详见 [隐私说明](docs/PRIVACY.md)。
 
-绿色免安装版下载文件为 `leigod-guard-v0.6.1-windows-x64.zip`，请完整解压后运行，不要直接从 ZIP 预览窗口启动。该版本不提供安装和卸载向导；普通用户建议使用上面的安装版。
+绿色免安装版下载文件为 `leigod-guard-v0.7.0-windows-x64.zip`，请完整解压后运行，不要直接从 ZIP 预览窗口启动。该版本不提供安装和卸载向导；普通用户建议使用上面的安装版。
 
 ### 应用内更新
 
@@ -100,7 +123,7 @@ WebView2 Runtime 适用独立的 [微软许可条款](licenses/webview2-runtime/
 2. 发现新版后查看版本信息，点击「下载并更新」。自动检查只负责提示，**不会未经点击就下载或安装新版**。若正在登录验证，请先完成或关闭验证码窗口。
 3. 程序下载并校验发布文件，然后关闭当前程序、完成升级并重新打开。安装版使用新版安装 EXE；绿色免安装版使用新版 ZIP 更新原目录，保持原有发行方式。
 
-升级保留用户配置、游戏名单和登录数据。**应用退出到重新打开之间不会监控游戏，也不会因为更新而自动暂停雷神账户计时。** 如需确保计时暂停，请先手动暂停并确认后再更新；重新打开后，自动暂停仍需先观察到名单内游戏运行。
+升级保留用户配置、游戏名单和登录数据。**应用退出到重新打开之间不会监控游戏；更新器本身不请求暂停，但重新打开后的应用会执行正常启动策略。** 从 0.7.0 开始，如果启动暂停和自动暂停开启、名单非空且进程名全部有效，并且未检测到名单游戏，更新后重新打开也可能立即暂停计时。旧配置缺少启动暂停字段时默认开启该选项。需要确保计时已暂停时，请先手动暂停并确认后再更新；更新前已经消耗的时长无法追回。
 
 检查与下载需要连接 GitHub，使用本仓库正式 Release 的公开信息和文件，不向 GitHub 发送雷神账户凭据。只提示版本号更高的正式版本，不自动降级或升级到预发布版本。下载会与同一 Release 的 `SHA256SUMS.txt` 核对；校验失败时不继续应用。SHA-256 用于校验文件完整性，不能替代发布者代码签名。网络、目录权限或文件被占用导致更新失败时，请按界面提示重试，或前往 [Release 下载页](https://github.com/CMMUU/leigod-guard/releases/latest) 手动下载。
 
@@ -123,7 +146,7 @@ WebView2 Runtime 适用独立的 [微软许可条款](licenses/webview2-runtime/
 在下载目录的 PowerShell 中运行：
 
 ```powershell
-Get-FileHash .\leigod-guard-v0.6.1-windows-x64-setup.exe -Algorithm SHA256
+Get-FileHash .\leigod-guard-v0.7.0-windows-x64-setup.exe -Algorithm SHA256
 ```
 
 将结果与同一 Release 提供的 `SHA256SUMS.txt` 中相同文件名的记录核对。便携 ZIP 也可用同样方式校验。哈希校验用于确认下载内容一致，不等同于 Windows 代码签名。
@@ -138,9 +161,13 @@ Get-FileHash .\leigod-guard-v0.6.1-windows-x64-setup.exe -Algorithm SHA256
 
 检查是否已登录、总开关是否开启、进程名是否正确、其他名单游戏是否仍在运行，以及宽限期是否结束。游戏启动器、反作弊启动器或后台辅助程序可能与游戏主体名称不同，应以实际退出时会结束的游戏进程为准。看到失败提示时，请在雷神官方客户端或官方账户页面手动确认并暂停。
 
+**为什么刚打开工具就暂停了？**
+
+0.7.0 默认开启启动暂停。启动时名单非空、进程名全部有效且自动暂停开启，首次成功检查没有发现名单游戏，就会立即请求暂停，不等待 90 秒。旧配置升级后也默认开启；不需要此行为时可在「策略」关闭「启动时无游戏运行则暂停计时」。若实际正在游戏中，请核对名单与本机进程名是否一致。
+
 **只关闭「启用自动暂停」总开关，就不会再暂停了吗？**
 
-该开关控制游戏进程触发的自动暂停。关闭会清除原有的退出倒计时，重新开启后需要再次观察到名单游戏运行。手动暂停和「关机/注销前自动暂停计时」是独立入口；不需要关机暂停时，还应关闭对应选项。
+该开关同时控制启动检查和正常游戏退出触发的自动暂停。关闭会清除原有的退出倒计时；启动时已经关闭则跳过该次启动检查，之后再开启不会补做。正常退出流程重新开启后需要再次观察到名单游戏运行。手动暂停和「关机/注销前自动暂停计时」是独立入口；不需要关机暂停时，还应关闭对应选项。
 
 **关机后一定能暂停吗？**
 

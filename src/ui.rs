@@ -2,6 +2,7 @@
 use crate::autostart;
 use crate::config::{AccelPlan, Config, GameEntry};
 use crate::dpapi;
+use crate::game_presets::{self, PRESETS};
 use crate::leigod_api as api;
 use crate::osd;
 use crate::shared::{ManualCmd, Shared};
@@ -55,6 +56,7 @@ pub struct App {
     // 添加游戏表单
     new_name: String,
     new_exe: String,
+    new_preset: Option<usize>,
     new_plan: String,
     show_proc_picker: bool,
     proc_filter: String,
@@ -545,6 +547,7 @@ impl App {
             update_error: false,
             new_name: String::new(),
             new_exe: String::new(),
+            new_preset: None,
             new_plan: String::new(),
             show_proc_picker: false,
             proc_filter: String::new(),
@@ -873,7 +876,7 @@ impl eframe::App for App {
                     ui.spinner();
                     ui.label("正在保存配置并检查更新文件，请稍候。");
                     ui.label("监控将短暂停止，更新完成后程序会重新打开。");
-                    ui.label("当前阶段已暂停账户和配置操作，雷神账户计时不会被更新操作改变。");
+                    ui.label("更新程序本身不暂停计时；重新打开后会按启动暂停设置检查。");
                 });
             });
             ctx.request_repaint_after(Duration::from_millis(200));
@@ -940,10 +943,14 @@ impl eframe::App for App {
             });
 
         egui::CentralPanel::default().show(ctx, |ui| match self.page {
-            Page::Games => self.page_games(ui),
+            Page::Games => {
+                egui::ScrollArea::vertical().show(ui, |ui| self.page_games(ui));
+            }
             Page::Plans => self.page_plans(ui),
             Page::Account => self.page_account(ui),
-            Page::Strategy => self.page_strategy(ui),
+            Page::Strategy => {
+                egui::ScrollArea::vertical().show(ui, |ui| self.page_strategy(ui));
+            }
             Page::Logs => self.page_logs(ui),
             Page::Updates => self.page_updates(ui),
         });
@@ -966,10 +973,166 @@ impl eframe::App for App {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GameFormAction {
+    None,
+    Add,
+    PickProcess,
+}
+
+/// Pure form rendering: it needs no account, configuration file, or live process.
+fn game_entry_form(
+    ui: &mut egui::Ui,
+    selected: &mut Option<usize>,
+    name: &mut String,
+    exe: &mut String,
+) -> GameFormAction {
+    ui.label("常用游戏");
+    let previous = *selected;
+    let label = selected
+        .and_then(|index| PRESETS.get(index))
+        .map(|preset| preset.name)
+        .unwrap_or("自定义 / 手动填写");
+    egui::ComboBox::from_id_salt("game_preset")
+        .selected_text(label)
+        .width(ui.available_width().min(380.0))
+        .height(220.0)
+        .wrap_mode(egui::TextWrapMode::Truncate)
+        .show_ui(ui, |ui| {
+            ui.selectable_value(selected, None, "自定义 / 手动填写");
+            for (index, preset) in PRESETS.iter().enumerate() {
+                ui.selectable_value(
+                    selected,
+                    Some(index),
+                    format!("{}\n{}", preset.name, preset.exe),
+                );
+            }
+        });
+    if *selected != previous {
+        if let Some(preset) = selected.and_then(|index| PRESETS.get(index)) {
+            *name = preset.name.to_string();
+            *exe = preset.exe.to_string();
+        }
+    }
+    ui.label(
+        egui::RichText::new(
+            "选择后自动填入名称和进程名，下面仍可修改。不同区服或版本可从运行进程中确认。",
+        )
+        .weak()
+        .small(),
+    );
+    if let Some(preset) = selected.and_then(|index| PRESETS.get(index)) {
+        ui.hyperlink_to("进程名参考", preset.source);
+        if preset.exe == "League of Legends.exe" {
+            ui.label(
+                egui::RichText::new("英雄联盟此项仅识别对局；返回大厅后会进入退出宽限期。")
+                    .weak()
+                    .small(),
+            );
+        }
+    }
+    ui.add_space(4.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.label("名称:");
+        if ui
+            .add(
+                egui::TextEdit::singleline(&mut *name)
+                    .hint_text("游戏显示名称")
+                    .desired_width(ui.available_width().min(240.0)),
+            )
+            .changed()
+        {
+            *selected = None;
+        }
+    });
+    ui.horizontal_wrapped(|ui| {
+        ui.label("进程名:");
+        if ui
+            .add(
+                egui::TextEdit::singleline(&mut *exe)
+                    .hint_text("如 game.exe")
+                    .desired_width(ui.available_width().min(360.0)),
+            )
+            .changed()
+        {
+            *selected = None;
+        }
+    });
+    let mut action = GameFormAction::None;
+    ui.horizontal_wrapped(|ui| {
+        if ui.button("从运行进程选择…").clicked() {
+            action = GameFormAction::PickProcess;
+        }
+        if ui
+            .add_enabled(!exe.trim().is_empty(), egui::Button::new("添加到名单"))
+            .clicked()
+        {
+            action = GameFormAction::Add;
+        }
+    });
+    action
+}
+
+#[cfg(test)]
+mod game_form_tests {
+    use super::{game_entry_form, GameFormAction, PRESETS};
+
+    #[test]
+    fn add_game_form_fits_narrow_content_area_without_native_app() {
+        // 440 px approximates the content left by navigation/window chrome in
+        // the minimum 680x460 window. This only runs egui's in-memory layout.
+        for preset in [None, Some(3), Some(5)] {
+            let context = egui::Context::default();
+            let mut selected = preset;
+            let mut name = preset
+                .map(|index| PRESETS[index].name)
+                .unwrap_or("自定义游戏")
+                .to_owned();
+            let mut exe = preset
+                .map(|index| PRESETS[index].exe)
+                .unwrap_or("custom-game.exe")
+                .to_owned();
+            let before = (name.clone(), exe.clone());
+            let output = context.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(440.0, 430.0),
+                    )),
+                    ..Default::default()
+                },
+                |context| {
+                    egui::CentralPanel::default().show(context, |ui| {
+                        let available = ui.max_rect();
+                        assert_eq!(
+                            game_entry_form(ui, &mut selected, &mut name, &mut exe),
+                            GameFormAction::None
+                        );
+                        assert!(
+                            ui.min_rect().right() <= available.right() + 1.0,
+                            "form overflows horizontally"
+                        );
+                        assert!(
+                            ui.min_rect().bottom() <= available.bottom() + 1.0,
+                            "form overflows vertically"
+                        );
+                    });
+                },
+            );
+            assert!(!output.shapes.is_empty());
+            assert_eq!(
+                (name, exe),
+                before,
+                "rendering must not overwrite custom or edited values"
+            );
+        }
+    }
+}
+
 impl App {
     fn page_games(&mut self, ui: &mut egui::Ui) {
         ui.heading("游戏名单");
-        ui.label("名单内的游戏全部退出后，自动暂停雷神计时（防止忘记暂停浪费时长）。");
+        ui.label("名单内的游戏全部退出后自动暂停雷神计时；也可在策略中启用启动时的空闲检查。");
         ui.add_space(8.0);
 
         // 二期功能：加速方案相关 UI 暂时隐藏（plan_names 保留字段）
@@ -1007,36 +1170,63 @@ impl App {
         ui.add_space(12.0);
         ui.separator();
         ui.strong("添加游戏");
-        ui.horizontal(|ui| {
-            ui.label("名称:");
-            ui.add(egui::TextEdit::singleline(&mut self.new_name).desired_width(120.0));
-            ui.label("进程名:");
-            ui.add(egui::TextEdit::singleline(&mut self.new_exe).desired_width(160.0));
-            // 二期功能：方案选择暂时隐藏
-            if ui.button("从运行进程选择…").clicked() {
+        match game_entry_form(
+            ui,
+            &mut self.new_preset,
+            &mut self.new_name,
+            &mut self.new_exe,
+        ) {
+            GameFormAction::PickProcess => {
                 self.proc_list = crate::monitor::running_process_names();
                 self.proc_list.sort();
                 self.proc_list.dedup();
                 self.show_proc_picker = true;
             }
-            if ui.button("添加").clicked() && !self.new_exe.trim().is_empty() {
+            GameFormAction::Add => {
+                let exe = self.new_exe.trim().to_string();
+                if !crate::config::valid_game_executable(&exe) {
+                    self.status_msg =
+                        "请填写单个游戏进程文件名（如 game.exe），不要填写路径、通配符或启动命令。"
+                            .into();
+                    return;
+                }
                 let name = if self.new_name.trim().is_empty() {
-                    self.new_exe.trim().trim_end_matches(".exe").to_string()
+                    exe[..exe.len() - 4].to_string()
                 } else {
                     self.new_name.trim().to_string()
                 };
-                if let Ok(mut c) = self.config.lock() {
-                    c.games.push(GameEntry {
-                        name,
-                        exe: self.new_exe.trim().to_string(),
-                        plan: self.new_plan.clone(),
-                    });
-                    self.dirty = true;
+                let added = match self.config.lock() {
+                    Ok(mut c) => {
+                        if game_presets::contains_executable(
+                            c.games.iter().map(|game| game.exe.as_str()),
+                            &exe,
+                        ) {
+                            self.status_msg = format!("{exe} 已在名单中，无需重复添加。");
+                            false
+                        } else {
+                            c.games.push(GameEntry {
+                                name,
+                                exe,
+                                plan: self.new_plan.clone(),
+                            });
+                            self.dirty = true;
+                            self.status_msg.clear();
+                            true
+                        }
+                    }
+                    Err(_) => {
+                        self.status_msg = "暂时无法保存游戏名单，请重试。".into();
+                        false
+                    }
+                };
+                if added {
+                    self.new_name.clear();
+                    self.new_exe.clear();
+                    self.new_preset = None;
                 }
-                self.new_name.clear();
-                self.new_exe.clear();
             }
-        });
+            GameFormAction::None => {}
+        }
         if !self.status_msg.is_empty() {
             ui.colored_label(egui::Color32::from_rgb(230, 60, 60), &self.status_msg);
         }
@@ -1044,6 +1234,7 @@ impl App {
 
     fn proc_picker_window(&mut self, ctx: &egui::Context) {
         let mut open = self.show_proc_picker;
+        let mut picked = None;
         egui::Window::new("选择正在运行的进程")
             .open(&mut open)
             .default_size([360.0, 420.0])
@@ -1061,16 +1252,20 @@ impl App {
                             continue;
                         }
                         if ui.button(&p).clicked() {
-                            self.new_exe = p.clone();
-                            if self.new_name.is_empty() {
-                                self.new_name = p.trim_end_matches(".exe").to_string();
-                            }
-                            self.show_proc_picker = false;
+                            picked = Some(p);
                         }
                     }
                 });
             });
         self.show_proc_picker = open;
+        if let Some(process) = picked {
+            self.new_exe = process.clone();
+            self.new_preset = None;
+            if self.new_name.is_empty() {
+                self.new_name = process.trim_end_matches(".exe").to_string();
+            }
+            self.show_proc_picker = false;
+        }
     }
 
     fn page_plans(&mut self, ui: &mut egui::Ui) {
@@ -1577,7 +1772,7 @@ impl App {
                 ui.add_space(8.0);
                 ui.heading(format!("可更新至 v{}", release.version));
                 ui.label("更新会保留配置和当前使用方式：安装版继续使用安装版，绿色版继续免安装。");
-                ui.label("点击后会下载并校验文件，再关闭当前程序完成更新并重新打开。更新期间监控会短暂停止，雷神账户计时保持原状。");
+                    ui.label("点击后会下载并校验文件，再关闭当前程序完成更新并重新打开。监控会短暂停止；更新程序本身不暂停计时，重新打开后按启动暂停设置检查。");
                 ui.add_space(8.0);
                 ui.horizontal_wrapped(|ui| {
                     if ui.add_enabled(!self.update_busy && self.update_kind.is_ok(),
@@ -1608,6 +1803,22 @@ impl App {
             {
                 self.dirty = true;
             }
+            ui.label(
+                egui::RichText::new("控制游戏全部退出后的暂停，以及下方的启动空闲检查。")
+                    .weak()
+                    .small(),
+            );
+            ui.add_space(4.0);
+            if ui
+                .checkbox(
+                    &mut c.strategy.pause_on_startup,
+                    "启动时无游戏运行则暂停计时",
+                )
+                .changed()
+            {
+                self.dirty = true;
+            }
+            ui.label(egui::RichText::new("默认开启，下次启动检查名单中的游戏。总开关开启且名单有效时，无游戏运行便尝试暂停；空名单或检测失败不会当作无游戏。").weak().small());
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 ui.label("进程检测间隔（秒）:");

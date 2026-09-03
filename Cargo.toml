@@ -1,6 +1,6 @@
 [package]
 name = "leigod-guard"
-version = "0.6.1"
+version = "0.7.0"
 edition = "2021"
 description = "Windows 雷神加速器自动暂停计时工具（非官方）"
 license = "MIT"

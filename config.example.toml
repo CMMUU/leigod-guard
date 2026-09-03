@@ -13,8 +13,12 @@ exe = "ExampleGame.exe"
 plan = ""
 
 [strategy]
-# 只控制游戏进程触发的自动暂停。
+# 控制启动检查和正常游戏退出触发的自动暂停。
 enabled = true
+# 对应「启动时无游戏运行则暂停计时」；默认开启，旧配置缺少此字段时也为 true。
+# 启动时名单非空、进程名全部有效且 enabled 为 true，首次成功检查没有名单游戏时立即尝试暂停。
+# 启动时名单为空、任一进程名无效或相关开关关闭会跳过该次启动检查；失败不视为成功。
+pause_on_startup = true
 check_interval_secs = 3
 grace_secs = 90
 # 预留字段，当前暂停策略不使用该值。
