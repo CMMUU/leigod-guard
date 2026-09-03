@@ -1,0 +1,33 @@
+# 雷神守护配置示例，不含个人账户数据。
+# 实际配置：%APPDATA%\leigod-guard\config.toml
+# 建议通过应用界面配置。手工修改前请先完全退出程序。
+
+# 预留加速方案字段：当前版本不提供自动开启加速或恢复计时。
+plans = []
+
+[[games]]
+name = "示例游戏"
+# 填真实游戏进程的文件名（忽略大小写、完整匹配）；不是路径或通配符。
+exe = "ExampleGame.exe"
+# 当前版本保留字段，无需设置加速方案。
+plan = ""
+
+[strategy]
+# 只控制游戏进程触发的自动暂停。
+enabled = true
+check_interval_secs = 3
+grace_secs = 90
+# 预留字段，当前暂停策略不使用该值。
+min_run_secs = 300
+# 请从应用界面设置自启，以便同步注册表项。
+autostart = false
+# 独立于 enabled；需要系统通知、有效 token 和可用网络。
+pause_on_shutdown = true
+
+[account]
+# 账户名称明文存储；请通过应用登录，不要在示例中填入真实凭据。
+username = ""
+# Windows DPAPI 加密的密码 MD5；不要填写密码明文或直接填写 MD5。
+cred_enc = ""
+# Windows DPAPI 加密的 token；不要填写 token 明文。
+token_enc = ""

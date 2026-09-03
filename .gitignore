@@ -1,0 +1,17 @@
+/target/
+/dist/
+*.log
+*.log.*
+config.toml
+captcha-result*
+captcha-test*
+.env
+.env.*
+!.env.example
+*.pdb
+*.exe
+*.dll
+*.zip
+/recon/
+/.idea/
+/.vscode/

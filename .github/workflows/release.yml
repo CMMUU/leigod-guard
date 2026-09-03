@@ -1,0 +1,104 @@
+name: Publish Windows release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag, for example v0.5.0
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_TARGET: x86_64-pc-windows-msvc
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - name: Validate tag format
+        run: |
+          if ($env:RELEASE_TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$') {
+            throw 'Expected a semantic version tag beginning with v.'
+          }
+      - name: Check out the exact release tag
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
+          persist-credentials: false
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --target $env:RUST_TARGET
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustup default stable
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Check package version against tag
+        run: |
+          $metadataText = cargo metadata --locked --no-deps --format-version 1
+          if ($LASTEXITCODE -ne 0) { throw 'Could not read Cargo metadata.' }
+          $metadata = ($metadataText -join "`n") | ConvertFrom-Json
+          $packages = @($metadata.packages | Where-Object { $_.name -eq 'leigod-guard' })
+          if ($packages.Count -ne 1) { throw 'Expected exactly one leigod-guard package.' }
+          $version = $packages[0].version
+          if ($env:RELEASE_TAG -cne "v$version") {
+            throw "Tag $env:RELEASE_TAG does not match Cargo version $version."
+          }
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Fetch locked dependencies
+        run: cargo fetch --locked --target $env:RUST_TARGET
+      - name: Run offline unit tests
+        run: cargo test --locked --offline --target $env:RUST_TARGET
+      - name: Build release executable
+        run: cargo build --release --locked --offline --target $env:RUST_TARGET
+      - name: Package executable and documents
+        run: ./scripts/package.ps1 -Target $env:RUST_TARGET -OutputDirectory dist -SkipBuild
+      - name: Prepare release notes
+        run: |
+          $version = $env:RELEASE_TAG.Substring(1)
+          $changelog = Get-Content -LiteralPath CHANGELOG.md -Raw
+          $pattern = '(?ms)^##\s+\[?v?' + [regex]::Escape($version) + '\]?(?=\s|$)[^\r\n]*\r?\n(.*?)(?=^##\s|\z)'
+          $section = [regex]::Match($changelog, $pattern)
+          if (-not $section.Success) { throw "Missing CHANGELOG entry for $version." }
+          $notes = @"
+          Windows x64 便携版；由 GitHub Actions 在 Windows Server 2022 上构建，目标为 ``$env:RUST_TARGET``。
+
+          已完成本工作流中的代码格式检查、离线单元测试和 release 编译。本工作流不验证真实账户登录、验证码、实际暂停请求、关机行为或图形界面交互。
+
+          请下载 ``leigod-guard-$env:RELEASE_TAG-windows-x64.zip`` 和 ``SHA256SUMS.txt``。这是独立第三方项目，与雷神官方无隶属或背书关系。使用方式、自动暂停的触发条件和限制见包内 README。
+
+          $($section.Groups[1].Value.Trim())
+          "@
+          [System.IO.File]::WriteAllText((Join-Path $PWD 'dist/release-notes.md'), $notes, [System.Text.UTF8Encoding]::new($false))
+      - name: Create release with verified assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $zip = Join-Path $PWD "dist/leigod-guard-$env:RELEASE_TAG-windows-x64.zip"
+          $sums = Join-Path $PWD 'dist/SHA256SUMS.txt'
+          $arguments = @(
+            'release', 'create', $env:RELEASE_TAG, $zip, $sums,
+            '--verify-tag', '--draft', '--title', "Leigod Guard $env:RELEASE_TAG",
+            '--notes-file', 'dist/release-notes.md'
+          )
+          $isPrerelease = $env:RELEASE_TAG -match '^v[0-9]+\.[0-9]+\.[0-9]+-'
+          if ($isPrerelease) { $arguments += '--prerelease' }
+          # An existing release causes this to fail instead of silently replacing assets.
+          gh @arguments
+          if ($LASTEXITCODE -ne 0) { throw 'Release creation failed. Inspect any existing release before retrying.' }
+          gh release edit $env:RELEASE_TAG --draft=false
+          if ($LASTEXITCODE -ne 0) { throw 'Assets uploaded, but publishing failed. The release remains a draft.' }

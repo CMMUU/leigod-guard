@@ -1,0 +1,45 @@
+[package]
+name = "leigod-guard"
+version = "0.5.0"
+edition = "2021"
+description = "Windows 雷神加速器自动暂停计时工具（非官方）"
+license = "MIT"
+repository = "https://github.com/CMMUU/leigod-guard"
+readme = "README.md"
+publish = false
+
+[dependencies]
+# 渲染后端用 wgpu(DirectX) 而非 glow(OpenGL)：部分机器 OpenGL 状态异常时新窗口白屏
+eframe = { version = "0.31", default-features = false, features = [
+    "accesskit",
+    "default_fonts",
+    "persistence",
+    "wgpu",
+] }
+egui = "0.31"
+wry = "0.53"
+tao = "0.34"
+tray-icon = "0.19"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+md-5 = "0.10"
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Shell",
+    "Win32_Security_Cryptography",
+] }
+winreg = "0.52"
+dirs = "5"
+chrono = "0.4"
+base64 = "0.22"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true

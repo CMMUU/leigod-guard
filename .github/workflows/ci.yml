@@ -1,0 +1,44 @@
+name: Windows CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_TARGET: x86_64-pc-windows-msvc
+    steps:
+      - name: Check out source
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --target $env:RUST_TARGET
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustup default stable
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Fetch locked dependencies
+        run: cargo fetch --locked --target $env:RUST_TARGET
+      - name: Run offline unit tests
+        run: cargo test --locked --offline --target $env:RUST_TARGET
+      - name: Build release executable
+        run: cargo build --release --locked --offline --target $env:RUST_TARGET
