@@ -391,14 +391,15 @@ fn tray_event_loop(
                     s.log("托盘指令：立即暂停");
                 }
             } else if id == ids.quit {
-                try_exit(&shared, &config, &update_preparing);
+                dbglog("tray quit -> direct exit");
+                do_exit(&config);
             }
         }
         std::thread::sleep(Duration::from_millis(120));
     }
 }
 
-/// 托盘「退出」：确认对话框；若正在加速，可先自动暂停再退出
+/// 账户页「退出程序」：确认对话框；若正在加速，可先自动暂停再退出
 fn try_exit(
     shared: &Arc<Mutex<Shared>>,
     config: &Arc<Mutex<Config>>,
@@ -413,7 +414,7 @@ fn try_exit(
         .map(|s| s.token.is_some() || s.status.contains("加速中"))
         .unwrap_or(false);
     let choice = msgbox_exit(accelerating);
-    // A tray confirmation can remain open while the UI finishes downloading.
+    // An exit confirmation may remain open while an update is pending.
     if update_preparing.load(Ordering::Acquire) {
         return;
     }
@@ -1481,7 +1482,7 @@ impl App {
                 self.status_msg = "已退出登录".into();
             }
             if ui.button("退出程序").clicked() {
-                // 与托盘「退出」同一逻辑：加速中会先询问是否暂停计时
+                // 账户页保留退出选择；托盘菜单直接退出。
                 try_exit(&self.shared, &self.config, &self.update_preparing);
             }
             ui.label(

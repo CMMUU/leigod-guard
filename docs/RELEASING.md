@@ -11,12 +11,12 @@
 - `CHANGELOG.md` 中相应版本的实际变化与限制。
 - Git 标签、Release 标题、安装程序版本以及 EXE / ZIP 文件名。
 
-`v0.6.0` 的发布资产为：
+`v0.6.1` 的发布资产为：
 
 | 资产 | 用途 |
 | --- | --- |
-| `leigod-guard-v0.6.0-windows-x64-setup.exe` | 推荐下载；Windows x64 安装程序 |
-| `leigod-guard-v0.6.0-windows-x64.zip` | 绿色免安装程序包 |
+| `leigod-guard-v0.6.1-windows-x64-setup.exe` | 推荐下载；Windows x64 安装程序 |
+| `leigod-guard-v0.6.1-windows-x64.zip` | 绿色免安装程序包 |
 | `SHA256SUMS.txt` | 发布文件的 SHA-256 校验值 |
 | GitHub 自动提供的 `Source code` | 对应标签的源码归档，不是可运行程序 |
 
@@ -79,7 +79,7 @@ WebView2 Bootstrapper / Runtime 使用独立的微软许可，不能套用 SDK�
 1. 代码与文档描述相符，版本号正确，仓库与归档均没有私人配置或凭据。
 2. 构建与项目现有自动检查通过。
 3. 使用拟发布 EXE 核对安装路径、快捷方式、应用版本及卸载入口；确认卸载保留用户数据。从便携 ZIP 解压后也检查程序与文档是否齐全。
-4. 在可用的测试环境核对 WebView2 已安装及缺失两条路径；缺失路径还应检查联网补装失败时的提示和重试行为。启动应用后核对主窗口、隐藏到托盘、重新打开和正常退出。
+4. 在可用的测试环境核对 WebView2 已安装及缺失两条路径；缺失路径还应检查联网补装失败时的提示和重试行为。启动应用后核对主窗口、隐藏到托盘、重新打开和正常退出。0.6.1 起，托盘「退出」应保存配置后直接退出，不弹确认或因退出请求暂停；账户页「退出程序」仍保留确认流程。更新准备期间的托盘退出应提示更新进行中。
 5. 在有条件的实际环境中核对登录、验证码、游戏进程匹配、退出宽限期和暂停结果。涉及真实账户计时的检查应明确记录，未完成的部分不得写为通过。
 6. 校验 EXE / ZIP 内容及哈希；Release 说明记录构建目标、验证环境和未验证的关键路径。
 7. 对更新功能，检查默认关闭与旧配置兼容、手动检查和启动检查、版本比较、无新版、网络失败、缺失资产及哈希不匹配等分支；核对安装版和绿色版分别保持发行方式、更新后版本正确且用户配置不变。升级失败或文件被占用时还应检查恢复结果，不能仅凭下载成功认定自动更新通过。
@@ -93,11 +93,11 @@ CI 和发布工作流都会运行 `scripts/test-updater.ps1`。该集成测试�
 先将通过检查的源码和文档提交到仓库，确认提交已经推送。然后为该提交创建带说明的版本标签，例如：
 
 ```powershell
-git tag -a v0.6.0 -m "Release v0.6.0"
-git push origin v0.6.0
+git tag -a v0.6.1 -m "Release v0.6.1"
+git push origin v0.6.1
 ```
 
-仓库的 [CI 工作流](https://github.com/CMMUU/leigod-guard/blob/v0.6.0/.github/workflows/ci.yml) 执行自动检查，[发布工作流](https://github.com/CMMUU/leigod-guard/blob/v0.6.0/.github/workflows/release.yml) 根据推送的 `v*` 标签构建安装版、绿色免安装版和校验文件并发布，也可通过 `workflow_dispatch` 指定已有标签。已有同名 Release 时，工作流会拒绝覆盖。
+仓库的 [CI 工作流](https://github.com/CMMUU/leigod-guard/blob/v0.6.1/.github/workflows/ci.yml) 执行自动检查，[发布工作流](https://github.com/CMMUU/leigod-guard/blob/v0.6.1/.github/workflows/release.yml) 根据推送的 `v*` 标签构建安装版、绿色免安装版和校验文件并发布，也可通过 `workflow_dispatch` 指定已有标签。已有同名 Release 时，工作流会拒绝覆盖。
 
 维护者应等待 GitHub Actions 的实际结果，确认 Release 已出现，并确认用户能够下载资产；只推送标签、只启动工作流或只上传 Actions artifact 不等于已经完成公开发版。
 
