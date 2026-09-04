@@ -1077,8 +1077,29 @@ fn guardian_home(ui: &mut egui::Ui, startup: Option<(StartupPauseStatus, bool)>)
                     .clicked();
                 ui.add_space(4.0);
                 ui.label(egui::RichText::new("检测到名单中的游戏后，结束启动检查，转入游戏退出监控。").weak().small());
-                ui.label(egui::RichText::new("刚手动开启加速？请在倒计时结束前延后，工具无法识别雷神的加速按钮。其他任务也需要持续加速时，可在策略中关闭启动检查。").weak().small());
+                ui.label(egui::RichText::new("刚手动开启加速？请在倒计时结束前延后，工具无法识别雷神的加速按钮。其他任务需要持续加速时，可在策略中关闭自动暂停总开关；关机暂停另有独立开关。").weak().small());
             }
+        });
+    ui.add_space(10.0);
+    egui::Frame::group(ui.style())
+        .inner_margin(12)
+        .corner_radius(10)
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new("自动暂停规则").strong());
+            ui.label("启动检查：连续180秒确认没有名单中的游戏运行，才尝试暂停；检测到游戏后结束本次启动检查。");
+            ui.label("游戏退出：先检测到名单游戏运行，再全部退出并连续等待90秒后尝试暂停；期间重开游戏会取消倒计时。");
+            ui.label("准备游戏：只延后尚未完成的启动检查，至少等到最后一次点击满10分钟；重复点击不累加。");
+            ui.label(
+                egui::RichText::new("180秒和90秒为默认值，可在“策略”中分别调整。")
+                    .weak()
+                    .small(),
+            );
+            ui.collapsing("生效条件、跳过与失败处理", |ui| {
+                ui.label("生效前提：自动暂停总开关开启，名单非空且所有进程名有效；启动检查还需开启“启动时无游戏运行则暂停计时”。");
+                ui.label("启动时不满足条件会跳过；检查完成、检测到游戏或中途关闭后，本次运行不再补做。之后补齐名单或重新开启开关，要下次启动才做启动检查。");
+                ui.label("检测失败不等于没有游戏，也不计入连续等待；恢复检测后重新累计无游戏时间。一轮自动暂停请求失败后冷却60秒，再复核条件重试。");
+                ui.label("关机/注销暂停由策略页的独立开关控制：收到系统通知后尝试暂停，断电或强制结束无法保证。");
+            });
         });
     defer
 }
@@ -2105,7 +2126,7 @@ impl App {
             }
             ui.label(
                 egui::RichText::new(
-                    "开启后，Windows 关机或注销时会自动暂停雷神计时，避免忘记暂停白白扣时",
+                    "开启后，收到 Windows 关机或注销通知时尝试暂停计时；断电或强制结束无法保证。",
                 )
                 .weak()
                 .small(),
