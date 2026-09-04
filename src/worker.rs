@@ -457,11 +457,11 @@ pub fn run(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
                     Ok(msg) => {
                         pause_watch.pause_succeeded();
                         publish_startup_status(&shared, &pause_watch, Instant::now());
-                        log(&shared, &format!("手动暂停成功: {msg}"));
+                        log(&shared, &format!("手动暂停请求返回成功: {msg}。最终以雷神官方微信小程序登录同一账号、下拉刷新后的计时状态为准。"));
                         if let Ok(mut s) = shared.lock() {
                             s.manual_pause_result = Some(true);
                         }
-                        set_status(&shared, "已暂停计时");
+                        set_status(&shared, "暂停请求返回成功，请在小程序刷新核对计时状态");
                         refresh_account_info(&shared, &cfg);
                     }
                     Err(e) => {
@@ -470,7 +470,7 @@ pub fn run(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
                         }
                         alert(
                             &shared,
-                            &format!("暂停失败：{e}。时长仍在消耗，请打开雷神客户端手动暂停！"),
+                            &format!("暂停未确认：{e}。请打开雷神官方微信小程序，登录同一账号并下拉刷新，核对计时是否已暂停；仍在计时请手动暂停。"),
                         );
                     }
                 },
@@ -563,17 +563,17 @@ pub fn run(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
                         pause_watch.pause_succeeded();
                         publish_startup_status(&shared, &pause_watch, Instant::now());
                         let reason = if startup {
-                            "启动检查确认无名单游戏运行，已补暂停计时"
+                            "启动检查确认无名单游戏运行，暂停请求返回成功"
                         } else {
-                            "宽限期结束，已自动暂停计时"
+                            "宽限期结束，自动暂停请求返回成功"
                         };
-                        log(&shared, &format!("{reason}: {msg}"));
+                        log(&shared, &format!("{reason}: {msg}。最终以雷神官方微信小程序登录同一账号、下拉刷新后的计时状态为准。"));
                         crate::ui::dbglog(&format!("[worker] auto-pause ok: {msg}"));
-                        set_status(&shared, "已暂停计时");
+                        set_status(&shared, "暂停请求返回成功，请在小程序刷新核对计时状态");
                         refresh_account_info(&shared, &cfg);
                     }
                     Err(CheckedCallError::Request(e)) => {
-                        alert(&shared, &format!("自动暂停未确认：{e}。请检查网络或登录，并在雷神客户端确认暂停状态；工具稍后重试。"));
+                        alert(&shared, &format!("自动暂停未确认：{e}。请检查网络或登录；打开雷神官方微信小程序，登录同一账号并下拉刷新，核对计时状态。工具稍后重试。"));
                         pause_watch.pause_failed(Instant::now());
                         set_status(&shared, "暂停失败，等待重试");
                     }

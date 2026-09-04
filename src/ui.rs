@@ -1045,7 +1045,7 @@ fn guardian_home(ui: &mut egui::Ui, startup: Option<(StartupPauseStatus, bool)>)
             ui.label("异常关机后，重启只是办公或处理其他任务？启动检查会先等待，再确认名单游戏是否运行，帮你减少未暂停造成的时长消耗。");
             ui.add_space(6.0);
             ui.label(
-                egui::RichText::new("等待期间仍可能计时，已消耗的时长无法追回。")
+                egui::RichText::new("等待期间仍可能计时，已消耗的时长无法追回。\n确认暂停：打开雷神官方微信小程序，登录同一账号，下拉刷新后核对计时状态。")
                     .weak()
                     .small(),
             );
@@ -1867,7 +1867,9 @@ impl App {
                 if let Ok(mut s) = self.shared.lock() {
                     s.manual_cmd = Some(ManualCmd::Pause);
                 }
-                self.status_msg = "暂停指令已发送，执行结果见顶部状态栏与日志".into();
+                self.status_msg =
+                    "暂停指令已发送；成功提示仅为请求反馈，请在雷神官方微信小程序刷新核对计时状态"
+                        .into();
             }
             // 二期功能：手动恢复入口暂时隐藏（代码保留，见 worker ManualCmd::Resume）
             if ui.button("刷新账户状态").clicked() {
@@ -1935,7 +1937,7 @@ impl App {
                 ("⏱ 计时状态：计时中", egui::Color32::from_rgb(230, 160, 40))
             };
             ui.colored_label(color, txt);
-            ui.label("账户响应中的个人资料和凭据不在此展示。");
+            ui.label("成功提示仅为请求反馈，最终以小程序刷新后的计时状态为准。\n核对：雷神官方微信小程序 → 登录同一账号 → 下拉刷新。\n暂停计时不代表已停止加速。账户资料和凭据不在此展示。");
         }
     }
 
