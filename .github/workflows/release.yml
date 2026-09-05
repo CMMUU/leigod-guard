@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing stable release tag, for example v0.8.1
+        description: Existing stable release tag, for example v0.8.2
         required: true
         type: string
 
@@ -75,6 +75,8 @@ jobs:
           }
       - name: Check formatting
         run: cargo fmt --all -- --check
+      - name: Test Gitee release synchronizer offline
+        run: python -m unittest discover -s scripts -p test_sync_gitee.py
       - name: Fetch locked dependencies
         run: cargo fetch --locked --target $env:RUST_TARGET
       - name: Run offline unit tests
@@ -128,7 +130,9 @@ jobs:
 
           需要绿色免安装版时，下载 ``leigod-guard-$env:RELEASE_TAG-windows-x64.zip``，完整解压后打开 ``leigod-guard.exe``。每次发版同时提供安装版和绿色版；``SHA256SUMS.txt`` 包含两个包的 SHA-256 校验值。程序尚未代码签名，Windows 可能提示未知发布者。
 
-          在“关于与更新”中可手动“检查更新”，也可选择开启“启动时自动检查更新”（默认关闭）。发现新版本后点击“下载并更新”，程序会校验下载文件、保留配置、完成更新并重新打开，安装版和绿色版各自保持原来的使用方式。v0.5.x 用户首次升级到本版需手动下载安装或解压新包。
+          在“关于与更新”中选择 GitHub 或 Gitee（国内），然后手动“检查更新”，也可选择开启“启动时自动检查更新”（默认关闭）。Gitee 的版本检查、校验文件和程序包均走 Gitee，无需 GitHub 连接或 Gitee 账号。发现新版本后点击“下载并更新”，程序会校验文件、保留配置、完成更新并重新打开，安装版和绿色版各自保持原来的使用方式。0.8.1 及更早版本没有 Gitee 选项；若无法连接 GitHub，先从 Gitee 手动升级一次。v0.5.x 用户首次升级到本版也需手动下载安装或解压新包。
+
+          GitHub 为主发布源，配置发布凭据后由自动同步任务把同一份说明和成品复制到 [Gitee 发布页](https://gitee.com/cmmuu/leigod-guard/releases)。同步完成前或失败时，两个来源的最新版本可能暂时不同；Gitee 附件完整且校验通过后才转为正式版。维护者无需再次构建或逐次手动发布，配置及失败重跑方式见 ``docs/RELEASING.md``。
 
           本版启动检查默认等待 3 分钟：自动暂停开启、名单非空且全部有效，连续等待结束仍无名单游戏时，才尝试暂停雷神计时。准备开玩时，可在首页或托盘延后 10 分钟；检测到游戏就转入正常退出监控（默认 90 秒宽限期）。已结束的启动检查不会因之后手动开启加速而重启，程序不能识别雷神加速按钮。旧配置缺少新等待字段时默认 180 秒，可在“策略”页调整或关闭启动检查；更新后重启也遵循该策略。进程或网络失败不视为暂停成功，已经消耗的时长无法追回。
 

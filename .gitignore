@@ -16,3 +16,4 @@ captcha-test*
 /recon/
 /.idea/
 /.vscode/
+__pycache__/

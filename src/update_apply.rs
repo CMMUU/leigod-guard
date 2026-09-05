@@ -24,7 +24,7 @@ const UNINSTALL_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstal
 const MAX_ARCHIVE: u64 = 512 * 1024 * 1024;
 const MAX_UNPACKED: u64 = 1024 * 1024 * 1024;
 const MAX_FILES: usize = 2048;
-const MANUAL_URL: &str = "https://github.com/CMMUU/leigod-guard/releases/latest";
+const MANUAL_URL: &str = "Gitee：https://gitee.com/cmmuu/leigod-guard/releases\nGitHub：https://github.com/CMMUU/leigod-guard/releases/latest";
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

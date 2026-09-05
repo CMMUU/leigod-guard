@@ -40,6 +40,9 @@ block_gamepp_injection = false
 # 默认不在启动时联网检查更新；可在「关于与更新」页开启。
 # 手动「检查更新」始终可用；只有点击「下载并更新」才会下载并安装。
 check_on_startup = false
+# github 或 gitee；检查版本、下载成品和校验文件均使用同一来源。
+# 国内网络可改为 gitee，或在「关于与更新」中切换；旧配置默认 github。
+source = "github"
 
 [account]
 # 账户名称明文存储；请通过应用登录，不要在示例中填入真实凭据。

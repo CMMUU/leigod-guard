@@ -53,6 +53,8 @@ jobs:
             windows-msvc-${{ steps.rust.outputs.compiler }}-
       - name: Check formatting
         run: cargo fmt --all -- --check
+      - name: Test Gitee release synchronizer offline
+        run: python -m unittest discover -s scripts -p test_sync_gitee.py
       - name: Fetch locked dependencies
         run: cargo fetch --locked --target $env:RUST_TARGET
       - name: Run offline unit tests

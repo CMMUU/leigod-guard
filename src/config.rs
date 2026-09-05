@@ -111,6 +111,8 @@ pub struct Account {
 pub struct Updates {
     /// 仅检查公开版本信息；下载安装仍需用户点击。
     pub check_on_startup: bool,
+    /// 检查和下载使用同一来源；旧配置保持 GitHub。
+    pub source: crate::updater::UpdateSource,
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
@@ -133,6 +135,7 @@ mod tests {
     fn older_config_does_not_enable_update_requests() {
         let cfg: Config = toml::from_str("games = []\nplans = []\n").unwrap();
         assert!(!cfg.updates.check_on_startup);
+        assert_eq!(cfg.updates.source, crate::updater::UpdateSource::GitHub);
         assert!(cfg.strategy.enabled);
     }
 
@@ -140,9 +143,15 @@ mod tests {
     fn update_preference_survives_serialization() {
         let mut cfg = Config::default();
         cfg.updates.check_on_startup = true;
+        cfg.updates.source = crate::updater::UpdateSource::Gitee;
         let text = toml::to_string(&cfg).unwrap();
         let restored: Config = toml::from_str(&text).unwrap();
         assert!(restored.updates.check_on_startup);
+        assert_eq!(restored.updates.source, crate::updater::UpdateSource::Gitee);
+        let legacy: Config =
+            toml::from_str("games = []\nplans = []\n[updates]\ncheck_on_startup = true\n").unwrap();
+        assert!(legacy.updates.check_on_startup);
+        assert_eq!(legacy.updates.source, crate::updater::UpdateSource::GitHub);
     }
 
     #[test]

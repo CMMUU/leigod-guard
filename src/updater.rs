@@ -1,4 +1,4 @@
-//! Anonymous, bounded GitHub release checks and verified downloads.
+//! Anonymous, bounded GitHub/Gitee release checks and verified downloads.
 //!
 //! This module never reads account configuration or executes an update. The UI
 //! decides when to call it; the separate helper applies a verified package only
@@ -19,14 +19,45 @@ use windows::core::PCWSTR;
 use windows::Win32::Storage::FileSystem::MoveFileW;
 
 pub const RELEASES_PAGE: &str = "https://github.com/CMMUU/leigod-guard/releases/latest";
+pub const GITEE_RELEASES_PAGE: &str = "https://gitee.com/cmmuu/leigod-guard/releases";
 const LATEST_API: &str = "https://api.github.com/repos/CMMUU/leigod-guard/releases/latest";
 const ASSET_API_PREFIX: &str = "https://api.github.com/repos/CMMUU/leigod-guard/releases/assets/";
 const REPOSITORY: &str = "https://github.com/CMMUU/leigod-guard";
+const GITEE_REPOSITORY: &str = "https://gitee.com/cmmuu/leigod-guard";
+const GITEE_API: &str = "https://gitee.com/api/v5/repos/cmmuu/leigod-guard/releases";
+// Gitee's /latest means last updated, so editing an old release can move it
+// ahead of a newer one. Compare stable versions in the latest 100 releases.
+const GITEE_RELEASES_API: &str =
+    "https://gitee.com/api/v5/repos/cmmuu/leigod-guard/releases?direction=desc&per_page=100&page=1";
 const MAX_METADATA_BYTES: u64 = 1024 * 1024;
 const MAX_CHECKSUM_BYTES: u64 = 64 * 1024;
 const MAX_PACKAGE_BYTES: u64 = 384 * 1024 * 1024;
 const METADATA_TIMEOUT: Duration = Duration::from_secs(30);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600);
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateSource {
+    #[default]
+    GitHub,
+    Gitee,
+}
+
+impl UpdateSource {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::GitHub => "GitHub",
+            Self::Gitee => "Gitee",
+        }
+    }
+
+    pub fn releases_page(self) -> &'static str {
+        match self {
+            Self::GitHub => RELEASES_PAGE,
+            Self::Gitee => GITEE_RELEASES_PAGE,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub enum PackageKind {
@@ -36,10 +67,12 @@ pub enum PackageKind {
 
 #[derive(Clone, Debug)]
 pub struct ReleaseInfo {
+    pub source: UpdateSource,
     pub version: String,
     pub tag: String,
     pub notes: String,
     pub page_url: String,
+    release_id: u64,
     installer: Asset,
     portable: Asset,
     checksums: Asset,
@@ -83,12 +116,44 @@ struct ApiRelease {
     assets: Vec<Asset>,
 }
 
+#[derive(Clone, Deserialize)]
+struct GiteeLink {
+    name: String,
+    browser_download_url: String,
+}
+
+#[derive(Deserialize)]
+struct GiteeRelease {
+    id: u64,
+    tag_name: String,
+    prerelease: bool,
+    #[serde(default)]
+    draft: bool,
+    #[serde(default)]
+    body: Option<String>,
+    assets: Vec<GiteeLink>,
+}
+
+#[derive(Deserialize)]
+struct GiteeAttachment {
+    id: u64,
+    name: String,
+    size: u64,
+    browser_download_url: String,
+}
+
 /// Checks the public repository without credentials. `None` includes equal,
 /// older, draft and prerelease versions; malformed metadata is an error.
-pub fn check_latest(current_version: &str) -> Result<Option<ReleaseInfo>, String> {
+pub fn check_latest(
+    current_version: &str,
+    source: UpdateSource,
+) -> Result<Option<ReleaseInfo>, String> {
     (|| {
         parse_version(current_version)?;
-        let response = client()?
+        if source == UpdateSource::Gitee {
+            return check_gitee(current_version);
+        }
+        let response = client(source)?
             .get(LATEST_API)
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28")
@@ -102,7 +167,158 @@ pub fn check_latest(current_version: &str) -> Result<Option<ReleaseInfo>, String
         let bytes = read_response(response, MAX_METADATA_BYTES, None)?;
         release_from_json(&bytes, current_version)
     })()
-    .map_err(with_manual_fallback)
+    .map_err(|message| with_manual_fallback(message, source))
+}
+
+fn check_gitee(current_version: &str) -> Result<Option<ReleaseInfo>, String> {
+    let client = client(UpdateSource::Gitee)?;
+    let response = client
+        .get(GITEE_RELEASES_API)
+        .send()
+        .map_err(network_error)?;
+    let bytes = read_response(response, MAX_METADATA_BYTES, None)?;
+    let Some(release) = latest_gitee_release(&bytes, current_version)? else {
+        return Ok(None);
+    };
+    if release.id == 0 {
+        return Err("Gitee 发布版本编号异常，已停止更新。".into());
+    }
+    // AttachFile supplies the exact byte size and ID missing from Release.assets.
+    // The endpoint is bound to the selected release; no GitHub request is needed.
+    let response = client
+        .get(format!(
+            "{GITEE_API}/{}/attach_files?per_page=100",
+            release.id
+        ))
+        .send()
+        .map_err(network_error)?;
+    let bytes = read_response(response, MAX_METADATA_BYTES, None)?;
+    gitee_release_from_json(release, &bytes).map(Some)
+}
+
+fn latest_gitee_release(
+    bytes: &[u8],
+    current_version: &str,
+) -> Result<Option<GiteeRelease>, String> {
+    if bytes.len() as u64 > MAX_METADATA_BYTES {
+        return Err("Gitee 更新信息过大，已停止读取。".into());
+    }
+    let current = parse_version(current_version)?;
+    let releases: Vec<GiteeRelease> = serde_json::from_slice(bytes)
+        .map_err(|_| "Gitee 返回的版本信息格式异常，请稍后重试。".to_string())?;
+    if releases.len() > 100 {
+        return Err("Gitee 发布列表数量异常，已停止更新。".into());
+    }
+    let mut latest = None;
+    let mut versions = HashSet::new();
+    for release in releases {
+        if release.draft || release.prerelease {
+            continue;
+        }
+        let Some(version) = release.tag_name.strip_prefix('v') else {
+            continue;
+        };
+        let Ok(version) = parse_version(version) else {
+            continue;
+        };
+        if !versions.insert(version) {
+            return Err("Gitee 发布版本号重复，已停止更新。".into());
+        }
+        if version > current && latest.as_ref().is_none_or(|(best, _)| version > *best) {
+            latest = Some((version, release));
+        }
+    }
+    Ok(latest.map(|(_, release)| release))
+}
+
+fn gitee_release_from_json(release: GiteeRelease, bytes: &[u8]) -> Result<ReleaseInfo, String> {
+    if bytes.len() as u64 > MAX_METADATA_BYTES || release.id == 0 {
+        return Err("Gitee 附件信息异常，已停止更新。".into());
+    }
+    let version = release
+        .tag_name
+        .strip_prefix('v')
+        .ok_or("Gitee 版本号异常。")?;
+    parse_version(version)?;
+    let attachments: Vec<GiteeAttachment> = serde_json::from_slice(bytes)
+        .map_err(|_| "Gitee 附件列表格式异常，请稍后重试。".to_string())?;
+    if attachments.len() > 100 {
+        return Err("Gitee 附件数量异常，已停止更新。".into());
+    }
+    let assets: Vec<Asset> = attachments
+        .into_iter()
+        .map(|attachment| Asset {
+            id: attachment.id,
+            url: gitee_asset_url(release.id, attachment.id),
+            name: attachment.name,
+            browser_download_url: attachment.browser_download_url,
+            size: attachment.size,
+            state: "uploaded".into(),
+            digest: None,
+        })
+        .collect();
+    let get_asset = |name: &str, limit| -> Result<Asset, String> {
+        let mut links = release.assets.iter().filter(|link| link.name == name);
+        let link = links
+            .next()
+            .ok_or("Gitee 新版本的安装版、绿色版或校验文件尚未完整发布，请稍后重试。")?;
+        let mut matching = assets.iter().filter(|asset| asset.name == name);
+        let asset = matching
+            .next()
+            .ok_or("Gitee 新版本附件尚未完整上传，请稍后重试。")?;
+        if links.next().is_some()
+            || matching.next().is_some()
+            || link.browser_download_url != asset.browser_download_url
+        {
+            return Err("Gitee 发布附件重复或信息不一致，已停止更新。".into());
+        }
+        validate_source_asset(
+            asset,
+            UpdateSource::Gitee,
+            release.id,
+            &release.tag_name,
+            name,
+            limit,
+        )?;
+        Ok(asset.clone())
+    };
+    let installer = get_asset(
+        &package_name(&release.tag_name, PackageKind::Installer),
+        MAX_PACKAGE_BYTES,
+    )?;
+    let portable = get_asset(
+        &package_name(&release.tag_name, PackageKind::Portable),
+        MAX_PACKAGE_BYTES,
+    )?;
+    let checksums = get_asset("SHA256SUMS.txt", MAX_CHECKSUM_BYTES)?;
+    if [installer.id, portable.id, checksums.id]
+        .into_iter()
+        .collect::<HashSet<_>>()
+        .len()
+        != 3
+    {
+        return Err("Gitee 附件编号重复，已停止更新。".into());
+    }
+    Ok(ReleaseInfo {
+        source: UpdateSource::Gitee,
+        version: version.into(),
+        page_url: format!("{GITEE_REPOSITORY}/releases/tag/{}", release.tag_name),
+        tag: release.tag_name,
+        release_id: release.id,
+        notes: release
+            .body
+            .unwrap_or_default()
+            .chars()
+            .take(24_000)
+            .collect(),
+        installer,
+        portable,
+        checksums,
+    })
+}
+
+fn gitee_asset_url(release_id: u64, asset_id: u64) -> String {
+    format!("{GITEE_API}/{release_id}/attach_files/{asset_id}/download")
 }
 
 /// Downloads into an existing, unique directory created by the caller. Existing
@@ -113,7 +329,8 @@ pub fn download_update(
     staging_dir: &Path,
     progress: &dyn Fn(DownloadProgress),
 ) -> Result<DownloadedUpdate, String> {
-    download_inner(release, kind, staging_dir, progress).map_err(with_manual_fallback)
+    download_inner(release, kind, staging_dir, progress)
+        .map_err(|message| with_manual_fallback(message, release.source))
 }
 
 fn download_inner(
@@ -132,14 +349,18 @@ fn download_inner(
         PackageKind::Installer => &release.installer,
         PackageKind::Portable => &release.portable,
     };
-    validate_asset(
+    validate_source_asset(
         asset,
+        release.source,
+        release.release_id,
         &release.tag,
         &package_name(&release.tag, kind),
         MAX_PACKAGE_BYTES,
     )?;
-    validate_asset(
+    validate_source_asset(
         &release.checksums,
+        release.source,
+        release.release_id,
         &release.tag,
         "SHA256SUMS.txt",
         MAX_CHECKSUM_BYTES,
@@ -161,8 +382,13 @@ fn download_inner(
         return Err("更新临时目录中已有同名文件，请重新尝试更新。".into());
     }
 
-    let client = client()?;
-    let checksum_response = asset_response(&client, &release.checksums, METADATA_TIMEOUT)?;
+    let client = client(release.source)?;
+    let checksum_response = asset_response(
+        &client,
+        &release.checksums,
+        release.source,
+        METADATA_TIMEOUT,
+    )?;
     let checksum_bytes = read_response(
         checksum_response,
         MAX_CHECKSUM_BYTES,
@@ -177,7 +403,7 @@ fn download_inner(
         verify_hash(&api_hash, &expected_hash)?;
     }
 
-    let mut response = asset_response(&client, asset, DOWNLOAD_TIMEOUT)?;
+    let mut response = asset_response(&client, asset, release.source, DOWNLOAD_TIMEOUT)?;
     check_response(&response, MAX_PACKAGE_BYTES, Some(asset.size))?;
     let mut file = OpenOptions::new()
         .write(true)
@@ -275,17 +501,17 @@ fn rename_new(from: &Path, to: &Path) -> std::io::Result<()> {
         .map_err(|_| std::io::Error::last_os_error())
 }
 
-fn client() -> Result<Client, String> {
+fn client(source: UpdateSource) -> Result<Client, String> {
     Client::builder()
         .user_agent(concat!("LeigodGuard/", env!("CARGO_PKG_VERSION")))
         .https_only(true)
         .connect_timeout(Duration::from_secs(15))
         .timeout(METADATA_TIMEOUT)
-        .redirect(Policy::custom(|attempt| {
+        .redirect(Policy::custom(move |attempt| {
             if attempt.previous().len() >= 5 {
                 return attempt.error("too many update redirects");
             }
-            if trusted_redirect(attempt.url()) {
+            if trusted_source_redirect(source, attempt.url()) {
                 attempt.follow()
             } else {
                 attempt.error("untrusted update redirect")
@@ -295,7 +521,23 @@ fn client() -> Result<Client, String> {
         .map_err(|_| "无法初始化安全的更新连接，请稍后重试。".into())
 }
 
-fn asset_response(client: &Client, asset: &Asset, timeout: Duration) -> Result<Response, String> {
+fn asset_response(
+    client: &Client,
+    asset: &Asset,
+    source: UpdateSource,
+    timeout: Duration,
+) -> Result<Response, String> {
+    if source == UpdateSource::Gitee {
+        let url = Url::parse(&asset.url).map_err(|_| "Gitee 附件地址异常。")?;
+        if !trusted_source_redirect(source, &url) {
+            return Err("Gitee 附件地址与本项目不符，已停止更新。".into());
+        }
+        return client
+            .get(url)
+            .timeout(timeout)
+            .send()
+            .map_err(network_error);
+    }
     if asset.id == 0 || asset.url != format!("{ASSET_API_PREFIX}{}", asset.id) {
         return Err("更新文件的 GitHub API 地址或编号不符，已停止自动更新。".into());
     }
@@ -315,26 +557,30 @@ fn asset_response(client: &Client, asset: &Asset, timeout: Duration) -> Result<R
 
 fn network_error(error: reqwest::Error) -> String {
     if error.is_timeout() {
-        "连接 GitHub 超时，请检查网络后重试。".into()
+        "连接更新源超时，请检查网络或切换更新来源后重试。".into()
     } else if error.is_redirect() {
         "更新下载地址发生了不受信任或过多的跳转，已停止连接。".into()
     } else {
-        "无法安全连接 GitHub，请检查网络、代理设置或系统时间后重试。".into()
+        "无法安全连接更新源，请检查网络、系统时间或切换更新来源后重试。".into()
     }
 }
 
-fn with_manual_fallback(message: String) -> String {
-    format!("{message}\n也可前往发布页手动更新：{RELEASES_PAGE}")
+fn with_manual_fallback(message: String, source: UpdateSource) -> String {
+    format!(
+        "{}：{message}\n也可前往发布页手动更新：{}",
+        source.label(),
+        source.releases_page()
+    )
 }
 
 fn check_response(response: &Response, limit: u64, expected: Option<u64>) -> Result<(), String> {
     match response.status() {
         StatusCode::OK => {}
         StatusCode::FORBIDDEN | StatusCode::TOO_MANY_REQUESTS => {
-            return Err("GitHub 暂时限制了请求，请稍后重试。".into());
+            return Err("更新源暂时限制了请求，请稍后重试或切换来源。".into());
         }
         StatusCode::NOT_FOUND => return Err("该版本的更新文件暂不可用，请稍后重试。".into()),
-        _ => return Err("GitHub 未能提供完整的更新数据，请稍后重试。".into()),
+        _ => return Err("更新源未能提供完整的数据，请稍后重试。".into()),
     }
     if let Some(length) = response.content_length() {
         if length > limit || expected.is_some_and(|expected| length != expected) {
@@ -413,6 +659,8 @@ fn release_from_json(bytes: &[u8], current_version: &str) -> Result<Option<Relea
         .take(24_000)
         .collect();
     Ok(Some(ReleaseInfo {
+        source: UpdateSource::GitHub,
+        release_id: 0,
         version: version.to_string(),
         tag: release.tag_name,
         notes,
@@ -477,6 +725,74 @@ fn validate_asset(asset: &Asset, tag: &str, name: &str, limit: u64) -> Result<()
         parse_api_digest(digest)?;
     }
     Ok(())
+}
+
+fn validate_source_asset(
+    asset: &Asset,
+    source: UpdateSource,
+    release_id: u64,
+    tag: &str,
+    name: &str,
+    limit: u64,
+) -> Result<(), String> {
+    if source == UpdateSource::GitHub {
+        return validate_asset(asset, tag, name, limit);
+    }
+    let expected_url = format!("{GITEE_REPOSITORY}/releases/download/{tag}/{name}");
+    if asset.name != name
+        || asset.browser_download_url != expected_url
+        || release_id == 0
+        || asset.id == 0
+        || asset.url != gitee_asset_url(release_id, asset.id)
+    {
+        return Err("Gitee 更新文件地址或编号与本项目不符，已停止更新。".into());
+    }
+    if asset.state != "uploaded" || asset.size == 0 || asset.size > limit {
+        return Err("Gitee 更新文件大小异常或尚未上传完成。".into());
+    }
+    Ok(())
+}
+
+fn trusted_source_redirect(source: UpdateSource, url: &Url) -> bool {
+    if source == UpdateSource::GitHub {
+        return trusted_redirect(url);
+    }
+    if url.scheme() != "https"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port_or_known_default() != Some(443)
+        || url.fragment().is_some()
+    {
+        return false;
+    }
+    match url.host_str() {
+        Some("foruda.gitee.com") => url.path().starts_with("/attach_file/"),
+        Some("gitee.com") => {
+            if url.as_str() == GITEE_RELEASES_API {
+                return true;
+            }
+            let prefix = "/api/v5/repos/cmmuu/leigod-guard/releases/";
+            let Some(path) = url.path().strip_prefix(prefix) else {
+                return false;
+            };
+            let parts: Vec<_> = path.split('/').collect();
+            let canonical_id = |id: &str| {
+                id.parse::<u64>()
+                    .ok()
+                    .is_some_and(|n| n > 0 && n.to_string() == id)
+            };
+            match parts.as_slice() {
+                [release_id, "attach_files"] => {
+                    canonical_id(release_id) && matches!(url.query(), None | Some("per_page=100"))
+                }
+                [release_id, "attach_files", asset_id, "download"] => {
+                    canonical_id(release_id) && canonical_id(asset_id) && url.query().is_none()
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
 }
 
 fn trusted_redirect(url: &Url) -> bool {
@@ -830,18 +1146,183 @@ mod tests {
         assert!(parse_fixture(&fixture, "0.6.0").unwrap().is_none());
     }
 
+    fn gitee_fixture(tag: &str) -> (Value, Value) {
+        let names = [
+            package_name(tag, PackageKind::Installer),
+            package_name(tag, PackageKind::Portable),
+            "SHA256SUMS.txt".into(),
+        ];
+        let attachments: Vec<Value> = names.into_iter().enumerate().map(|(index, name)| json!({
+            "id": index + 10, "name": name, "size": 100,
+            "browser_download_url": format!("{GITEE_REPOSITORY}/releases/download/{tag}/{name}")
+        })).collect();
+        (
+            json!({"id": 123, "tag_name": tag, "prerelease": false, "body": "notes", "assets": attachments}),
+            json!(attachments),
+        )
+    }
+
+    fn parse_gitee_fixture(release: Value, attachments: Value) -> Result<ReleaseInfo, String> {
+        gitee_release_from_json(
+            serde_json::from_value(release).unwrap(),
+            &serde_json::to_vec(&attachments).unwrap(),
+        )
+    }
+
+    #[test]
+    fn gitee_compares_versions_instead_of_edit_order_and_never_downgrades() {
+        let (old, _) = gitee_fixture("v0.8.1");
+        let (new, _) = gitee_fixture("v0.10.0");
+        let (mut preview, _) = gitee_fixture("v2.0.0");
+        preview["prerelease"] = json!(true);
+        let bytes = serde_json::to_vec(&json!([old, preview, new])).unwrap();
+        assert_eq!(
+            latest_gitee_release(&bytes, "0.8.1")
+                .unwrap()
+                .unwrap()
+                .tag_name,
+            "v0.10.0"
+        );
+        assert!(latest_gitee_release(&bytes, "0.10.0").unwrap().is_none());
+        assert!(latest_gitee_release(&bytes, "1.0.0").unwrap().is_none());
+        let duplicate = serde_json::to_vec(&json!([new, new])).unwrap();
+        assert!(latest_gitee_release(&duplicate, "0.8.1").is_err());
+    }
+
+    #[test]
+    fn gitee_requires_complete_matching_attachments_and_binds_release_ids() {
+        let (release, attachments) = gitee_fixture("v0.8.2");
+        let parsed = parse_gitee_fixture(release.clone(), attachments.clone()).unwrap();
+        assert_eq!(parsed.source, UpdateSource::Gitee);
+        assert_eq!(parsed.installer.url, gitee_asset_url(123, 10));
+        assert_eq!(
+            parsed.page_url,
+            format!("{GITEE_REPOSITORY}/releases/tag/v0.8.2")
+        );
+        assert!(validate_source_asset(
+            &parsed.installer,
+            UpdateSource::GitHub,
+            0,
+            &parsed.tag,
+            &parsed.installer.name,
+            MAX_PACKAGE_BYTES
+        )
+        .is_err());
+        assert!(validate_source_asset(
+            &parsed.installer,
+            UpdateSource::Gitee,
+            124,
+            &parsed.tag,
+            &parsed.installer.name,
+            MAX_PACKAGE_BYTES
+        )
+        .is_err());
+        for missing in 0..3 {
+            let mut partial = attachments.clone();
+            partial.as_array_mut().unwrap().remove(missing);
+            assert!(parse_gitee_fixture(release.clone(), partial).is_err());
+            let mut partial = release.clone();
+            partial["assets"].as_array_mut().unwrap().remove(missing);
+            assert!(parse_gitee_fixture(partial, attachments.clone()).is_err());
+        }
+        for field in ["name", "browser_download_url"] {
+            let mut bad = attachments.clone();
+            bad[0][field] = json!("https://github.com/attacker/file.exe");
+            assert!(parse_gitee_fixture(release.clone(), bad).is_err());
+        }
+        for size in [0, MAX_PACKAGE_BYTES + 1] {
+            let mut bad = attachments.clone();
+            bad[0]["size"] = json!(size);
+            assert!(parse_gitee_fixture(release.clone(), bad).is_err());
+        }
+        let mut duplicate = attachments.clone();
+        duplicate[0]["id"] = duplicate[1]["id"].clone();
+        assert!(parse_gitee_fixture(release.clone(), duplicate).is_err());
+        let mut duplicate = attachments.clone();
+        duplicate
+            .as_array_mut()
+            .unwrap()
+            .push(attachments[0].clone());
+        assert!(parse_gitee_fixture(release, duplicate).is_err());
+    }
+
+    #[test]
+    fn update_sources_cannot_redirect_to_each_other_or_untrusted_repositories() {
+        for url in [
+            GITEE_RELEASES_API,
+            "https://gitee.com/api/v5/repos/cmmuu/leigod-guard/releases/123/attach_files?per_page=100",
+            "https://gitee.com/api/v5/repos/cmmuu/leigod-guard/releases/123/attach_files/10/download",
+            "https://foruda.gitee.com/attach_file/123/package.zip?token=public-signature",
+        ] {
+            let url = Url::parse(url).unwrap();
+            assert!(trusted_source_redirect(UpdateSource::Gitee, &url));
+            assert!(!trusted_source_redirect(UpdateSource::GitHub, &url));
+        }
+        for url in [
+            LATEST_API,
+            "https://release-assets.githubusercontent.com/package.zip",
+            "https://gitee.com/api/v5/repos/attacker/leigod-guard/releases/123/attach_files/10/download",
+            "https://gitee.com/api/v5/repos/cmmuu/leigod-guard/releases/123/attach_files/10/download?access_token=anything",
+            "https://gitee.com/api/v5/repos/cmmuu/leigod-guard/releases/0123/attach_files/10/download",
+            "https://gitee.com/api/v5/repos/cmmuu/leigod-guard/releases/0/attach_files/10/download",
+            "https://foruda.gitee.com/avatar/example.png",
+            "http://foruda.gitee.com/attach_file/package.zip",
+            "https://foruda.gitee.com.evil.example/attach_file/package.zip",
+            "https://user@foruda.gitee.com/attach_file/package.zip",
+            "https://foruda.gitee.com:444/attach_file/package.zip",
+            "https://foruda.gitee.com/attach_file/package.zip#fragment",
+        ] {
+            assert!(!trusted_source_redirect(UpdateSource::Gitee, &Url::parse(url).unwrap()), "accepted {url}");
+        }
+    }
+
+    /// Downloads public packages through the production Gitee path and verifies
+    /// their sizes and hashes. Does not execute files or read user configuration.
+    #[test]
+    #[ignore = "explicit public Gitee full package download test; no executable is run"]
+    fn public_gitee_packages_download_and_verify() {
+        let release = check_latest("0.0.0", UpdateSource::Gitee).unwrap().unwrap();
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "leigod-gitee-check-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir(&dir).unwrap();
+        for kind in [PackageKind::Installer, PackageKind::Portable] {
+            let downloaded = download_update(&release, kind, &dir, &|_| {}).unwrap();
+            assert_eq!(downloaded.kind, kind);
+            assert_eq!(downloaded.version, release.version);
+            assert_eq!(
+                fs::metadata(&downloaded.path).unwrap().len(),
+                downloaded.size
+            );
+            println!(
+                "Gitee verified {}: {} bytes, sha256 {}",
+                downloaded.path.file_name().unwrap().to_string_lossy(),
+                downloaded.size,
+                downloaded.sha256
+            );
+            fs::remove_file(&downloaded.path).unwrap();
+        }
+        fs::remove_dir(&dir).unwrap();
+    }
+
     /// Opt-in network smoke test; normal local/CI tests remain fully offline.
     /// Reads only public metadata and its small checksum manifest. No packages,
     /// user configuration, account credentials, or executable processes are used.
     #[test]
     #[ignore = "explicit public GitHub network smoke test; metadata and checksums only"]
     fn public_github_asset_api_metadata_and_checksum_smoke() {
-        let release = check_latest("0.0.0")
+        let release = check_latest("0.0.0", UpdateSource::GitHub)
             .expect("public release metadata should be reachable")
             .expect("the public repository should have a stable release");
         let response = asset_response(
-            &client().expect("HTTPS client"),
+            &client(UpdateSource::GitHub).expect("HTTPS client"),
             &release.checksums,
+            UpdateSource::GitHub,
             METADATA_TIMEOUT,
         )
         .expect("public asset API should return the checksum manifest");

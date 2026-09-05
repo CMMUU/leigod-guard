@@ -6,7 +6,7 @@ use crate::game_presets::{self, PRESETS};
 use crate::leigod_api as api;
 use crate::osd;
 use crate::shared::{ManualCmd, Shared, StartupPauseStatus};
-use crate::updater::{DownloadProgress, DownloadedUpdate, PackageKind, ReleaseInfo};
+use crate::updater::{DownloadProgress, DownloadedUpdate, PackageKind, ReleaseInfo, UpdateSource};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
@@ -25,7 +25,7 @@ enum Page {
 }
 
 enum UpdateEvent {
-    Checked(Result<Option<ReleaseInfo>, String>),
+    Checked(UpdateSource, Result<Option<ReleaseInfo>, String>),
     Progress(DownloadProgress),
     Downloaded(Result<DownloadedUpdate, String>),
     PreparationFailed(String),
@@ -594,15 +594,24 @@ impl App {
         if self.update_busy {
             return;
         }
+        let source = match self.config.lock() {
+            Ok(config) => config.updates.source,
+            Err(_) => {
+                self.update_message = "无法读取更新来源，请稍后重试。".into();
+                self.update_error = true;
+                return;
+            }
+        };
         let (sender, receiver) = mpsc::channel();
         self.update_events = Some(receiver);
         self.update_busy = true;
         self.update_progress = None;
-        self.update_message = "正在检查新版本…".into();
+        self.update_release = None;
+        self.update_message = format!("正在通过 {} 检查新版本…", source.label());
         self.update_error = false;
         std::thread::spawn(move || {
-            let result = crate::updater::check_latest(env!("CARGO_PKG_VERSION"));
-            let _ = sender.send(UpdateEvent::Checked(result));
+            let result = crate::updater::check_latest(env!("CARGO_PKG_VERSION"), source);
+            let _ = sender.send(UpdateEvent::Checked(source, result));
             ctx.request_repaint();
         });
     }
@@ -660,17 +669,18 @@ impl App {
             .unwrap_or_default();
         for event in events {
             match event {
-                UpdateEvent::Checked(result) => {
+                UpdateEvent::Checked(source, result) => {
                     self.update_events = None;
                     self.update_busy = false;
                     match result {
                         Ok(Some(release)) => {
-                            self.update_message = format!("发现新版本 v{}", release.version);
+                            self.update_message =
+                                format!("{} 发现新版本 v{}", source.label(), release.version);
                             self.update_release = Some(release);
                             self.update_error = false;
                         }
                         Ok(None) => {
-                            self.update_message = "当前没有可用的新版本。".into();
+                            self.update_message = format!("{} 暂无更高的正式版本。各来源同步可能有延迟，可切换来源后重新检查。", source.label());
                             self.update_release = None;
                             self.update_error = false;
                         }
@@ -1977,19 +1987,42 @@ impl App {
             ui.separator();
             ui.add_space(8.0);
             if let Ok(mut config) = self.config.lock() {
+                let previous_source = config.updates.source;
+                ui.add_enabled_ui(!self.update_busy, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("更新来源：");
+                        egui::ComboBox::from_id_salt("update_source")
+                            .selected_text(match config.updates.source {
+                                UpdateSource::GitHub => "GitHub",
+                                UpdateSource::Gitee => "Gitee（国内）",
+                            })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut config.updates.source, UpdateSource::GitHub, "GitHub");
+                                ui.selectable_value(&mut config.updates.source, UpdateSource::Gitee, "Gitee（国内）");
+                            });
+                    });
+                });
+                if config.updates.source != previous_source {
+                    self.dirty = true;
+                    self.update_release = None;
+                    self.update_progress = None;
+                    self.update_error = false;
+                    self.update_message = format!("已切换到 {}，请点击“检查更新”。", config.updates.source.label());
+                }
                 if ui.checkbox(&mut config.updates.check_on_startup, "启动时自动检查更新").changed() {
                     self.dirty = true;
                 }
             }
             ui.label(egui::RichText::new(
-                "开启后，每次启动在后台检查一次 GitHub 公开版本信息。只有点击更新才会下载和安装。"
+                "国内网络可选择 Gitee。版本检查、安装包和校验文件均使用所选来源；启动检查默认关闭，只有点击更新才会下载和安装。"
             ).weak().small());
             ui.add_space(8.0);
             ui.horizontal_wrapped(|ui| {
                 if ui.add_enabled(!self.update_busy, egui::Button::new("检查更新")).clicked() {
                     self.start_update_check(ui.ctx().clone());
                 }
-                ui.hyperlink_to("手动下载 / 发布记录", "https://github.com/CMMUU/leigod-guard/releases/latest");
+                ui.hyperlink_to("Gitee 下载", crate::updater::GITEE_RELEASES_PAGE);
+                ui.hyperlink_to("GitHub 下载", crate::updater::RELEASES_PAGE);
                 ui.hyperlink_to("项目使用说明", "https://github.com/CMMUU/leigod-guard#readme");
             });
             ui.add_space(8.0);
@@ -2017,6 +2050,7 @@ impl App {
                 ui.separator();
                 ui.add_space(8.0);
                 ui.heading(format!("可更新至 v{}", release.version));
+                ui.label(format!("此次下载来源：{}", release.source.label()));
                 ui.label("更新会保留配置和当前使用方式：安装版继续使用安装版，绿色版继续免安装。");
                 ui.label("点击后会下载并校验文件，再关闭当前程序完成更新并重新打开。监控会短暂停止；更新程序本身不暂停计时，重新打开后按启动设置等待并检查。");
                 ui.add_space(8.0);
