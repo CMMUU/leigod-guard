@@ -40,6 +40,17 @@ enum UpdateEvent {
     PreparationFailed(String),
 }
 
+// The HTTP request has a 12-second timeout. Also bound the UI wait in case its
+// background thread exits or never delivers a result.
+const ACCOUNT_QUERY_TIMEOUT: Duration = Duration::from_secs(15);
+
+struct AccountQuery {
+    events: Receiver<Result<serde_json::Value, api::ApiError>>,
+    started_at: Instant,
+    token: String,
+    user: String,
+}
+
 /// 已保存密码的占位显示（密码框里展示，不代表真实密码）
 const PWD_PLACEHOLDER: &str = "••••••••";
 
@@ -83,6 +94,9 @@ pub struct App {
     sms_key: String,
     sms_sent_at: Option<std::time::Instant>,
     token_input: String,
+    account_query: Option<AccountQuery>,
+    account_query_message: String,
+    account_query_error: bool,
 
     // 人机验证等待状态：0=无 1=等验证后重试发短信 2=等验证后重试密码登录
     pending_captcha: u8,
@@ -643,6 +657,9 @@ impl App {
             sms_key: String::new(),
             sms_sent_at: None,
             token_input: String::new(),
+            account_query: None,
+            account_query_message: String::new(),
+            account_query_error: false,
             pending_captcha: 0,
             pending_user: String::new(),
             pending_md5: String::new(),
@@ -1163,6 +1180,7 @@ impl eframe::App for App {
             }
         }
 
+        self.poll_account_query(Instant::now());
         self.render_shell(ctx);
 
         // 进程选择弹窗
@@ -1677,8 +1695,10 @@ impl App {
         } else {
             String::new()
         };
+        self.cancel_account_query();
         if let Ok(mut s) = self.shared.lock() {
             s.token = Some(token);
+            s.account_info = None;
             s.account_status =
                 format!("已登录（{}）", if user.is_empty() { "token" } else { user });
             s.log("账户登录成功，token 已加密保存");
@@ -1690,9 +1710,28 @@ impl App {
 
     /// 拉取账户信息并展示（登录后自动调用 + “刷新账户状态”按钮）
     fn refresh_account_info(&mut self) {
+        self.start_account_query(api::user_info);
+    }
+
+    fn cancel_account_query(&mut self) {
+        // Dropping the receiver also discards a response arriving after logout
+        // or a new login. The HTTP thread never writes shared account state.
+        self.account_query = None;
+        self.account_query_message.clear();
+        self.account_query_error = false;
+    }
+
+    fn start_account_query(
+        &mut self,
+        query: impl FnOnce(&str) -> Result<serde_json::Value, api::ApiError> + Send + 'static,
+    ) {
+        if self.account_query.is_some() {
+            return;
+        }
         let token = self.shared.lock().ok().and_then(|s| s.token.clone());
-        let Some(t) = token else {
-            self.status_msg = "尚未登录".into();
+        let Some(token) = token else {
+            self.account_query_message = "尚未登录，请先登录后再刷新账户状态。".into();
+            self.account_query_error = true;
             return;
         };
         let user = self
@@ -1700,24 +1739,105 @@ impl App {
             .lock()
             .map(|c| c.account.username.clone())
             .unwrap_or_default();
-        match api::user_info(&t) {
-            Ok(v) => {
-                let paused = v.pointer("/data/pause_status_id").and_then(|x| x.as_i64()) == Some(1);
-                let state = if paused { "已暂停" } else { "计时中" };
-                if let Ok(mut s) = self.shared.lock() {
-                    s.account_info = Some(v);
-                    s.account_status = if user.is_empty() {
-                        format!("已登录 · {state}")
-                    } else {
-                        format!("已登录（{user}）· {state}")
-                    };
+
+        let (sender, events) = mpsc::channel();
+        let request_token = token.clone();
+        let started_at = Instant::now();
+        match std::thread::Builder::new()
+            .name("account-query".into())
+            .spawn(move || {
+                let _ = sender.send(query(&request_token));
+            }) {
+            Ok(_) => {
+                self.account_query = Some(AccountQuery {
+                    events,
+                    started_at,
+                    token,
+                    user,
+                });
+                self.account_query_message = "正在查询账户信息…（最多等待 15 秒）".into();
+                self.account_query_error = false;
+            }
+            Err(_) => {
+                self.account_query_message = "无法开始账户查询，请稍后重试。".into();
+                self.account_query_error = true;
+            }
+        }
+    }
+
+    fn poll_account_query(&mut self, now: Instant) {
+        let Some(pending) = self.account_query.as_ref() else {
+            return;
+        };
+        let same_account = self
+            .shared
+            .lock()
+            .map(|s| s.token.as_deref() == Some(pending.token.as_str()))
+            .unwrap_or(false);
+        if !same_account {
+            self.cancel_account_query();
+            return;
+        }
+        let result = match pending.events.try_recv() {
+            Ok(result) => result,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                Err(api::ApiError("查询意外中断，请重新刷新。".into()))
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                if now.saturating_duration_since(pending.started_at) < ACCOUNT_QUERY_TIMEOUT {
+                    return;
                 }
+                Err(api::ApiError("查询超时，请检查网络后重新刷新。".into()))
+            }
+        };
+        let pending = self.account_query.take().unwrap();
+        let Ok(mut s) = self.shared.lock() else {
+            self.account_query_message = "无法更新账户状态，请稍后重试。".into();
+            self.account_query_error = true;
+            return;
+        };
+        // Recheck under the write lock: the monitor can replace an expired token.
+        if s.token.as_deref() != Some(pending.token.as_str()) {
+            self.account_query_message.clear();
+            self.account_query_error = false;
+            return;
+        }
+        match result {
+            Ok(v) => {
+                let state = match api::account_paused(&v) {
+                    Some(true) => "已暂停",
+                    Some(false) => "计时中",
+                    None => "计时状态未知",
+                };
+                self.account_query_error = api::account_paused(&v).is_none();
+                self.account_query_message = if self.account_query_error {
+                    "查询已完成，但未返回可识别的计时状态，请在雷神官方微信小程序刷新核对。".into()
+                } else {
+                    format!(
+                        "账户状态已刷新（{}）",
+                        chrono::Local::now().format("%H:%M:%S")
+                    )
+                };
+                s.account_info = Some(v);
+                s.account_status = if pending.user.is_empty() {
+                    format!("已登录 · {state}")
+                } else {
+                    format!("已登录（{}）· {state}", pending.user)
+                };
             }
             Err(e) => {
-                dbglog(&format!("[ui] user_info failed: {}", e.0));
-                if let Ok(mut s) = self.shared.lock() {
-                    s.account_status = format!("查询失败: {e}");
-                }
+                self.account_query_error = true;
+                self.account_query_message = if api::is_token_err(&e) {
+                    "登录已失效，请重新登录后再刷新账户状态。".into()
+                } else {
+                    format!("查询失败：{e}；可点击“刷新账户状态”重试。")
+                };
+                s.account_info = None;
+                s.account_status = if api::is_token_err(&e) {
+                    "登录已失效".into()
+                } else {
+                    "账户计时状态未能确认".into()
+                };
             }
         }
     }
@@ -1924,14 +2044,20 @@ impl App {
                         .into();
             }
             // 二期功能：手动恢复入口暂时隐藏（代码保留，见 worker ManualCmd::Resume）
-            if ui.button("刷新账户状态").clicked() {
-                self.status_msg = "正在查询账户信息…".into();
+            if ui
+                .add_enabled(
+                    self.account_query.is_none(),
+                    egui::Button::new("刷新账户状态"),
+                )
+                .clicked()
+            {
                 self.refresh_account_info();
             }
         });
         ui.add_space(4.0);
         ui.horizontal_wrapped(|ui| {
             if ui.button("退出登录").clicked() {
+                self.cancel_account_query();
                 // 清空内存 token、本地加密凭据与界面状态
                 if let Ok(mut s) = self.shared.lock() {
                     s.token = None;
@@ -1976,17 +2102,34 @@ impl App {
             ui.colored_label(egui::Color32::from_rgb(230, 60, 60), &self.status_msg);
         }
 
-        // 账户信息展示：计时状态高亮 + 完整信息折叠区
+        if !self.account_query_message.is_empty() {
+            if self.account_query.is_some() {
+                ui.horizontal_wrapped(|ui| {
+                    ui.spinner();
+                    ui.colored_label(theme::MUTED, &self.account_query_message);
+                });
+            } else {
+                let color = if self.account_query_error {
+                    theme::AMBER
+                } else {
+                    theme::GREEN
+                };
+                ui.colored_label(color, &self.account_query_message);
+            }
+        }
+
+        // A previous response is not the result of a pending refresh.
         let info = self.shared.lock().ok().and_then(|s| s.account_info.clone());
         if let Some(v) = info {
             ui.add_space(8.0);
             ui.separator();
-            let data = v.get("data").cloned().unwrap_or(v.clone());
-            let paused = data.get("pause_status_id").and_then(|x| x.as_i64()) == Some(1);
-            let (txt, color) = if paused {
-                ("⏸ 计时状态：已暂停", egui::Color32::from_rgb(80, 180, 80))
-            } else {
-                ("⏱ 计时状态：计时中", egui::Color32::from_rgb(230, 160, 40))
+            if self.account_query.is_some() {
+                ui.colored_label(theme::MUTED, "以下为上次查询结果，本次刷新尚未完成。");
+            }
+            let (txt, color) = match api::account_paused(&v) {
+                Some(true) => ("⏸ 计时状态：已暂停", theme::GREEN),
+                Some(false) => ("⏱ 计时状态：计时中", theme::AMBER),
+                None => ("计时状态：未知，请在小程序刷新核对", theme::MUTED),
             };
             ui.colored_label(color, txt);
             ui.label("成功提示仅为请求反馈，最终以小程序刷新后的计时状态为准。\n核对：雷神官方微信小程序 → 登录同一账号 → 下拉刷新。\n暂停计时不代表已停止加速。账户资料和凭据不在此展示。");

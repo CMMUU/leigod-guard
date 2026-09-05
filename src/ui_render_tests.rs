@@ -174,6 +174,182 @@ fn all_pages_render_at_minimum_and_standard_window_sizes() {
     }
 }
 
+// Controlled responses exercise the live completion and rendering paths without
+// reading account files or connecting to the Leigod service.
+fn pending_account_query(app: &mut App) -> mpsc::Sender<Result<serde_json::Value, api::ApiError>> {
+    app.page = Page::Account;
+    app.shared.lock().unwrap().token = Some("fixture-account-token".into());
+    let (sender, events) = mpsc::channel();
+    app.account_query = Some(AccountQuery {
+        events,
+        started_at: Instant::now(),
+        token: "fixture-account-token".into(),
+        user: "demo".into(),
+    });
+    app.account_query_message = "正在查询账户信息…（最多等待 15 秒）".into();
+    sender
+}
+
+#[test]
+fn account_query_success_replaces_pending_text_and_preserves_other_actions() {
+    let (ctx, mut app) = fixture();
+    let sender = pending_account_query(&mut app);
+    app.status_msg = "暂停指令已发送".into();
+    app.shared.lock().unwrap().manual_cmd = Some(ManualCmd::Pause);
+    sender
+        .send(Ok(serde_json::json!({"data": {"pause_status_id": 1}})))
+        .unwrap();
+    app.poll_account_query(Instant::now());
+
+    assert!(app.account_query.is_none());
+    assert!(!app.account_query_error);
+    assert!(app.account_query_message.starts_with("账户状态已刷新（"));
+    assert!(!app.account_query_message.contains("正在查询"));
+    assert_eq!(
+        app.shared.lock().unwrap().account_status,
+        "已登录（demo）· 已暂停"
+    );
+    assert_eq!(app.status_msg, "暂停指令已发送");
+    assert!(matches!(
+        app.shared.lock().unwrap().manual_cmd,
+        Some(ManualCmd::Pause)
+    ));
+    let _ = frame(&ctx, &mut app, [1180.0, 780.0], vec![]);
+    let output = frame(&ctx, &mut app, [1180.0, 780.0], vec![]);
+    text_rect(&output.shapes, &app.account_query_message);
+    text_rect(&output.shapes, "⏸ 计时状态：已暂停");
+}
+
+#[test]
+fn account_query_errors_end_wait_and_remove_stale_success() {
+    for (error, expected) in [
+        ("网络请求失败", "查询失败"),
+        ("服务器返回错误 code=400006: 未登录", "请重新登录"),
+    ] {
+        let (_, mut app) = fixture();
+        let sender = pending_account_query(&mut app);
+        app.shared.lock().unwrap().account_info =
+            Some(serde_json::json!({"data": {"pause_status_id": 1}}));
+        sender.send(Err(api::ApiError(error.into()))).unwrap();
+        app.poll_account_query(Instant::now());
+        assert!(app.account_query.is_none());
+        assert!(app.account_query_error);
+        assert!(app.account_query_message.contains(expected));
+        assert!(!app.account_query_message.contains("正在查询"));
+        assert!(app.shared.lock().unwrap().account_info.is_none());
+        assert!(!app.shared.lock().unwrap().account_status.contains("已暂停"));
+    }
+}
+
+#[test]
+fn account_query_timeout_allows_retry_and_discards_late_response() {
+    let (_, mut app) = fixture();
+    let old_sender = pending_account_query(&mut app);
+    let deadline = app.account_query.as_ref().unwrap().started_at + ACCOUNT_QUERY_TIMEOUT;
+    app.poll_account_query(deadline - Duration::from_millis(1));
+    assert!(app.account_query.is_some());
+    app.poll_account_query(deadline);
+    assert!(app.account_query.is_none());
+    assert!(app.account_query_message.contains("查询超时"));
+    let sender = pending_account_query(&mut app);
+    assert!(old_sender
+        .send(Ok(serde_json::json!({"data": {"pause_status_id": 1}})))
+        .is_err());
+    sender
+        .send(Ok(serde_json::json!({"data": {"pause_status_id": 0}})))
+        .unwrap();
+    app.poll_account_query(Instant::now());
+    assert!(!app.account_query_error);
+    assert_eq!(
+        app.shared.lock().unwrap().account_status,
+        "已登录（demo）· 计时中"
+    );
+}
+
+#[test]
+fn account_query_disconnected_worker_does_not_leave_a_spinner() {
+    let (_, mut app) = fixture();
+    drop(pending_account_query(&mut app));
+    app.poll_account_query(Instant::now());
+    assert!(app.account_query.is_none());
+    assert!(app.account_query_error);
+    assert!(app.account_query_message.contains("查询意外中断"));
+}
+
+#[test]
+fn account_query_logout_and_token_replacement_ignore_old_results() {
+    let (ctx, mut app) = fixture();
+    let sender = pending_account_query(&mut app);
+    click(&ctx, &mut app, "退出登录");
+    assert!(app.account_query.is_none());
+    assert!(app.account_query_message.is_empty());
+    assert!(sender
+        .send(Ok(serde_json::json!({"data": {"pause_status_id": 1}})))
+        .is_err());
+    assert!(app.shared.lock().unwrap().token.is_none());
+
+    let sender = pending_account_query(&mut app);
+    {
+        let mut shared = app.shared.lock().unwrap();
+        shared.token = Some("new-fixture-account-token".into());
+        shared.account_status = "新账户".into();
+    }
+    sender
+        .send(Ok(serde_json::json!({"data": {"pause_status_id": 1}})))
+        .unwrap();
+    app.poll_account_query(Instant::now());
+    assert!(app.account_query.is_none());
+    assert_eq!(app.shared.lock().unwrap().account_status, "新账户");
+    assert!(app.shared.lock().unwrap().account_info.is_none());
+}
+
+#[test]
+fn account_query_runs_off_ui_thread_and_blocks_duplicate_refreshes() {
+    let (ctx, mut app) = fixture();
+    app.page = Page::Account;
+    app.shared.lock().unwrap().token = Some("fixture-account-token".into());
+    let ui_thread = std::thread::current().id();
+    let (started, started_rx) = mpsc::channel();
+    let (release, release_rx) = mpsc::channel();
+    app.start_account_query(move |_| {
+        started.send(std::thread::current().id()).unwrap();
+        release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        Ok(serde_json::json!({"data": {"pause_status_id": 1}}))
+    });
+    assert_ne!(
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+        ui_thread
+    );
+    app.start_account_query(|_| panic!("duplicate request must not execute"));
+    click(&ctx, &mut app, "刷新账户状态"); // disabled; must not reach the real API
+    app.poll_account_query(Instant::now());
+    assert!(app.account_query.is_some());
+    assert!(app.account_query_message.contains("正在查询"));
+    click(&ctx, &mut app, "首页与游戏"); // navigation remains responsive
+    assert!(app.page == Page::Games);
+    release.send(()).unwrap();
+}
+
+#[test]
+fn account_query_without_login_or_known_timer_state_is_not_success() {
+    let (ctx, mut app) = fixture();
+    app.page = Page::Account;
+    click(&ctx, &mut app, "刷新账户状态");
+    assert!(app.account_query.is_none());
+    assert!(app.account_query_message.contains("尚未登录"));
+    let sender = pending_account_query(&mut app);
+    sender.send(Ok(serde_json::json!({"data": {}}))).unwrap();
+    app.poll_account_query(Instant::now());
+    assert!(app.account_query_error);
+    assert_eq!(
+        app.shared.lock().unwrap().account_status,
+        "已登录（demo）· 计时状态未知"
+    );
+    let _ = frame(&ctx, &mut app, [1180.0, 780.0], vec![]);
+    let output = frame(&ctx, &mut app, [1180.0, 780.0], vec![]);
+    text_rect(&output.shapes, "计时状态：未知，请在小程序刷新核对");
+}
+
 struct Offscreen {
     device: eframe::wgpu::Device,
     queue: eframe::wgpu::Queue,
@@ -347,6 +523,34 @@ fn render_apple_preview() {
             scale,
             &output.join(format!("{name}.png")),
         );
+    }
+    for state in ["pending", "success", "failure"] {
+        for (suffix, size) in [("", [1180.0, 780.0]), ("-narrow", [680.0, 460.0])] {
+            let (ctx, mut app) = fixture();
+            let sender = pending_account_query(&mut app);
+            app.shared.lock().unwrap().account_info =
+                Some(serde_json::json!({"data": {"pause_status_id": 1}}));
+            if state == "success" {
+                sender
+                    .send(Ok(serde_json::json!({"data": {"pause_status_id": 1}})))
+                    .unwrap();
+                app.poll_account_query(Instant::now());
+            } else if state == "failure" {
+                sender
+                    .send(Err(api::ApiError(
+                        "查询超时，请检查网络后重新刷新。".into(),
+                    )))
+                    .unwrap();
+                app.poll_account_query(Instant::now());
+            }
+            gpu.save(
+                &ctx,
+                &mut app,
+                size,
+                1.0,
+                &output.join(format!("account-{state}{suffix}.png")),
+            );
+        }
     }
     let (ctx, mut app) = fixture();
     app.show_add_game = true;

@@ -118,6 +118,7 @@ fn sign(params: &mut Map<String, Value>) {
 
 fn client() -> Result<reqwest::blocking::Client, ApiError> {
     reqwest::blocking::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(5))
         .timeout(std::time::Duration::from_secs(12))
         // 登录请求体和 query 中含有凭据，禁止重定向到其他地址。
         .redirect(reqwest::redirect::Policy::none())
@@ -327,9 +328,39 @@ pub fn user_info(token: &str) -> Result<Value, ApiError> {
     Ok(v)
 }
 
+/// An absent or unfamiliar status must not be presented as active billing.
+pub fn account_paused(info: &Value) -> Option<bool> {
+    let status = info.pointer("/data/pause_status_id")?;
+    match status.as_i64().or_else(|| status.as_str()?.parse().ok()) {
+        Some(1) => Some(true),
+        Some(0) => Some(false),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn account_timer_status_accepts_known_numbers_only() {
+        for (status, expected) in [
+            (serde_json::json!(1), Some(true)),
+            (serde_json::json!("1"), Some(true)),
+            (serde_json::json!(0), Some(false)),
+            (serde_json::json!("0"), Some(false)),
+            (serde_json::json!(2), None),
+            (serde_json::json!(null), None),
+            (serde_json::json!(true), None),
+            (serde_json::json!("unknown"), None),
+        ] {
+            assert_eq!(
+                account_paused(&serde_json::json!({"data": {"pause_status_id": status}})),
+                expected
+            );
+        }
+        assert_eq!(account_paused(&serde_json::json!({"data": {}})), None);
+    }
 
     #[test]
     fn malformed_unicode_response_is_safe_and_private() {

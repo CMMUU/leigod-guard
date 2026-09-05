@@ -687,7 +687,9 @@ fn refresh_account_info(shared: &Arc<Mutex<Shared>>, cfg: &Arc<Mutex<Config>>) {
         match api::user_info(&t) {
             Ok(v) => {
                 if let Ok(mut s) = shared.lock() {
-                    s.account_info = Some(v);
+                    if s.token.as_deref() == Some(t.as_str()) {
+                        s.account_info = Some(v);
+                    }
                 }
             }
             Err(e) => crate::ui::dbglog(&format!("[worker] refresh user_info failed: {}", e.0)),
