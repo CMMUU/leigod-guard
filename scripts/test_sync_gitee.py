@@ -98,6 +98,23 @@ class SyncTests(unittest.TestCase):
             sync.validate_pair("mihomo-codex", source, target)
         self.assertNotIn("private-test-value", str(error.exception))
 
+    def test_gitee_clone_form_html_url_identifies_only_the_checked_repository(self):
+        source = metadata(False, "CMMUU", "leigod-guard")
+        target = metadata(False, repo="leigod-guard")
+        for address in ("https://gitee.com/cmmuu/leigod-guard", "https://gitee.com/cmmuu/leigod-guard.git",
+                        "https://gitee.com/CMMUU/leigod-guard.git/"):
+            target["html_url"] = address
+            sync.validate_pair("leigod-guard", source, target)
+        for address in ("http://gitee.com/cmmuu/leigod-guard.git", "https://gitee.com/other/leigod-guard.git",
+                        "https://gitee.com/cmmuu/other.git", "https://gitee.com.attacker.example/cmmuu/leigod-guard.git",
+                        "https://user@gitee.com/cmmuu/leigod-guard.git", "https://gitee.com:444/cmmuu/leigod-guard.git",
+                        "https://gitee.com/cmmuu/leigod-guard.git?secret=private-test-value",
+                        "https://gitee.com/cmmuu/leigod-guard.git#main", "https://gitee.com/cmmuu/leigod-guard.git/tree/main"):
+            target["html_url"] = address
+            with self.subTest(address=address):
+                with self.assertRaises(sync.SyncError):
+                    sync.validate_pair("leigod-guard", source, target)
+
     def test_public_repository_does_not_bypass_authenticated_owner_preflight(self):
         class GH:
             def request(self, path):

@@ -68,7 +68,11 @@ def validate_pair(repo, source, target):
     if str(source.get("full_name", "")).casefold() != f"{GH_OWNER}/{repo}".casefold():
         raise SyncError("GitHub source repository does not match the requested scope")
     path_matches = str(target.get("path", "")).casefold() == repo.casefold()
-    url_matches = str(target.get("html_url", "")).rstrip("/").casefold() == f"https://gitee.com/{GE_OWNER}/{repo}".casefold()
+    # Gitee's repository response can use the clone-form .git suffix even in
+    # html_url. It identifies the same repository; transport URLs remain pinned
+    # independently to HTTPS and the checked owner/path below.
+    target_url = f"https://gitee.com/{GE_OWNER}/{repo}".casefold()
+    url_matches = str(target.get("html_url", "")).rstrip("/").casefold() in {target_url, target_url + ".git"}
     if not path_matches or not url_matches:
         # Report which public metadata field failed, never its raw value: a
         # malformed response could contain credentials or a signed URL.
@@ -76,26 +80,6 @@ def validate_pair(repo, source, target):
         for field, matches in (("path", path_matches), ("html_url", url_matches)):
             state = "matches" if matches else "missing" if not target.get(field) else "differs"
             details.append(f"{field}={state}")
-        if not url_matches:
-            try:
-                parts = urlsplit(str(target.get("html_url", "")))
-                scheme = parts.scheme if parts.scheme in {"http", "https"} else "other"
-                host_matches = parts.hostname == "gitee.com"
-                repository_matches = parts.path.rstrip("/").casefold() == f"/{GE_OWNER}/{repo}".casefold()
-                details.extend((f"url_scheme={scheme}", f"url_host_matches={host_matches}",
-                                f"url_repository_matches={repository_matches}",
-                                f"url_has_query={bool(parts.query)}", f"url_has_fragment={bool(parts.fragment)}",
-                                f"url_has_userinfo={parts.username is not None}", f"url_has_port={parts.port is not None}"))
-                # A public repository address is useful for canonical-name
-                # mismatches. Only short URL path segments may be shown; never
-                # query strings, userinfo, long credential-like strings or text.
-                if host_matches and not target["private"] and not parts.username and not parts.query and not parts.fragment:
-                    segments = parts.path.split("/")
-                    public_path = "/".join(segment if re.fullmatch(r"[A-Za-z0-9_.-]{0,24}", segment) else "[hidden]"
-                                           for segment in segments[:8])
-                    details.append("public_url_path=" + public_path)
-            except ValueError:
-                details.append("url_format=invalid")
         raise SyncError("Gitee target path does not match the requested scope (" + ", ".join(details) + ")")
     if source["private"] and not target["private"]:
         raise SyncError("Private GitHub source must never synchronize to a public Gitee target")
