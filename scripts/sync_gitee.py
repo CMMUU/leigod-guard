@@ -86,6 +86,14 @@ def validate_pair(repo, source, target):
                                 f"url_repository_matches={repository_matches}",
                                 f"url_has_query={bool(parts.query)}", f"url_has_fragment={bool(parts.fragment)}",
                                 f"url_has_userinfo={parts.username is not None}", f"url_has_port={parts.port is not None}"))
+                # A public repository address is useful for canonical-name
+                # mismatches. Only short URL path segments may be shown; never
+                # query strings, userinfo, long credential-like strings or text.
+                if host_matches and not target["private"] and not parts.username and not parts.query and not parts.fragment:
+                    segments = parts.path.split("/")
+                    public_path = "/".join(segment if re.fullmatch(r"[A-Za-z0-9_.-]{0,24}", segment) else "[hidden]"
+                                           for segment in segments[:8])
+                    details.append("public_url_path=" + public_path)
             except ValueError:
                 details.append("url_format=invalid")
         raise SyncError("Gitee target path does not match the requested scope (" + ", ".join(details) + ")")
