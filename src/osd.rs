@@ -16,6 +16,9 @@ use std::time::{Duration, Instant};
 
 use windows::core::{HRESULT, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{CloseHandle, ERROR_BAD_LENGTH, ERROR_NO_MORE_FILES, HANDLE};
+use windows::Win32::System::Diagnostics::Debug::{
+    GetErrorMode, SetErrorMode, SEM_FAILCRITICALERRORS, THREAD_ERROR_MODE,
+};
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Module32FirstW, Module32NextW, MODULEENTRY32W, TH32CS_SNAPMODULE,
     TH32CS_SNAPMODULE32,
@@ -107,8 +110,7 @@ impl Drop for OwnedHandle {
 
 /// Prepare the optional strict overlay protection before the main instance starts.
 ///
-/// `Ok(true)` means a protected replacement was started and this bootstrap process
-/// must return immediately. `Ok(false)` means the current process is already protected.
+/// A relaunched bootstrap must return immediately, before acquiring the app mutex.
 pub fn prepare_gamepp_protection(args: &[String]) -> GameppProtectionPreparation {
     // This is the official Vulkan implicit-layer opt-out declared by the local
     // GamePP manifest. It complements the Windows DLL policy; by itself it would
@@ -116,6 +118,7 @@ pub fn prepare_gamepp_protection(args: &[String]) -> GameppProtectionPreparation
     std::env::set_var(GAMEPP_DISABLE_VULKAN_ENV, "1");
 
     if gamepp_protection_active() {
+        disable_critical_error_dialogs();
         return GameppProtectionPreparation::Active;
     }
     if args.iter().any(|arg| arg == GAMEPP_PROTECTED_ARG) {
@@ -155,9 +158,6 @@ fn relaunch_with_gamepp_protection(minimized: bool) -> Result<(), String> {
 
     let executable =
         std::env::current_exe().map_err(|error| format!("无法定位当前程序文件: {error}"))?;
-    let mut executable_wide: Vec<u16> = executable.as_os_str().encode_wide().collect();
-    executable_wide.push(0);
-
     // lpApplicationName is passed separately, so the mutable command line only
     // needs a correctly quoted argv[0] plus the two fixed internal switches.
     let mut command_line = vec![b'"' as u16];
@@ -169,12 +169,42 @@ fn relaunch_with_gamepp_protection(minimized: bool) -> Result<(), String> {
     }
     command_line.push(0);
 
+    let _process = spawn_gamepp_protected(&executable, &mut command_line)?;
+    Ok(())
+}
+
+fn disable_critical_error_dialogs() {
+    // Return loader failures to the caller instead of waiting for a Windows
+    // "Bad Image" dialog. Preserve other flags and Windows crash reporting.
+    unsafe {
+        SetErrorMode(THREAD_ERROR_MODE(GetErrorMode()) | SEM_FAILCRITICALERRORS);
+    }
+}
+
+fn spawn_gamepp_protected(
+    executable: &Path,
+    command_line: &mut [u16],
+) -> Result<OwnedHandle, String> {
+    use std::os::windows::ffi::OsStrExt;
+
+    // Set the PARENT's process-wide error mode before CreateProcessW. The child
+    // inherits it before its loader runs; setting it only in the child's main()
+    // is too late for startup injection. Do not add CREATE_DEFAULT_ERROR_MODE.
+    // The signature policy still rejects the DLL; this does not allow it to load.
+    disable_critical_error_dialogs();
+
+    let mut executable_wide: Vec<u16> = executable.as_os_str().encode_wide().collect();
+    executable_wide.push(0);
     let policy = BLOCK_NON_MICROSOFT_BINARIES_ALLOW_STORE;
     let attributes = AttributeList::with_mitigation_policy(&policy)?;
     let mut startup = STARTUPINFOEXW::default();
     startup.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
     startup.lpAttributeList = attributes.raw;
     let mut process_info = PROCESS_INFORMATION::default();
+    let creation_flags = EXTENDED_STARTUPINFO_PRESENT;
+    // The regression probe is a console test executable; keep it in the background.
+    #[cfg(test)]
+    let creation_flags = creation_flags | windows::Win32::System::Threading::CREATE_NO_WINDOW;
 
     unsafe {
         CreateProcessW(
@@ -183,7 +213,7 @@ fn relaunch_with_gamepp_protection(minimized: bool) -> Result<(), String> {
             None,
             None,
             false,
-            EXTENDED_STARTUPINFO_PRESENT,
+            creation_flags,
             None,
             PCWSTR::null(),
             &startup.StartupInfo,
@@ -192,9 +222,9 @@ fn relaunch_with_gamepp_protection(minimized: bool) -> Result<(), String> {
         .map_err(|error| format!("启动受保护的雷神守护进程失败: {error}"))?;
     }
 
-    let _process = OwnedHandle(process_info.hProcess);
+    let process = OwnedHandle(process_info.hProcess);
     let _thread = OwnedHandle(process_info.hThread);
-    Ok(())
+    Ok(process)
 }
 
 /// Whether Windows reports an enforcing binary-signature policy for this process.
@@ -284,6 +314,138 @@ fn is_gamepp_module_path(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::is_gamepp_module_path;
+
+    /// Exercise the real process-creation path with an unsigned, inert DLL.
+    /// No application config, account, renderer or third-party DLL is loaded.
+    #[test]
+    #[cfg(all(target_arch = "x86_64", target_env = "msvc"))]
+    fn protected_dll_rejection_returns_without_a_dialog() {
+        use super::*;
+        use std::os::windows::{ffi::OsStrExt, process::CommandExt};
+        use windows::Win32::Foundation::{FreeLibrary, ERROR_INVALID_IMAGE_HASH, WAIT_OBJECT_0};
+        use windows::Win32::System::Diagnostics::Debug::SEM_NOOPENFILEERRORBOX;
+        use windows::Win32::System::LibraryLoader::LoadLibraryW;
+        use windows::Win32::System::Threading::{
+            GetExitCodeProcess, TerminateProcess, WaitForSingleObject, CREATE_NO_WINDOW,
+        };
+
+        const MARKER: &str = "--skip=leigod-osd-probe:";
+        if let Some(dll) =
+            std::env::args().find_map(|arg| arg.strip_prefix(MARKER).map(String::from))
+        {
+            // Check inheritance BEFORE calling any preparation code in the child.
+            let mode = unsafe { GetErrorMode() };
+            assert_ne!(
+                mode & SEM_FAILCRITICALERRORS.0,
+                0,
+                "error mode not inherited"
+            );
+            assert_ne!(mode & SEM_NOOPENFILEERRORBOX.0, 0, "parent flags lost");
+            assert!(gamepp_protection_active(), "DLL policy not enforced");
+            let dll: Vec<u16> = std::ffi::OsStr::new(&dll)
+                .encode_wide()
+                .chain(Some(0))
+                .collect();
+            let error = unsafe { LoadLibraryW(PCWSTR(dll.as_ptr())) }
+                .expect_err("unsigned fixture was allowed to load");
+            assert_eq!(
+                error.code(),
+                HRESULT::from_win32(ERROR_INVALID_IMAGE_HASH.0)
+            );
+            println!("Inherited error mode; signature policy active; DLL rejected with error 577.");
+            // Distinguish a completed probe from libtest accidentally running zero tests.
+            std::process::exit(73);
+        }
+
+        let temp_root = std::env::temp_dir().canonicalize().unwrap();
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = temp_root.join(format!("leigod-osd-probe-{}-{nonce}", std::process::id()));
+        std::fs::create_dir(&directory).unwrap();
+        struct ProbeDirectory(PathBuf, PathBuf);
+        impl Drop for ProbeDirectory {
+            fn drop(&mut self) {
+                if self.0.canonicalize().ok().as_deref().and_then(Path::parent)
+                    == Some(self.1.as_path())
+                {
+                    let _ = std::fs::remove_dir_all(&self.0);
+                }
+            }
+        }
+        let _cleanup = ProbeDirectory(directory.clone(), temp_root);
+        let source = directory.join("inert.rs");
+        let dll = directory.join("inert overlay.dll");
+        std::fs::write(
+            &source,
+            "#[no_mangle] pub extern \"C\" fn inert_probe() -> u32 { 42 }\n",
+        )
+        .unwrap();
+        let compiler = std::process::Command::new("rustc")
+            .args([
+                "--crate-type",
+                "cdylib",
+                "--edition=2021",
+                "--target",
+                "x86_64-pc-windows-msvc",
+                "-C",
+                "target-feature=+crt-static",
+                "-C",
+                "panic=abort",
+            ])
+            .arg(&source)
+            .arg("-o")
+            .arg(&dll)
+            .creation_flags(CREATE_NO_WINDOW.0)
+            .output()
+            .unwrap();
+        assert!(
+            compiler.status.success(),
+            "fixture build: {}",
+            String::from_utf8_lossy(&compiler.stderr)
+        );
+
+        // Prove this is a valid DLL, so the rejection cannot be a corrupt-image false positive.
+        let dll_wide: Vec<u16> = dll.as_os_str().encode_wide().chain(Some(0)).collect();
+        let module = unsafe { LoadLibraryW(PCWSTR(dll_wide.as_ptr())) }.unwrap();
+        unsafe { FreeLibrary(module) }.unwrap();
+
+        struct RestoreErrorMode(u32);
+        impl Drop for RestoreErrorMode {
+            fn drop(&mut self) {
+                unsafe {
+                    SetErrorMode(THREAD_ERROR_MODE(self.0));
+                }
+            }
+        }
+        let original = unsafe { GetErrorMode() };
+        let restore = RestoreErrorMode(original);
+        // Start without suppression, with an unrelated flag that must survive.
+        unsafe {
+            SetErrorMode(SEM_NOOPENFILEERRORBOX);
+        }
+        let executable = std::env::current_exe().unwrap();
+        let mut command_line: Vec<u16> = format!(
+            "\"{}\" --exact osd::tests::protected_dll_rejection_returns_without_a_dialog --nocapture \"{MARKER}{}\"",
+            executable.display(), dll.display()
+        ).encode_utf16().chain(Some(0)).collect();
+        let process = spawn_gamepp_protected(&executable, &mut command_line).unwrap();
+        drop(restore);
+
+        let wait = unsafe { WaitForSingleObject(process.0, 10_000) };
+        if wait != WAIT_OBJECT_0 {
+            // Only terminate this test's own child if a regression blocks its loader.
+            unsafe {
+                let _ = TerminateProcess(process.0, 1);
+                let _ = WaitForSingleObject(process.0, 2_000);
+            }
+            panic!("protected DLL load blocked instead of returning: {wait:?}");
+        }
+        let mut code = 1;
+        unsafe { GetExitCodeProcess(process.0, &mut code) }.unwrap();
+        assert_eq!(code, 73, "protected probe did not complete its assertions");
+    }
 
     #[test]
     fn recognizes_gamepp_modules_without_treating_unrelated_dlls_as_gamepp() {

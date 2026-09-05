@@ -8,7 +8,7 @@
 
 **Windows 10 / 11 x64 · MIT 开源 · 安装版 EXE / 绿色免安装 ZIP · 应用内更新**
 
-[Gitee 国内下载](https://gitee.com/cmmuu/leigod-guard/releases) · [GitHub 安装版（推荐）](https://github.com/CMMUU/leigod-guard/releases/download/v0.8.2/leigod-guard-v0.8.2-windows-x64-setup.exe) · [下载绿色免安装版](https://github.com/CMMUU/leigod-guard/releases/download/v0.8.2/leigod-guard-v0.8.2-windows-x64.zip) · [全部下载与校验文件](https://github.com/CMMUU/leigod-guard/releases/latest) · [版本记录](CHANGELOG.md) · [隐私与本地数据](docs/PRIVACY.md) · [问题反馈](https://github.com/CMMUU/leigod-guard/issues)
+[Gitee 国内下载](https://gitee.com/cmmuu/leigod-guard/releases) · [GitHub 安装版（推荐）](https://github.com/CMMUU/leigod-guard/releases/download/v0.8.3/leigod-guard-v0.8.3-windows-x64-setup.exe) · [下载绿色免安装版](https://github.com/CMMUU/leigod-guard/releases/download/v0.8.3/leigod-guard-v0.8.3-windows-x64.zip) · [全部下载与校验文件](https://github.com/CMMUU/leigod-guard/releases/latest) · [版本记录](CHANGELOG.md) · [隐私与本地数据](docs/PRIVACY.md) · [问题反馈](https://github.com/CMMUU/leigod-guard/issues)
 
 Leigod Guard is an unofficial, open-source Windows companion for the Leigod game accelerator. It helps save unused paid time after a game ends or when you reboot for other tasks. Startup protection waits 3 minutes by default; choose “Preparing to play” to defer it for 10 minutes. Detecting a configured game switches to normal game-exit monitoring, with a separate 90-second grace period. Installer, portable downloads, and in-app updates are available.
 
@@ -20,7 +20,7 @@ Leigod Guard is an unofficial, open-source Windows companion for the Leigod game
 2. **加入游戏名单**：从常用游戏下拉列表选择预设，或自定义进程文件名；也可启动游戏后用「从运行进程选择…」确认实际进程。加速与线路选择仍在雷神官方客户端操作。**首次启动时名单为空，配置后若要执行启动检查，请完全退出并重新打开本工具**；无需重新启动电脑。正常游戏退出监控在名单有效、总开关开启且观察到游戏运行后，当次即可工作。
 3. **后台守护计时**：保持工具运行，按下方「自动暂停规则」检查游戏。准备开玩时，可在尚未结束的启动检查中点击「准备游戏，延后10分钟」。暂停后，打开雷神官方微信小程序，登录同一账号并下拉刷新，核对计时状态。
 
-**0.8.2 新增 Gitee / GitHub 双更新来源，国内网络可在「关于与更新」选择 Gitee。** 启动暂停默认开启并等待 3 分钟，游戏加加屏蔽默认关闭；可在「策略」调整启动等待或关闭「启动时无游戏运行则暂停计时」。这里的“游戏”指名单中的游戏，工具无法追回已经消耗的时长。
+**0.8.3 修复开启游戏加加屏蔽后可能出现的「损坏的映像」弹窗；支持 Gitee / GitHub 双更新来源，国内网络可在「关于与更新」选择 Gitee。** 启动暂停默认开启并等待 3 分钟，游戏加加屏蔽默认关闭；可在「策略」调整启动等待或关闭「启动时无游戏运行则暂停计时」。这里的“游戏”指名单中的游戏，工具无法追回已经消耗的时长。
 
 安装、验证码、托盘操作和更新方法见下方「下载与首次使用」。
 
@@ -97,7 +97,7 @@ Leigod Guard is an unofficial, open-source Windows companion for the Leigod game
 
 未列出的游戏请选择「自定义 / 手动填写」，或使用「从运行进程选择…」。请用本机实际游戏进程核对预设，特别留意区服、启动平台和客户端版本差异；同一进程不必重复添加。预设只减少输入，不表示已经逐款通过真实游戏、雷神账户暂停或反作弊兼容性测试。
 
-各项文件名的参考资料见 [预设定义与来源](https://github.com/CMMUU/leigod-guard/blob/v0.8.2/src/game_presets.rs)。其中 CS2、守望先锋参考了发行方项目或论坛中的用户运行日志，这些记录不代表发行方对本工具的兼容性认证。
+各项文件名的参考资料见 [预设定义与来源](https://github.com/CMMUU/leigod-guard/blob/v0.8.3/src/game_presets.rs)。其中 CS2、守望先锋参考了发行方项目或论坛中的用户运行日志，这些记录不代表发行方对本工具的兼容性认证。
 
 ## 适用范围
 
@@ -137,12 +137,12 @@ Windows 10 / 11 x64 是当前支持目标，并不表示所有系统版本、驱
 
 | 版本 | 下载后怎样使用 | 适合谁 |
 | --- | --- | --- |
-| [安装版 EXE](https://github.com/CMMUU/leigod-guard/releases/download/v0.8.2/leigod-guard-v0.8.2-windows-x64-setup.exe) | 双击安装，按需自动补装 WebView2，提供快捷方式和卸载入口 | 普通用户，推荐 |
-| [绿色免安装版 ZIP](https://github.com/CMMUU/leigod-guard/releases/download/v0.8.2/leigod-guard-v0.8.2-windows-x64.zip) | 解压到固定且可写的目录，运行 `leigod-guard.exe`；验证码需要已有 WebView2 Runtime | 希望自行管理程序目录的用户 |
+| [安装版 EXE](https://github.com/CMMUU/leigod-guard/releases/download/v0.8.3/leigod-guard-v0.8.3-windows-x64-setup.exe) | 双击安装，按需自动补装 WebView2，提供快捷方式和卸载入口 | 普通用户，推荐 |
+| [绿色免安装版 ZIP](https://github.com/CMMUU/leigod-guard/releases/download/v0.8.3/leigod-guard-v0.8.3-windows-x64.zip) | 解压到固定且可写的目录，运行 `leigod-guard.exe`；验证码需要已有 WebView2 Runtime | 希望自行管理程序目录的用户 |
 
 两种版本功能相同，都支持应用内更新。这里的「绿色免安装」指不需要安装向导：配置和日志仍保存在 `%APPDATA%\leigod-guard\`；若主动开启开机自启，也会写入当前用户的 Windows 自启注册表项。它不是将所有数据保存到程序目录、完全不写注册表的移动应用。
 
-1. 下载 [Windows x64 安装包](https://github.com/CMMUU/leigod-guard/releases/download/v0.8.2/leigod-guard-v0.8.2-windows-x64-setup.exe)：`leigod-guard-v0.8.2-windows-x64-setup.exe`。页面中的 `Source code` 是源码，不是安装程序。
+1. 下载 [Windows x64 安装包](https://github.com/CMMUU/leigod-guard/releases/download/v0.8.3/leigod-guard-v0.8.3-windows-x64-setup.exe)：`leigod-guard-v0.8.3-windows-x64-setup.exe`。页面中的 `Source code` 是源码，不是安装程序。
 2. 双击安装包，按向导完成安装，然后从开始菜单或桌面快捷方式打开「雷神守护」。**不需要解压或手动配置运行库。** 安装器会在需要时自动安装验证码窗口所需的 WebView2 Runtime；首次补装运行时需要联网。
 3. 打开「账户」页，用自己的雷神账户登录。提供密码、短信验证码和已有 token 三种方式；遇到人机验证时按窗口提示完成。不要把密码、短信验证码或 token 发到 Issues。
 4. 打开「游戏名单」，从「常用游戏」下拉列表选择游戏；未列出的游戏可选择「自定义 / 手动填写」，或先启动一次游戏，再用「从运行进程选择…」选择真正的游戏进程。请核对预设文件名与本机实际进程是否一致；自定义时填写例如 `ExampleGame.exe` 的文件名，不填完整路径、桌面快捷方式名称或 `*.exe`。
@@ -155,7 +155,7 @@ Windows 10 / 11 x64 是当前支持目标，并不表示所有系统版本、驱
 
 WebView2 Runtime 适用独立的 [微软许可条款](licenses/webview2-runtime/LICENSE.txt)。安装向导会展示相应条款；其中默认启用的 Microsoft Defender SmartScreen 会按微软隐私声明处理并向微软发送信息，详见 [隐私说明](docs/PRIVACY.md)。
 
-绿色免安装版下载文件为 `leigod-guard-v0.8.2-windows-x64.zip`，请完整解压后运行，不要直接从 ZIP 预览窗口启动。该版本不提供安装和卸载向导；普通用户建议使用上面的安装版。
+绿色免安装版下载文件为 `leigod-guard-v0.8.3-windows-x64.zip`，请完整解压后运行，不要直接从 ZIP 预览窗口启动。该版本不提供安装和卸载向导；普通用户建议使用上面的安装版。
 
 ### 应用内更新
 
@@ -190,7 +190,7 @@ GitHub 是主发布源；配置发布凭据后，自动同步任务会把同一�
 在下载目录的 PowerShell 中运行：
 
 ```powershell
-Get-FileHash .\leigod-guard-v0.8.2-windows-x64-setup.exe -Algorithm SHA256
+Get-FileHash .\leigod-guard-v0.8.3-windows-x64-setup.exe -Algorithm SHA256
 ```
 
 将结果与同一 Release 提供的 `SHA256SUMS.txt` 中相同文件名的记录核对。便携 ZIP 也可用同样方式校验。哈希校验用于确认下载内容一致，不等同于 Windows 代码签名。
@@ -224,6 +224,12 @@ Get-FileHash .\leigod-guard-v0.8.2-windows-x64-setup.exe -Algorithm SHA256
 此功能使用 Windows 严格的进程 DLL 加载策略，同时会阻止其他不属于 Microsoft、Microsoft Store 或 WHQL 信任范围的 DLL，可能影响其他 OSD、录屏或输入法插件。如雷神守护出现启动或显示异常，请关闭该选项并完全退出后重新打开。当前仅在 GamePP SDK 1.2.1615.625 与 NVIDIA 显卡环境实测阻止游戏加加注入；AMD、Intel 显卡环境尚未覆盖，是否成功屏蔽请以策略页状态及本机实测为准。
 
 如果开启后窗口完全无法显示，请确认本工具进程已经退出，用记事本打开 `%APPDATA%\leigod-guard\config.toml`，将 `block_gamepp_injection = true` 改为 `false` 后再启动；删除这一行也会恢复默认关闭。不要改动同一文件中的账户密文。
+
+**开启屏蔽后提示 `GPP64.dll`「损坏的映像 / 0xc0000428」？**
+
+0.8.1 / 0.8.2 开启严格屏蔽时，Windows 可能在拒绝游戏加加 DLL 注入的同时弹出此提示；它不一定意味着文件损坏。该错误也可能由 DLL 未满足进程的签名要求引起，微软的 [Code Integrity Guard 说明](https://learn.microsoft.com/en-us/officeupdates/current-channel#version-2412-january-07) 解释了这一行为。
+
+请更新到 0.8.3 或更高版本：程序在创建受保护进程前设置错误处理，阻止注入的同时让加载失败直接返回，避免该系统弹窗阻塞。旧版临时处理可在「策略」关闭游戏加加屏蔽，再从托盘完全退出雷神守护并重新打开；窗口无法打开时按上一段修改配置即可。无需删除游戏加加 DLL 或调整 Windows 的系统签名策略。如果新版仍有异常，请反馈版本号、错误码和 DLL 文件名。
 
 **登录失效或验证码出不来？**
 

@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing stable release tag, for example v0.8.2
+        description: Existing stable release tag, for example v0.8.3
         required: true
         type: string
 
