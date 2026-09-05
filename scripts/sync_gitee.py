@@ -76,6 +76,18 @@ def validate_pair(repo, source, target):
         for field, matches in (("path", path_matches), ("html_url", url_matches)):
             state = "matches" if matches else "missing" if not target.get(field) else "differs"
             details.append(f"{field}={state}")
+        if not url_matches:
+            try:
+                parts = urlsplit(str(target.get("html_url", "")))
+                scheme = parts.scheme if parts.scheme in {"http", "https"} else "other"
+                host_matches = parts.hostname == "gitee.com"
+                repository_matches = parts.path.rstrip("/").casefold() == f"/{GE_OWNER}/{repo}".casefold()
+                details.extend((f"url_scheme={scheme}", f"url_host_matches={host_matches}",
+                                f"url_repository_matches={repository_matches}",
+                                f"url_has_query={bool(parts.query)}", f"url_has_fragment={bool(parts.fragment)}",
+                                f"url_has_userinfo={parts.username is not None}", f"url_has_port={parts.port is not None}"))
+            except ValueError:
+                details.append("url_format=invalid")
         raise SyncError("Gitee target path does not match the requested scope (" + ", ".join(details) + ")")
     if source["private"] and not target["private"]:
         raise SyncError("Private GitHub source must never synchronize to a public Gitee target")
