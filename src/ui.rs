@@ -11,7 +11,10 @@ use crate::osd;
 use crate::shared::{ManualCmd, Shared};
 use crate::ui_home::{HomeAction, HomeState};
 use crate::ui_theme::{self as theme, Icon};
-use crate::updater::{DownloadProgress, DownloadedUpdate, PackageKind, ReleaseInfo, UpdateSource};
+use crate::updater::{
+    DownloadProgress, DownloadedUpdate, PackageKind, UpdateCheck, UpdateMode, UpdatePlan,
+    UpdateSource,
+};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
@@ -30,7 +33,8 @@ enum Page {
 }
 
 enum UpdateEvent {
-    Checked(UpdateSource, Result<Option<ReleaseInfo>, String>),
+    Checked(Result<UpdateCheck, String>),
+    SourceChanged(UpdateSource, bool),
     Progress(DownloadProgress),
     Downloaded(Result<DownloadedUpdate, String>),
     PreparationFailed(String),
@@ -52,7 +56,7 @@ pub struct App {
     status_msg: String,
 
     update_events: Option<Receiver<UpdateEvent>>,
-    update_release: Option<ReleaseInfo>,
+    update_release: Option<UpdatePlan>,
     update_kind: Result<PackageKind, String>,
     update_busy: bool,
     update_preparing: Arc<AtomicBool>,
@@ -672,8 +676,8 @@ impl App {
         self.update_message = format!("正在通过 {} 检查新版本…", source.label());
         self.update_error = false;
         std::thread::spawn(move || {
-            let result = crate::updater::check_latest(env!("CARGO_PKG_VERSION"), source);
-            let _ = sender.send(UpdateEvent::Checked(source, result));
+            let result = crate::updater::check_for_updates(env!("CARGO_PKG_VERSION"), source);
+            let _ = sender.send(UpdateEvent::Checked(result));
             ctx.request_repaint();
         });
     }
@@ -691,7 +695,7 @@ impl App {
                 return;
             }
         };
-        let Some(release) = self.update_release.clone() else {
+        let Some(plan) = self.update_release.clone() else {
             return;
         };
         if self.pending_captcha != 0 {
@@ -703,14 +707,26 @@ impl App {
         self.update_events = Some(receiver);
         self.update_busy = true;
         self.update_progress = None;
-        self.update_message = format!("正在下载 v{}，下载完成后将校验并更新…", release.version);
+        self.update_message = format!(
+            "正在下载 v{}，下载完成后将校验并更新…",
+            plan.release.version
+        );
         self.update_error = false;
         std::thread::spawn(move || {
             let result = crate::update_apply::create_staging().and_then(|staging| {
-                crate::updater::download_update(&release, kind, &staging, &|progress| {
-                    let _ = sender.send(UpdateEvent::Progress(progress));
-                    ctx.request_repaint();
-                })
+                crate::updater::download_planned_update(
+                    &plan,
+                    kind,
+                    &staging,
+                    &|progress| {
+                        let _ = sender.send(UpdateEvent::Progress(progress));
+                        ctx.request_repaint();
+                    },
+                    &|source, switched| {
+                        let _ = sender.send(UpdateEvent::SourceChanged(source, switched));
+                        ctx.request_repaint();
+                    },
+                )
             });
             let succeeded = result.is_ok();
             if sender.send(UpdateEvent::Downloaded(result)).is_ok() && succeeded {
@@ -731,25 +747,37 @@ impl App {
             .unwrap_or_default();
         for event in events {
             match event {
-                UpdateEvent::Checked(source, result) => {
+                UpdateEvent::Checked(result) => {
                     self.update_events = None;
                     self.update_busy = false;
                     match result {
-                        Ok(Some(release)) => {
-                            self.update_message =
-                                format!("{} 发现新版本 v{}", source.label(), release.version);
-                            self.update_release = Some(release);
-                            self.update_error = false;
-                        }
-                        Ok(None) => {
-                            self.update_message = format!("{} 暂无更高的正式版本。各来源同步可能有延迟，可切换来源后重新检查。", source.label());
-                            self.update_release = None;
-                            self.update_error = false;
+                        Ok(report) => {
+                            self.update_message = report.message;
+                            self.update_release = report.plan;
+                            self.update_error = report.partial;
                         }
                         Err(message) => {
                             self.update_message = message;
                             self.update_error = true;
                         }
+                    }
+                }
+                UpdateEvent::SourceChanged(source, switched) => {
+                    self.update_progress = None;
+                    if let Some(plan) = &self.update_release {
+                        self.update_message = if switched {
+                            format!(
+                                "下载未完成，正在尝试 {} 的同版本 v{} 文件，校验通过后才会更新…",
+                                source.label(),
+                                plan.release.version
+                            )
+                        } else {
+                            format!(
+                                "正在从 {} 下载 v{}，下载完成后将校验并更新…",
+                                source.label(),
+                                plan.release.version
+                            )
+                        };
                     }
                 }
                 UpdateEvent::Progress(progress) => self.update_progress = Some(progress),
@@ -1985,13 +2013,11 @@ impl App {
                     ui.horizontal_wrapped(|ui| {
                         ui.label("更新来源：");
                         egui::ComboBox::from_id_salt("update_source")
-                            .selected_text(match config.updates.source {
-                                UpdateSource::GitHub => "GitHub",
-                                UpdateSource::Gitee => "Gitee（国内）",
-                            })
+                            .selected_text(config.updates.source.label())
                             .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut config.updates.source, UpdateSource::GitHub, "GitHub");
-                                ui.selectable_value(&mut config.updates.source, UpdateSource::Gitee, "Gitee（国内）");
+                                for mode in [UpdateMode::Auto, UpdateMode::Gitee, UpdateMode::GitHub] {
+                                    ui.selectable_value(&mut config.updates.source, mode, mode.label());
+                                }
                             });
                     });
                 });
@@ -2007,7 +2033,7 @@ impl App {
                 }
             }
             ui.label(egui::RichText::new(
-                "国内网络可选择 Gitee。版本检查、安装包和校验文件均使用所选来源；启动检查默认关闭，只有点击更新才会下载和安装。"
+                "自动选择会检查两个来源，选择可用的新版本，同版本优先 Gitee，下载失败后尝试备用源。选择“仅 Gitee”或“仅 GitHub”时，只连接该来源。启动检查默认关闭，点击更新后才会下载并安装。"
             ).weak().small());
             ui.add_space(8.0);
             ui.horizontal_wrapped(|ui| {
@@ -2038,12 +2064,16 @@ impl App {
                     ui.spinner();
                 }
             }
-            if let Some(release) = self.update_release.clone() {
+            if let Some(plan) = self.update_release.clone() {
+                let release = &plan.release;
                 ui.add_space(12.0);
                 ui.separator();
                 ui.add_space(8.0);
                 ui.heading(format!("可更新至 v{}", release.version));
-                ui.label(format!("此次下载来源：{}", release.source.label()));
+                ui.label(format!("首选下载来源：{}", release.source.label()));
+                if plan.automatic() {
+                    ui.label("备用源必须提供同一版本、同一安装方式和相同校验值的文件；不会换装旧版或混用下载内容。");
+                }
                 ui.label("更新会保留配置和当前使用方式：安装版继续使用安装版，绿色版继续免安装。");
                 ui.label("点击后会下载并校验文件，再关闭当前程序完成更新并重新打开。监控会短暂停止；更新程序本身不暂停计时，重新打开后按启动设置等待并检查。");
                 ui.add_space(8.0);

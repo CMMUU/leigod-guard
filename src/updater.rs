@@ -4,6 +4,12 @@
 //! decides when to call it; the separate helper applies a verified package only
 //! after an explicit user action.
 
+#[path = "update_sources.rs"]
+mod update_sources;
+pub use update_sources::{
+    check_for_updates, download_planned_update, UpdateCheck, UpdateMode, UpdatePlan,
+};
+
 use reqwest::blocking::{Client, Response};
 use reqwest::redirect::Policy;
 use reqwest::{StatusCode, Url};
@@ -14,13 +20,14 @@ use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use windows::core::PCWSTR;
 use windows::Win32::Storage::FileSystem::MoveFileW;
 
 pub const RELEASES_PAGE: &str = "https://github.com/CMMUU/leigod-guard/releases/latest";
 pub const GITEE_RELEASES_PAGE: &str = "https://gitee.com/cmmuu/leigod-guard/releases";
 const LATEST_API: &str = "https://api.github.com/repos/CMMUU/leigod-guard/releases/latest";
+const TAG_API_PREFIX: &str = "https://api.github.com/repos/CMMUU/leigod-guard/releases/tags/";
 const ASSET_API_PREFIX: &str = "https://api.github.com/repos/CMMUU/leigod-guard/releases/assets/";
 const REPOSITORY: &str = "https://github.com/CMMUU/leigod-guard";
 const GITEE_REPOSITORY: &str = "https://gitee.com/cmmuu/leigod-guard";
@@ -144,20 +151,36 @@ struct GiteeAttachment {
 
 /// Checks the public repository without credentials. `None` includes equal,
 /// older, draft and prerelease versions; malformed metadata is an error.
-pub fn check_latest(
+#[cfg(test)]
+fn check_latest(
     current_version: &str,
     source: UpdateSource,
+) -> Result<Option<ReleaseInfo>, String> {
+    check_latest_before(current_version, source, Instant::now() + METADATA_TIMEOUT)
+}
+
+fn remaining(deadline: Instant) -> Result<Duration, String> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|duration| !duration.is_zero())
+        .ok_or_else(|| "检查更新源超时，请稍后重试。".into())
+}
+
+fn check_latest_before(
+    current_version: &str,
+    source: UpdateSource,
+    deadline: Instant,
 ) -> Result<Option<ReleaseInfo>, String> {
     (|| {
         parse_version(current_version)?;
         if source == UpdateSource::Gitee {
-            return check_gitee(current_version);
+            return check_gitee(current_version, None, deadline);
         }
         let response = client(source)?
             .get(LATEST_API)
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28")
-            .timeout(METADATA_TIMEOUT)
+            .timeout(remaining(deadline)?)
             .send()
             .map_err(network_error)?;
         // A new public repository can legitimately have no release yet.
@@ -170,14 +193,36 @@ pub fn check_latest(
     .map_err(|message| with_manual_fallback(message, source))
 }
 
-fn check_gitee(current_version: &str) -> Result<Option<ReleaseInfo>, String> {
+fn check_gitee(
+    current_version: &str,
+    tag: Option<&str>,
+    deadline: Instant,
+) -> Result<Option<ReleaseInfo>, String> {
     let client = client(UpdateSource::Gitee)?;
     let response = client
         .get(GITEE_RELEASES_API)
+        .timeout(remaining(deadline)?)
         .send()
         .map_err(network_error)?;
     let bytes = read_response(response, MAX_METADATA_BYTES, None)?;
-    let Some(release) = latest_gitee_release(&bytes, current_version)? else {
+    let release = if let Some(tag) = tag {
+        let releases: Vec<GiteeRelease> = serde_json::from_slice(&bytes)
+            .map_err(|_| "Gitee 返回的版本信息格式异常。".to_string())?;
+        if releases.len() > 100 {
+            return Err("Gitee 发布列表数量异常。".into());
+        }
+        let mut matching = releases
+            .into_iter()
+            .filter(|r| r.tag_name == tag && !r.draft && !r.prerelease);
+        let found = matching.next();
+        if matching.next().is_some() {
+            return Err("Gitee 目标版本重复，已停止更新。".into());
+        }
+        found
+    } else {
+        latest_gitee_release(&bytes, current_version)?
+    };
+    let Some(release) = release else {
         return Ok(None);
     };
     if release.id == 0 {
@@ -190,10 +235,36 @@ fn check_gitee(current_version: &str) -> Result<Option<ReleaseInfo>, String> {
             "{GITEE_API}/{}/attach_files?per_page=100",
             release.id
         ))
+        .timeout(remaining(deadline)?)
         .send()
         .map_err(network_error)?;
     let bytes = read_response(response, MAX_METADATA_BYTES, None)?;
     gitee_release_from_json(release, &bytes).map(Some)
+}
+
+/// Fallback resolves the pinned tag, never the moving latest release.
+fn check_tag(tag: &str, source: UpdateSource) -> Result<Option<ReleaseInfo>, String> {
+    parse_version(tag.strip_prefix('v').ok_or("目标版本格式异常。")?)?;
+    let deadline = Instant::now() + update_sources::CHECK_TIMEOUT;
+    let found = if source == UpdateSource::Gitee {
+        check_gitee("0.0.0", Some(tag), deadline)?
+    } else {
+        let response = client(source)?
+            .get(format!("{TAG_API_PREFIX}{tag}"))
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .timeout(remaining(deadline)?)
+            .send()
+            .map_err(network_error)?;
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        release_from_json(&read_response(response, MAX_METADATA_BYTES, None)?, "0.0.0")?
+    };
+    if found.as_ref().is_some_and(|release| release.tag != tag) {
+        return Err("备用源返回了其他版本，已停止更新，请重新检查。".into());
+    }
+    Ok(found)
 }
 
 fn latest_gitee_release(
@@ -323,13 +394,14 @@ fn gitee_asset_url(release_id: u64, asset_id: u64) -> String {
 
 /// Downloads into an existing, unique directory created by the caller. Existing
 /// files are never reused or overwritten. Only a fully verified file is returned.
-pub fn download_update(
+#[cfg(test)]
+fn download_update(
     release: &ReleaseInfo,
     kind: PackageKind,
     staging_dir: &Path,
     progress: &dyn Fn(DownloadProgress),
 ) -> Result<DownloadedUpdate, String> {
-    download_inner(release, kind, staging_dir, progress)
+    download_inner(release, kind, staging_dir, &mut None, progress)
         .map_err(|message| with_manual_fallback(message, release.source))
 }
 
@@ -337,6 +409,7 @@ fn download_inner(
     release: &ReleaseInfo,
     kind: PackageKind,
     staging_dir: &Path,
+    pinned_hash: &mut Option<String>,
     progress: &dyn Fn(DownloadProgress),
 ) -> Result<DownloadedUpdate, String> {
     // Recheck the binding because public display fields may have been changed by
@@ -383,6 +456,9 @@ fn download_inner(
     }
 
     let client = client(release.source)?;
+    if let Some(digest) = &asset.digest {
+        pin_checksum(pinned_hash, &parse_api_digest(digest)?)?;
+    }
     let checksum_response = asset_response(
         &client,
         &release.checksums,
@@ -398,6 +474,7 @@ fn download_inner(
     let checksum_text = std::str::from_utf8(&checksum_bytes)
         .map_err(|_| "更新校验清单不是有效文本，已停止更新。".to_string())?;
     let expected_hash = checksum_for(checksum_text, &asset.name)?;
+    pin_checksum(pinned_hash, &expected_hash)?;
     if let Some(digest) = &asset.digest {
         let api_hash = parse_api_digest(digest)?;
         verify_hash(&api_hash, &expected_hash)?;
@@ -460,11 +537,15 @@ fn copy_verified(
     let mut hasher = Sha256::new();
     let mut downloaded = 0_u64;
     let mut buffer = [0_u8; 64 * 1024];
+    let deadline = Instant::now() + DOWNLOAD_TIMEOUT;
     progress(DownloadProgress {
         downloaded,
         total: Some(expected_size),
     });
     loop {
+        if Instant::now() >= deadline {
+            return Err("下载超过单个来源的时间上限，请重试。".into());
+        }
         let length = reader
             .read(&mut buffer)
             .map_err(|_| "下载中断或超时，请检查网络后重试。".to_string())?;
@@ -505,7 +586,7 @@ fn client(source: UpdateSource) -> Result<Client, String> {
     Client::builder()
         .user_agent(concat!("LeigodGuard/", env!("CARGO_PKG_VERSION")))
         .https_only(true)
-        .connect_timeout(Duration::from_secs(15))
+        .connect_timeout(Duration::from_secs(5))
         .timeout(METADATA_TIMEOUT)
         .redirect(Policy::custom(move |attempt| {
             if attempt.previous().len() >= 5 {
@@ -532,9 +613,7 @@ fn asset_response(
         if !trusted_source_redirect(source, &url) {
             return Err("Gitee 附件地址与本项目不符，已停止更新。".into());
         }
-        return client
-            .get(url)
-            .timeout(timeout)
+        return bounded_asset_request(client.get(url), timeout)
             .send()
             .map_err(network_error);
     }
@@ -546,13 +625,42 @@ fn asset_response(
     // its release storage (302). This avoids requiring a connection to the web
     // frontend at github.com when that route is unavailable.
     // https://docs.github.com/en/rest/releases/assets#get-a-release-asset
-    client
-        .get(&asset.url)
-        .header("Accept", "application/octet-stream")
-        .header("X-GitHub-Api-Version", "2022-11-28")
-        .timeout(timeout)
-        .send()
-        .map_err(network_error)
+    bounded_asset_request(
+        client
+            .get(&asset.url)
+            .header("Accept", "application/octet-stream")
+            .header("X-GitHub-Api-Version", "2022-11-28"),
+        timeout,
+    )
+    .send()
+    .map_err(network_error)
+}
+
+fn bounded_asset_request(
+    request: reqwest::blocking::RequestBuilder,
+    timeout: Duration,
+) -> reqwest::blocking::RequestBuilder {
+    if timeout == DOWNLOAD_TIMEOUT {
+        // reqwest 0.12 blocking Client's 30-second timeout bounds the response
+        // headers and each Read. An explicit Request timeout also caps the whole
+        // async body, so leave it unset for progressing, slow package downloads.
+        // copy_verified separately caps total transfer time at 10 minutes.
+        request
+    } else {
+        request.timeout(timeout)
+    }
+}
+
+fn pin_checksum(pinned: &mut Option<String>, hash: &str) -> Result<(), String> {
+    if !valid_hash(hash) {
+        return Err("更新文件校验值无效。".into());
+    }
+    if let Some(expected) = pinned {
+        verify_hash(hash, expected)?;
+    } else {
+        *pinned = Some(hash.to_ascii_lowercase());
+    }
+    Ok(())
 }
 
 fn network_error(error: reqwest::Error) -> String {
@@ -807,6 +915,12 @@ fn trusted_redirect(url: &Url) -> bool {
     match url.host_str() {
         Some("api.github.com") => {
             url.as_str() == LATEST_API
+                || (url.query().is_none()
+                    && url
+                        .as_str()
+                        .strip_prefix(TAG_API_PREFIX)
+                        .and_then(|tag| tag.strip_prefix('v'))
+                        .is_some_and(|version| parse_version(version).is_ok()))
                 || url
                     .as_str()
                     .strip_prefix(ASSET_API_PREFIX)
@@ -892,7 +1006,7 @@ mod tests {
     use super::*;
     use serde_json::{json, Value};
 
-    fn fixture_release(tag: &str) -> Value {
+    pub(super) fn fixture_release(tag: &str) -> Value {
         let names = [
             package_name(tag, PackageKind::Installer),
             package_name(tag, PackageKind::Portable),
@@ -918,8 +1032,78 @@ mod tests {
         })
     }
 
-    fn parse_fixture(release: &Value, current: &str) -> Result<Option<ReleaseInfo>, String> {
+    pub(super) fn parse_fixture(
+        release: &Value,
+        current: &str,
+    ) -> Result<Option<ReleaseInfo>, String> {
         release_from_json(&serde_json::to_vec(release).unwrap(), current)
+    }
+
+    #[test]
+    fn package_reads_allow_continuous_progress_but_time_out_when_stalled() {
+        use std::net::TcpListener;
+        // Loopback-only inert bytes verify blocking reqwest's timeout contract.
+        // No accounts, public release downloads, or executable files are used.
+        for stalled in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/fixture", listener.local_addr().unwrap());
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                stream
+                    .set_write_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    let mut byte = [0];
+                    stream.read_exact(&mut byte).unwrap();
+                    request.push(byte[0]);
+                    assert!(request.len() < 8192);
+                }
+                stream
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\na",
+                    )
+                    .unwrap();
+                for byte in [b'b', b'c'] {
+                    std::thread::sleep(Duration::from_millis(if stalled { 1400 } else { 700 }));
+                    if stream.write_all(&[byte]).is_err() {
+                        break;
+                    }
+                    if stalled {
+                        break;
+                    }
+                }
+            });
+            let client = Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(1))
+                .build()
+                .unwrap();
+            let request = bounded_asset_request(client.get(&url), DOWNLOAD_TIMEOUT)
+                .build()
+                .unwrap();
+            assert!(
+                request.timeout().is_none(),
+                "package body must use the per-read timeout"
+            );
+            let mut response = client.execute(request).unwrap();
+            let mut bytes = Vec::new();
+            let result = response.read_to_end(&mut bytes);
+            server.join().unwrap();
+            if stalled {
+                assert!(result.is_err(), "stalled source must yield to the backup");
+            } else {
+                result.unwrap();
+                assert_eq!(bytes, b"abc");
+            }
+            let metadata = bounded_asset_request(client.get(&url), METADATA_TIMEOUT)
+                .build()
+                .unwrap();
+            assert_eq!(metadata.timeout(), Some(&METADATA_TIMEOUT));
+        }
     }
 
     #[test]
@@ -1028,6 +1212,7 @@ mod tests {
             "https://objects.githubusercontent.com/github-production-release-asset/abc?sig=123",
             "https://github-releases.githubusercontent.com/abc?sig=123",
             "https://api.github.com/repos/CMMUU/leigod-guard/releases/assets/12345",
+            "https://api.github.com/repos/CMMUU/leigod-guard/releases/tags/v0.10.0",
             LATEST_API,
         ] {
             assert!(trusted_redirect(&Url::parse(url).unwrap()), "rejected {url}");
@@ -1040,6 +1225,9 @@ mod tests {
             "https://cmmuu.github.io/a",
             "https://github.com/attacker/leigod-guard/releases/download/a",
             "https://api.github.com/repos/attacker/leigod-guard/releases/latest",
+            "https://api.github.com/repos/attacker/leigod-guard/releases/tags/v0.10.0",
+            "https://api.github.com/repos/CMMUU/leigod-guard/releases/tags/v00.10.0",
+            "https://api.github.com/repos/CMMUU/leigod-guard/releases/tags/v0.10.0?redirect=anything",
             "https://api.github.com/repos/attacker/leigod-guard/releases/assets/12345",
             "https://api.github.com/repos/CMMUU/leigod-guard/releases/assets/0",
             "https://api.github.com/repos/CMMUU/leigod-guard/releases/assets/01",
@@ -1146,7 +1334,7 @@ mod tests {
         assert!(parse_fixture(&fixture, "0.6.0").unwrap().is_none());
     }
 
-    fn gitee_fixture(tag: &str) -> (Value, Value) {
+    pub(super) fn gitee_fixture(tag: &str) -> (Value, Value) {
         let names = [
             package_name(tag, PackageKind::Installer),
             package_name(tag, PackageKind::Portable),
@@ -1162,7 +1350,10 @@ mod tests {
         )
     }
 
-    fn parse_gitee_fixture(release: Value, attachments: Value) -> Result<ReleaseInfo, String> {
+    pub(super) fn parse_gitee_fixture(
+        release: Value,
+        attachments: Value,
+    ) -> Result<ReleaseInfo, String> {
         gitee_release_from_json(
             serde_json::from_value(release).unwrap(),
             &serde_json::to_vec(&attachments).unwrap(),

@@ -111,8 +111,8 @@ pub struct Account {
 pub struct Updates {
     /// 仅检查公开版本信息；下载安装仍需用户点击。
     pub check_on_startup: bool,
-    /// 检查和下载使用同一来源；旧配置保持 GitHub。
-    pub source: crate::updater::UpdateSource,
+    /// 缺省为国内优先的自动选择；保留旧配置中明确保存的来源。
+    pub source: crate::updater::UpdateMode,
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
@@ -135,7 +135,7 @@ mod tests {
     fn older_config_does_not_enable_update_requests() {
         let cfg: Config = toml::from_str("games = []\nplans = []\n").unwrap();
         assert!(!cfg.updates.check_on_startup);
-        assert_eq!(cfg.updates.source, crate::updater::UpdateSource::GitHub);
+        assert_eq!(cfg.updates.source, crate::updater::UpdateMode::Auto);
         assert!(cfg.strategy.enabled);
     }
 
@@ -143,15 +143,31 @@ mod tests {
     fn update_preference_survives_serialization() {
         let mut cfg = Config::default();
         cfg.updates.check_on_startup = true;
-        cfg.updates.source = crate::updater::UpdateSource::Gitee;
+        cfg.updates.source = crate::updater::UpdateMode::Gitee;
         let text = toml::to_string(&cfg).unwrap();
         let restored: Config = toml::from_str(&text).unwrap();
         assert!(restored.updates.check_on_startup);
-        assert_eq!(restored.updates.source, crate::updater::UpdateSource::Gitee);
+        assert_eq!(restored.updates.source, crate::updater::UpdateMode::Gitee);
         let legacy: Config =
             toml::from_str("games = []\nplans = []\n[updates]\ncheck_on_startup = true\n").unwrap();
         assert!(legacy.updates.check_on_startup);
-        assert_eq!(legacy.updates.source, crate::updater::UpdateSource::GitHub);
+        assert_eq!(legacy.updates.source, crate::updater::UpdateMode::Auto);
+    }
+
+    #[test]
+    fn saved_sources_remain_explicit_and_auto_round_trips() {
+        for (value, expected) in [
+            ("github", crate::updater::UpdateMode::GitHub),
+            ("gitee", crate::updater::UpdateMode::Gitee),
+            ("auto", crate::updater::UpdateMode::Auto),
+        ] {
+            let text = format!("games = []\nplans = []\n[updates]\nsource = '{value}'\n");
+            let config: Config = toml::from_str(&text).unwrap();
+            assert_eq!(config.updates.source, expected);
+            assert!(!config.updates.check_on_startup);
+            let restored: Config = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+            assert_eq!(restored.updates.source, expected);
+        }
     }
 
     #[test]
