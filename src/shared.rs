@@ -22,6 +22,9 @@ pub struct Shared {
     pub status: String,
     /// 当前检测到的在运行名单游戏
     pub running_games: Vec<String>,
+    /// Latest successful basename-only process observation for the UI.
+    /// None means uninitialized or failed; never display it as all games stopped.
+    pub process_snapshot: Option<Vec<String>>,
     /// 滚动日志
     pub logs: VecDeque<String>,
     /// 需要弹窗告警的消息（暂停/恢复失败等），UI 线程取出后弹窗
@@ -50,6 +53,7 @@ impl Default for Shared {
         Self {
             status: "初始化…".into(),
             running_games: Vec::new(),
+            process_snapshot: None,
             logs: VecDeque::with_capacity(500),
             alert: None,
             account_status: "未登录".into(),

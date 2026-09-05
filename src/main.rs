@@ -15,6 +15,8 @@ mod osd;
 mod shared;
 mod shutdown;
 mod ui;
+mod ui_home;
+mod ui_theme;
 mod update_apply;
 mod updater;
 mod worker;
@@ -107,12 +109,12 @@ fn main() {
         renderer: eframe::Renderer::Wgpu,
         // 关闭窗口几何持久化：eframe persistence 会把调试期间的残废窗口尺寸
         // 存进 app.ron 并在之后每次启动恢复，导致窗口越开越小。
-        // 关掉后永远按 with_inner_size([940, 660]) 的默认大小打开。
+        // 关掉后按设计默认尺寸打开，仍允许缩放到紧凑布局。
         persist_window: false,
         viewport: egui::ViewportBuilder::default()
-            // 默认固定打开 940x660（winit 0.30 在 Windows 下 with_resizable(false)
+            // 默认打开 1180x780（winit 0.30 在 Windows 下 with_resizable(false)
             // 和 min=max 都会把窗口压成 70x90 的残废尺寸，只能用默认大小约束）
-            .with_inner_size([940.0, 660.0])
+            .with_inner_size([1180.0, 780.0])
             .with_min_inner_size([680.0, 460.0])
             .with_visible(!minimized)
             .with_icon(egui::IconData {

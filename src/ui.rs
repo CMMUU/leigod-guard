@@ -1,11 +1,16 @@
 //! egui 配置面板 + 系统托盘。
+#[cfg(test)]
+#[path = "ui_render_tests.rs"]
+mod presentation_tests;
 use crate::autostart;
 use crate::config::{AccelPlan, Config, GameEntry};
 use crate::dpapi;
 use crate::game_presets::{self, PRESETS};
 use crate::leigod_api as api;
 use crate::osd;
-use crate::shared::{ManualCmd, Shared, StartupPauseStatus};
+use crate::shared::{ManualCmd, Shared};
+use crate::ui_home::{HomeAction, HomeState};
+use crate::ui_theme::{self as theme, Icon};
 use crate::updater::{DownloadProgress, DownloadedUpdate, PackageKind, ReleaseInfo, UpdateSource};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
@@ -41,6 +46,8 @@ pub struct App {
     _tray: Option<TrayIcon>,
 
     page: Page,
+    brand: egui::TextureHandle,
+    show_add_game: bool,
     dirty: bool,
     status_msg: String,
 
@@ -127,7 +134,34 @@ fn load_cjk_fonts(ctx: &egui::Context) {
             break;
         }
     }
+    // Prefer Segoe UI for Latin text and keep system CJK fonts as fallbacks.
+    if let Ok(bytes) = std::fs::read(r"C:\Windows\Fonts\segoeui.ttf") {
+        fonts
+            .font_data
+            .insert("latin".into(), Arc::new(egui::FontData::from_owned(bytes)));
+        fonts
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .insert(0, "latin".into());
+    }
+    let mut headings = fonts.families[&egui::FontFamily::Proportional].clone();
+    for (key, path) in [
+        ("cjk-bold", r"C:\Windows\Fonts\msyhbd.ttc"),
+        ("latin-bold", r"C:\Windows\Fonts\segoeuib.ttf"),
+    ] {
+        if let Ok(bytes) = std::fs::read(path) {
+            fonts
+                .font_data
+                .insert(key.into(), Arc::new(egui::FontData::from_owned(bytes)));
+            headings.insert(0, key.into());
+        }
+    }
+    fonts
+        .families
+        .insert(egui::FontFamily::Name("heading".into()), headings);
     ctx.set_fonts(fonts);
+    theme::install(ctx);
 }
 
 /// 追加写运行日志，单文件上限约 1 MiB，保留一份历史日志。
@@ -527,27 +561,59 @@ impl App {
             std::thread::spawn(move || tray_event_loop(ctx, shared, config, update_preparing, ids));
         }
 
-        let (acc_user, has_saved_pwd, check_on_startup) = config
+        let mut app = Self::from_state(
+            &cc.egui_ctx,
+            shared,
+            config,
+            tray,
+            crate::update_apply::detect_package_kind(),
+            update_preparing,
+        );
+        let check_on_startup = app
+            .config
             .lock()
-            .map(|c| {
-                (
-                    c.account.username.clone(),
-                    !c.account.cred_enc.is_empty(),
-                    c.updates.check_on_startup,
-                )
-            })
+            .map(|c| c.updates.check_on_startup)
+            .unwrap_or(false);
+        if check_on_startup {
+            app.start_update_check(cc.egui_ctx.clone());
+        }
+        app
+    }
+
+    /// Shared initializer for the live app and isolated renderer fixtures.
+    /// It uses only the supplied state; no disk configuration, tray, worker or API.
+    fn from_state(
+        ctx: &egui::Context,
+        shared: Arc<Mutex<Shared>>,
+        config: Arc<Mutex<Config>>,
+        tray: Option<TrayIcon>,
+        update_kind: Result<PackageKind, String>,
+        update_preparing: Arc<AtomicBool>,
+    ) -> Self {
+        let (acc_user, has_saved_pwd) = config
+            .lock()
+            .map(|c| (c.account.username.clone(), !c.account.cred_enc.is_empty()))
             .unwrap_or_default();
 
-        let mut app = Self {
+        Self {
             shared,
             config,
             _tray: tray,
             page: Page::Games,
+            brand: ctx.load_texture(
+                "leigod-brand",
+                egui::ColorImage::from_rgba_unmultiplied(
+                    [256, 256],
+                    include_bytes!("../assets/app-icon-256.rgba"),
+                ),
+                egui::TextureOptions::LINEAR,
+            ),
+            show_add_game: false,
             dirty: false,
             status_msg: String::new(),
             update_events: None,
             update_release: None,
-            update_kind: crate::update_apply::detect_package_kind(),
+            update_kind,
             update_busy: false,
             update_preparing,
             update_progress: None,
@@ -583,11 +649,7 @@ impl App {
             plan_node: String::new(),
             plan_mode: String::new(),
             plan_note: String::new(),
-        };
-        if check_on_startup {
-            app.start_update_check(cc.egui_ctx.clone());
         }
-        app
     }
 
     fn start_update_check(&mut self, ctx: egui::Context) {
@@ -868,6 +930,169 @@ impl App {
     }
 }
 
+impl App {
+    fn render_shell(&mut self, ctx: &egui::Context) {
+        let screen = ctx.screen_rect();
+        let short = screen.height() < 620.0;
+        let sidebar_width = if screen.width() >= 1000.0 {
+            208.0
+        } else {
+            170.0
+        };
+        egui::SidePanel::left("nav")
+            .resizable(false)
+            .exact_width(sidebar_width)
+            .frame(egui::Frame::new())
+            .show(ctx, |ui| {
+                theme::sidebar_background(ui);
+                ui.add_space(if short { 14.0 } else { 42.0 });
+                ui.vertical_centered(|ui| {
+                    let size = if short { 44.0 } else { 76.0 };
+                    ui.add(egui::Image::new(&self.brand).fit_to_exact_size(egui::vec2(size, size)));
+                    ui.add_space(if short { 0.0 } else { 4.0 });
+                    ui.label(theme::title("雷神守护", if short { 19.0 } else { 23.0 }));
+                    if !short {
+                        ui.label(
+                            egui::RichText::new("Leigod Guard")
+                                .size(14.0)
+                                .color(theme::MUTED),
+                        );
+                    }
+                });
+                ui.add_space(if short { 8.0 } else { 22.0 });
+                egui::Frame::new()
+                    .inner_margin(egui::Margin::symmetric(16, 0))
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = if short { 3.0 } else { 10.0 };
+                        for (page, icon, label) in [
+                            (Page::Games, Icon::Home, "首页与游戏"),
+                            (Page::Account, Icon::Account, "账户"),
+                            (Page::Strategy, Icon::Shield, "策略"),
+                            (Page::Logs, Icon::Logs, "日志"),
+                        ] {
+                            if theme::navigation(ui, icon, label, self.page == page).clicked() {
+                                self.page = page;
+                                self.status_msg.clear();
+                            }
+                        }
+                    });
+                let bottom = ui.max_rect().bottom();
+                let footer = egui::Rect::from_min_max(
+                    egui::pos2(ui.max_rect().left() + 16.0, bottom - 129.0),
+                    egui::pos2(ui.max_rect().right() - 16.0, bottom - 12.0),
+                );
+                ui.scope_builder(egui::UiBuilder::new().max_rect(footer), |ui| {
+                    ui.separator();
+                    let updates =
+                        theme::navigation(ui, Icon::Info, "关于与更新", self.page == Page::Updates);
+                    if self.update_release.is_some() {
+                        ui.painter().circle_filled(
+                            updates.rect.right_top() + egui::vec2(-9.0, 9.0),
+                            3.0,
+                            theme::BLUE,
+                        );
+                    }
+                    if updates.clicked() {
+                        self.page = Page::Updates;
+                    }
+                    ui.vertical_centered(|ui| {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "Windows 版 · {}",
+                                env!("CARGO_PKG_VERSION")
+                            ))
+                            .size(11.0)
+                            .color(theme::MUTED),
+                        );
+                        if ui.small_button("隐藏到托盘").clicked() {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                            hide_window_native();
+                        }
+                    });
+                });
+            });
+        let margin = if screen.width() >= 1000.0 { 28 } else { 20 };
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::new()
+                    .fill(theme::BACKGROUND)
+                    .inner_margin(egui::Margin::symmetric(margin, 24)),
+            )
+            .show(ctx, |ui| {
+                let content = egui::ScrollArea::vertical()
+                    .id_salt(self.page as u8)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.set_min_width(ui.available_width());
+                        match self.page {
+                            Page::Games => self.page_games(ui),
+                            Page::Plans => self.page_plans(ui),
+                            Page::Account => {
+                                page_header(ui, "账户", "管理雷神账号与本机保存的登录凭据。");
+                                theme::card().show(ui, |ui| {
+                                    ui.set_min_width(ui.available_width());
+                                    self.page_account(ui);
+                                });
+                            }
+                            Page::Strategy => {
+                                page_header(ui, "策略", "按你的游戏习惯，安排自动暂停。");
+                                theme::card().show(ui, |ui| {
+                                    ui.set_min_width(ui.available_width());
+                                    self.page_strategy(ui);
+                                });
+                            }
+                            Page::Logs => {
+                                page_header(ui, "日志", "查看检测结果与暂停请求，了解每一次守护。");
+                                theme::card().show(ui, |ui| {
+                                    ui.set_min_width(ui.available_width());
+                                    self.page_logs(ui);
+                                });
+                            }
+                            Page::Updates => {
+                                page_header(
+                                    ui,
+                                    "关于与更新",
+                                    "选择合适的下载来源，让守护保持更新。",
+                                );
+                                self.page_updates(ui);
+                            }
+                        }
+                    });
+                #[cfg(test)]
+                assert!(
+                    content.content_size.x <= content.inner_rect.width() + 1.0,
+                    "page {} overflows horizontally: {:?}",
+                    self.page as u8,
+                    content.content_size
+                );
+                #[cfg(not(test))]
+                let _ = content;
+            });
+        if self.show_add_game {
+            let mut open = self.show_add_game;
+            egui::Window::new("添加游戏")
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .default_pos(screen.center() - egui::vec2(237.0, 200.0))
+                .default_width(430.0)
+                .default_height(290.0)
+                .frame(theme::card())
+                .max_width((screen.width() - 70.0).max(280.0))
+                .max_height((screen.height() - 80.0).max(220.0))
+                .vscroll(true)
+                .show(ctx, |ui| self.game_add_form(ui));
+            self.show_add_game &= open;
+        }
+    }
+}
+
+fn page_header(ui: &mut egui::Ui, title: &str, subtitle: &str) {
+    ui.label(theme::title(title, 27.0));
+    ui.label(egui::RichText::new(subtitle).color(theme::MUTED));
+    ui.add_space(18.0);
+}
+
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // 关闭按钮 → 隐藏到托盘而不是退出
@@ -910,69 +1135,7 @@ impl eframe::App for App {
             }
         }
 
-        // 顶部状态条
-        egui::TopBottomPanel::top("status_bar").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.strong("雷神守护");
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("隐藏到托盘").clicked() {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-                        hide_window_native();
-                    }
-                });
-            });
-            let (status, games) = self
-                .shared
-                .lock()
-                .map(|s| (s.status.clone(), s.running_games.join("、")))
-                .unwrap_or_default();
-            ui.horizontal_wrapped(|ui| {
-                ui.label(format!("状态：{status}"));
-                if !games.is_empty() {
-                    ui.separator();
-                    ui.label(format!("运行中：{games}"));
-                }
-            });
-        });
-
-        // 左侧导航
-        egui::SidePanel::left("nav")
-            .resizable(false)
-            .show(ctx, |ui| {
-                ui.add_space(8.0);
-                let update_label = if self.update_release.is_some() {
-                    "↑ 关于与更新 · 有新版"
-                } else {
-                    "↑ 关于与更新"
-                };
-                for (page, label) in [
-                    (Page::Games, "🎮 首页与游戏"),
-                    // 二期功能（加速方案/自动开启加速）暂时隐藏，只保留自动暂停
-                    // (Page::Plans, "🚀 加速方案"),
-                    (Page::Account, "👤 账户"),
-                    (Page::Strategy, "⚙ 策略"),
-                    (Page::Logs, "📜 日志"),
-                    (Page::Updates, update_label),
-                ] {
-                    if ui.selectable_label(self.page == page, label).clicked() {
-                        self.page = page;
-                    }
-                    ui.add_space(4.0);
-                }
-            });
-
-        egui::CentralPanel::default().show(ctx, |ui| match self.page {
-            Page::Games => {
-                egui::ScrollArea::vertical().show(ui, |ui| self.page_games(ui));
-            }
-            Page::Plans => self.page_plans(ui),
-            Page::Account => self.page_account(ui),
-            Page::Strategy => {
-                egui::ScrollArea::vertical().show(ui, |ui| self.page_strategy(ui));
-            }
-            Page::Logs => self.page_logs(ui),
-            Page::Updates => self.page_updates(ui),
-        });
+        self.render_shell(ctx);
 
         // 进程选择弹窗
         if self.show_proc_picker {
@@ -990,128 +1153,6 @@ impl eframe::App for App {
 
         ctx.request_repaint_after(Duration::from_millis(500));
     }
-}
-
-fn startup_status_copy(
-    status: StartupPauseStatus,
-    request_pending: bool,
-) -> (String, &'static str) {
-    if !status.pending {
-        return (
-            "本次启动检查已结束".into(),
-            "已完成或跳过，本次运行不会重复启动检查。游戏退出监控继续按策略执行。",
-        );
-    }
-    if request_pending {
-        return (
-            "正在延后启动检查…".into(),
-            "请求已交给监控处理，不会开启或恢复加速。",
-        );
-    }
-    match status.remaining_secs {
-        Some(0) => (
-            "正在复核游戏与账户状态".into(),
-            "确认名单中的游戏未运行后，才会尝试暂停计时。此时仍可延后。",
-        ),
-        Some(seconds) => {
-            let prefix = if status.preparing_game {
-                "准备游戏中"
-            } else {
-                "距离启动检查"
-            };
-            (
-                format!("{prefix}  {:02}:{:02}", seconds / 60, seconds % 60),
-                "等待结束后再次检查名单；仍无游戏运行时，才尝试暂停计时。",
-            )
-        }
-        None => ("等待有效检测".into(), "检测尚未就绪，暂不据此暂停计时。"),
-    }
-}
-
-/// Native egui presentation only; safe to exercise without accounts or a window.
-fn guardian_home(ui: &mut egui::Ui, startup: Option<(StartupPauseStatus, bool)>) -> bool {
-    let accent = if ui.visuals().dark_mode {
-        egui::Color32::from_rgb(119, 210, 204)
-    } else {
-        egui::Color32::from_rgb(0, 109, 105)
-    };
-    egui::Frame::group(ui.style())
-        .fill(ui.visuals().faint_bg_color)
-        .inner_margin(16)
-        .corner_radius(12)
-        .show(ui, |ui| {
-            ui.label(
-                egui::RichText::new("启动缓冲 · 自动暂停")
-                    .color(accent)
-                    .small(),
-            );
-            ui.add_space(6.0);
-            ui.label(
-                egui::RichText::new("让加速时长，留给真正开玩的时刻")
-                    .size(25.0)
-                    .strong(),
-            );
-            ui.add_space(8.0);
-            ui.label("异常关机后，重启只是办公或处理其他任务？启动检查会先等待，再确认名单游戏是否运行，帮你减少未暂停造成的时长消耗。");
-            ui.add_space(6.0);
-            ui.label(
-                egui::RichText::new("等待期间仍可能计时，已消耗的时长无法追回。\n确认暂停：打开雷神官方微信小程序，登录同一账号，下拉刷新后核对计时状态。")
-                    .weak()
-                    .small(),
-            );
-        });
-    ui.add_space(10.0);
-    let mut defer = false;
-    egui::Frame::group(ui.style())
-        .inner_margin(12)
-        .corner_radius(10)
-        .show(ui, |ui| {
-            ui.label(egui::RichText::new("本次启动检查").small().weak());
-            let Some((status, request_pending)) = startup else {
-                ui.label("暂时无法读取检查状态");
-                return;
-            };
-            let (title, detail) = startup_status_copy(status, request_pending);
-            ui.label(
-                egui::RichText::new(title)
-                    .size(21.0)
-                    .strong()
-                    .color(accent),
-            );
-            ui.label(detail);
-            if status.pending {
-                ui.add_space(8.0);
-                defer = ui
-                    .button("准备游戏，延后10分钟")
-                    .on_hover_text("延后到至少从现在起10分钟；重复点击重新计算10分钟，不会累加，也不会开启或恢复加速。")
-                    .clicked();
-                ui.add_space(4.0);
-                ui.label(egui::RichText::new("检测到名单中的游戏后，结束启动检查，转入游戏退出监控。").weak().small());
-                ui.label(egui::RichText::new("刚手动开启加速？请在倒计时结束前延后，工具无法识别雷神的加速按钮。其他任务需要持续加速时，可在策略中关闭自动暂停总开关；关机暂停另有独立开关。").weak().small());
-            }
-        });
-    ui.add_space(10.0);
-    egui::Frame::group(ui.style())
-        .inner_margin(12)
-        .corner_radius(10)
-        .show(ui, |ui| {
-            ui.label(egui::RichText::new("自动暂停规则").strong());
-            ui.label("启动检查：连续180秒确认没有名单中的游戏运行，才尝试暂停；检测到游戏后结束本次启动检查。");
-            ui.label("游戏退出：先检测到名单游戏运行，再全部退出并连续等待90秒后尝试暂停；期间重开游戏会取消倒计时。");
-            ui.label("准备游戏：只延后尚未完成的启动检查，至少等到最后一次点击满10分钟；重复点击不累加。");
-            ui.label(
-                egui::RichText::new("180秒和90秒为默认值，可在“策略”中分别调整。")
-                    .weak()
-                    .small(),
-            );
-            ui.collapsing("生效条件、跳过与失败处理", |ui| {
-                ui.label("生效前提：自动暂停总开关开启，名单非空且所有进程名有效；启动检查还需开启“启动时无游戏运行则暂停计时”。");
-                ui.label("启动时不满足条件会跳过；检查完成、检测到游戏或中途关闭后，本次运行不再补做。之后补齐名单或重新开启开关，要下次启动才做启动检查。");
-                ui.label("检测失败不等于没有游戏，也不计入连续等待；恢复检测后重新累计无游戏时间。一轮自动暂停请求失败后冷却60秒，再复核条件重试。");
-                ui.label("关机/注销暂停由策略页的独立开关控制：收到系统通知后尝试暂停，断电或强制结束无法保证。");
-            });
-        });
-    defer
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1217,8 +1258,7 @@ fn game_entry_form(
 #[cfg(test)]
 mod ui_tests {
     use super::{
-        game_entry_form, guardian_home, request_startup_defer, startup_status_copy, GameFormAction,
-        ManualCmd, Shared, StartupPauseStatus, PRESETS,
+        game_entry_form, request_startup_defer, GameFormAction, ManualCmd, Shared, PRESETS,
     };
     use std::time::{Duration, Instant};
 
@@ -1243,69 +1283,6 @@ mod ui_tests {
         shared.startup_defer_requested_at = None;
         assert!(!request_startup_defer(&mut shared, next_click));
         assert!(shared.startup_defer_requested_at.is_none());
-    }
-
-    #[test]
-    fn startup_status_distinguishes_countdown_unknown_and_finished() {
-        let mut status = StartupPauseStatus {
-            pending: true,
-            remaining_secs: Some(180),
-            preparing_game: false,
-        };
-        assert_eq!(startup_status_copy(status, false).0, "距离启动检查  03:00");
-        status.preparing_game = true;
-        status.remaining_secs = Some(600);
-        assert_eq!(startup_status_copy(status, false).0, "准备游戏中  10:00");
-        status.remaining_secs = Some(0);
-        assert_eq!(
-            startup_status_copy(status, false).0,
-            "正在复核游戏与账户状态"
-        );
-        status.remaining_secs = None;
-        assert_eq!(startup_status_copy(status, false).0, "等待有效检测");
-        assert_eq!(startup_status_copy(status, true).0, "正在延后启动检查…");
-        status.pending = false;
-        assert_eq!(startup_status_copy(status, true).0, "本次启动检查已结束");
-        assert!(!startup_status_copy(status, false).1.contains("已暂停"));
-    }
-
-    #[test]
-    fn home_cards_fit_narrow_scrolling_content_without_native_app() {
-        let pending = StartupPauseStatus {
-            pending: true,
-            remaining_secs: Some(180),
-            preparing_game: false,
-        };
-        for startup in [
-            None,
-            Some((pending, false)),
-            Some((pending, true)),
-            Some((StartupPauseStatus::default(), false)),
-        ] {
-            let context = egui::Context::default();
-            let output = context.run(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(440.0, 400.0),
-                    )),
-                    ..Default::default()
-                },
-                |context| {
-                    egui::CentralPanel::default().show(context, |ui| {
-                        egui::ScrollArea::vertical().show(ui, |ui| {
-                            let right = ui.max_rect().right();
-                            assert!(!guardian_home(ui, startup));
-                            assert!(
-                                ui.min_rect().right() <= right + 1.0,
-                                "home cards overflow horizontally"
-                            );
-                        });
-                    });
-                },
-            );
-            assert!(!output.shapes.is_empty());
-        }
     }
 
     #[test]
@@ -1362,68 +1339,79 @@ mod ui_tests {
 
 impl App {
     fn page_games(&mut self, ui: &mut egui::Ui) {
-        let startup = self.shared.lock().ok().map(|s| {
+        let config = match self.config.lock() {
+            Ok(config) => config.clone(),
+            Err(_) => {
+                ui.label("暂时无法读取配置，请稍后重试。");
+                return;
+            }
+        };
+        let snapshot = self.shared.lock().ok().map(|s| {
             (
                 s.startup_pause_status,
                 s.startup_defer_requested_at.is_some(),
+                s.process_snapshot.clone(),
+                s.status.clone(),
             )
         });
-        if guardian_home(ui, startup) {
-            if let Ok(mut s) = self.shared.lock() {
-                request_startup_defer(&mut s, Instant::now());
-            }
-            ui.ctx().request_repaint();
-        }
-        ui.add_space(18.0);
-        ui.heading("游戏名单");
-        ui.label("添加要守护的游戏。启动等待后仍未运行，或游戏全部退出并超过宽限期时，按策略自动暂停计时。");
-        let game_count = self.config.lock().ok().map(|c| c.games.len());
-        if game_count == Some(0) {
-            ui.label(
-                egui::RichText::new(
-                    "名单还是空的，先在下面选择常用游戏或填写进程名。空名单不会触发启动暂停。",
-                )
-                .weak()
-                .small(),
-            );
-        }
-        ui.add_space(8.0);
-
-        // 二期功能：加速方案相关 UI 暂时隐藏（plan_names 保留字段）
-        let plan_names: Vec<String> = Vec::new();
-        let _ = &plan_names;
-
-        let mut to_delete: Option<usize> = None;
-        egui::Grid::new("games_grid")
-            .num_columns(3)
-            .striped(true)
-            .show(ui, |ui| {
-                ui.strong("游戏名");
-                ui.strong("进程名 (exe)");
-                // 二期功能：加速方案列暂时隐藏
-                ui.strong("操作");
-                ui.end_row();
-                if let Ok(mut c) = self.config.lock() {
-                    for (i, g) in c.games.iter_mut().enumerate() {
-                        ui.label(&g.name);
-                        ui.label(&g.exe);
-                        if ui.button("删除").clicked() {
-                            to_delete = Some(i);
-                        }
-                        ui.end_row();
-                    }
-                }
-            });
-        if let Some(i) = to_delete {
-            if let Ok(mut c) = self.config.lock() {
-                c.games.remove(i);
+        let state = HomeState {
+            startup: snapshot.as_ref().map(|s| (s.0, s.1)),
+            strategy: &config.strategy,
+            games: &config.games,
+            processes: snapshot.as_ref().and_then(|s| s.2.as_deref()),
+            status: snapshot
+                .as_ref()
+                .map(|s| s.3.as_str())
+                .unwrap_or("暂时无法读取监控状态"),
+        };
+        let mut enabled = config.strategy.enabled;
+        let action = crate::ui_home::render(ui, &state, &mut enabled);
+        if enabled != config.strategy.enabled {
+            if let Ok(mut config) = self.config.lock() {
+                config.strategy.enabled = enabled;
                 self.dirty = true;
             }
         }
+        match action {
+            HomeAction::None => {}
+            HomeAction::Defer => {
+                if let Ok(mut shared) = self.shared.lock() {
+                    request_startup_defer(&mut shared, Instant::now());
+                }
+                ui.ctx().request_repaint();
+            }
+            HomeAction::Pause => self.request_manual_pause(),
+            HomeAction::Strategy => self.page = Page::Strategy,
+            HomeAction::AddGame => self.show_add_game = true,
+            HomeAction::RemoveGame(index) => {
+                if let Ok(mut config) = self.config.lock() {
+                    if index < config.games.len() {
+                        config.games.remove(index);
+                        self.dirty = true;
+                    }
+                }
+            }
+        }
+        if !self.status_msg.is_empty() {
+            ui.add_space(8.0);
+            ui.label(
+                egui::RichText::new(&self.status_msg)
+                    .size(13.0)
+                    .color(theme::MUTED),
+            );
+        }
+    }
 
-        ui.add_space(12.0);
-        ui.separator();
-        ui.strong("添加游戏");
+    fn request_manual_pause(&mut self) {
+        if let Ok(mut shared) = self.shared.lock() {
+            shared.manual_pause_result = None;
+            shared.manual_cmd = Some(ManualCmd::Pause);
+            shared.log("界面指令：立即暂停计时");
+        }
+        self.status_msg = "暂停指令已发送，请在雷神官方微信小程序下拉刷新核对计时状态。".into();
+    }
+
+    fn game_add_form(&mut self, ui: &mut egui::Ui) {
         match game_entry_form(
             ui,
             &mut self.new_preset,
@@ -1474,6 +1462,7 @@ impl App {
                     }
                 };
                 if added {
+                    self.show_add_game = false;
                     self.new_name.clear();
                     self.new_exe.clear();
                     self.new_preset = None;
@@ -1706,12 +1695,16 @@ impl App {
     }
 
     fn page_account(&mut self, ui: &mut egui::Ui) {
-        ui.heading("账户");
-        ui.label("token 经 Windows DPAPI 加密存储在本机，仅当前 Windows 用户可解密；token 有效期由雷神服务决定，失效后按提示重新登录。");
+        ui.label(
+            egui::RichText::new(
+                "登录凭据加密保存在本机，仅当前 Windows 用户可读取。登录失效后，请重新登录。",
+            )
+            .color(theme::MUTED),
+        );
         ui.add_space(6.0);
 
         // 登录方式切换
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             for (mode, label) in [(0u8, "密码登录"), (1, "验证码登录"), (2, "手动 Token")]
             {
                 if ui
@@ -1727,7 +1720,7 @@ impl App {
         match self.login_mode {
             // ---- 密码登录（可能受极验验证码限制）----
             0 => {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label("手机号:");
                     ui.add(egui::TextEdit::singleline(&mut self.acc_user).desired_width(140.0));
                     ui.label("密码:");
@@ -1738,8 +1731,8 @@ impl App {
                     );
                     ui.checkbox(&mut self.remember_pwd, "记住密码");
                 });
-                ui.horizontal(|ui| {
-                    if ui.button("登录并保存").clicked() {
+                ui.horizontal_wrapped(|ui| {
+                    if theme::primary(ui,"登录并保存").clicked() {
                         let user = self.acc_user.trim().to_string();
                         let pwd = self.acc_pwd.clone();
                         if user.is_empty() {
@@ -1789,13 +1782,13 @@ impl App {
                     }
                     ui.colored_label(
                         egui::Color32::GRAY,
-                        "密码经 MD5 后再经 DPAPI 加密存储，不会明文落盘",
+                        "勾选“记住密码”后保存加密凭据，方便下次登录。",
                     );
                 });
             }
             // ---- 短信验证码登录 ----
             1 => {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label("手机号:");
                     ui.add(egui::TextEdit::singleline(&mut self.sms_phone).desired_width(140.0));
                     let cooldown = self
@@ -1836,10 +1829,10 @@ impl App {
                         }
                     }
                 });
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label("验证码:");
                     ui.add(egui::TextEdit::singleline(&mut self.sms_code).desired_width(100.0));
-                    if ui.button("登录并保存").clicked() {
+                    if theme::primary(ui, "登录并保存").clicked() {
                         let phone = self.sms_phone.trim().to_string();
                         let code = self.sms_code.trim().to_string();
                         if code.is_empty() || self.sms_key.is_empty() {
@@ -1866,13 +1859,13 @@ impl App {
             // ---- 手动粘贴 token ----
             _ => {
                 ui.label("在浏览器登录雷神官网(vip.leigod.com)，F12 → Network，找任意请求的 account_token 参数，粘贴到下面：");
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.add(
                         egui::TextEdit::singleline(&mut self.token_input)
                             .password(true)
-                            .desired_width(360.0),
+                            .desired_width(ui.available_width().min(360.0)),
                     );
-                    if ui.button("保存并使用").clicked() {
+                    if theme::primary(ui, "保存并使用").clicked() {
                         let t = self.token_input.trim().to_string();
                         if t.len() < 20 {
                             self.status_msg = "token 看起来太短，请确认复制完整".into();
@@ -1893,7 +1886,7 @@ impl App {
 
         ui.add_space(10.0);
         ui.separator();
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui.button("立即暂停计时").clicked() {
                 if let Ok(mut s) = self.shared.lock() {
                     s.manual_cmd = Some(ManualCmd::Pause);
@@ -1909,7 +1902,7 @@ impl App {
             }
         });
         ui.add_space(4.0);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui.button("退出登录").clicked() {
                 // 清空内存 token、本地加密凭据与界面状态
                 if let Ok(mut s) = self.shared.lock() {
@@ -1973,8 +1966,8 @@ impl App {
     }
 
     fn page_updates(&mut self, ui: &mut egui::Ui) {
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.heading("关于与更新");
+        theme::card().show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
             ui.add_space(8.0);
             ui.label(format!("雷神守护 v{} · Windows x64", env!("CARGO_PKG_VERSION")));
             match &self.update_kind {
@@ -1989,7 +1982,7 @@ impl App {
             if let Ok(mut config) = self.config.lock() {
                 let previous_source = config.updates.source;
                 ui.add_enabled_ui(!self.update_busy, |ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         ui.label("更新来源：");
                         egui::ComboBox::from_id_salt("update_source")
                             .selected_text(match config.updates.source {
@@ -2036,7 +2029,7 @@ impl App {
                     if let Some(total) = progress.total.filter(|total| *total > 0) {
                         ui.add(egui::ProgressBar::new(
                             (progress.downloaded as f32 / total as f32).clamp(0.0, 1.0)
-                        ).show_percentage().desired_width(340.0));
+                        ).show_percentage().desired_width(ui.available_width().min(340.0)));
                     } else {
                         ui.spinner();
                     }
@@ -2074,7 +2067,6 @@ impl App {
     }
 
     fn page_strategy(&mut self, ui: &mut egui::Ui) {
-        ui.heading("策略");
         ui.add_space(8.0);
         if let Ok(mut c) = self.config.lock() {
             if ui
@@ -2294,7 +2286,7 @@ impl App {
 
     fn page_logs(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.heading("日志");
+            ui.label(theme::title("运行记录", 18.0));
             if ui.button("清空").clicked() {
                 if let Ok(mut s) = self.shared.lock() {
                     s.logs.clear();
@@ -2307,12 +2299,23 @@ impl App {
             .lock()
             .map(|s| s.logs.iter().cloned().collect::<Vec<_>>().join("\n"))
             .unwrap_or_default();
+        if text.is_empty() {
+            ui.add_space(12.0);
+            ui.label(
+                egui::RichText::new("暂无运行记录，检测与暂停结果会显示在这里。")
+                    .color(theme::MUTED),
+            );
+            ui.add_space(12.0);
+            return;
+        }
         egui::ScrollArea::vertical()
             .stick_to_bottom(true)
             .show(ui, |ui| {
                 ui.add(
                     egui::TextEdit::multiline(&mut text.as_str())
                         .font(egui::TextStyle::Monospace)
+                        .frame(false)
+                        .desired_rows(16)
                         .desired_width(f32::INFINITY)
                         .interactive(false),
                 );

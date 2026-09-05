@@ -11,12 +11,12 @@
 - `CHANGELOG.md` 中相应版本的实际变化与限制。
 - Git 标签、Release 标题、安装程序版本以及 EXE / ZIP 文件名。
 
-`v0.8.3` 的发布资产为：
+`v0.9.0` 的发布资产为：
 
 | 资产 | 用途 |
 | --- | --- |
-| `leigod-guard-v0.8.3-windows-x64-setup.exe` | 推荐下载；Windows x64 安装程序 |
-| `leigod-guard-v0.8.3-windows-x64.zip` | 绿色免安装程序包 |
+| `leigod-guard-v0.9.0-windows-x64-setup.exe` | 推荐下载；Windows x64 安装程序 |
+| `leigod-guard-v0.9.0-windows-x64.zip` | 绿色免安装程序包 |
 | `SHA256SUMS.txt` | 发布文件的 SHA-256 校验值 |
 | GitHub 自动提供的 `Source code` | 对应标签的源码归档，不是可运行程序 |
 
@@ -100,6 +100,8 @@ CI 和发布工作流都会运行 `scripts/test-updater.ps1`。该集成测试�
 
 0.8.3 起，Windows x64 MSVC 单元测试还会编译一份无害、无签名的临时 DLL，并通过实际保护代码创建独立子进程：先确认该 DLL 在普通进程中可加载，再验证受保护子进程在准备代码执行前已继承错误处理标志、仍拒绝 DLL 加载，并在 10 秒内结束。该测试不会启动应用界面、读取账号或请求暂停；它验证 Windows 加载行为，不替代游戏加加实际注入、显卡和录屏软件组合的兼容性检查。
 
+0.9.0 起，CI 与发版还会执行原生界面指针交互、小窗口横向溢出检查及 DirectX 12 软件渲染截图测试，并上传 `native-ui-*` 工件；测试只使用演示状态，不读取实际账号、不启动监控。设计对照与范围见 [UI_DESIGN.md](UI_DESIGN.md)。
+
 对关机、系统崩溃、断网和非公开接口的限制，沿用 README 的说明，不把一次成功测试描述为永久兼容保证。
 
 ## 发布标签与 Release
@@ -107,11 +109,11 @@ CI 和发布工作流都会运行 `scripts/test-updater.ps1`。该集成测试�
 先将通过检查的源码和文档提交到仓库，确认提交已经推送。然后为该提交创建带说明的版本标签，例如：
 
 ```powershell
-git tag -a v0.8.3 -m "Release v0.8.3"
-git push origin v0.8.3
+git tag -a v0.9.0 -m "Release v0.9.0"
+git push origin v0.9.0
 ```
 
-仓库的 [CI 工作流](https://github.com/CMMUU/leigod-guard/blob/v0.8.3/.github/workflows/ci.yml) 执行自动检查，[发布工作流](https://github.com/CMMUU/leigod-guard/blob/v0.8.3/.github/workflows/release.yml) 根据推送的 `v*` 标签构建安装版、绿色免安装版和校验文件并发布，也可通过 `workflow_dispatch` 指定已有标签。已有同名 Release 时，工作流会拒绝覆盖。
+仓库的 [CI 工作流](https://github.com/CMMUU/leigod-guard/blob/v0.9.0/.github/workflows/ci.yml) 执行自动检查，[发布工作流](https://github.com/CMMUU/leigod-guard/blob/v0.9.0/.github/workflows/release.yml) 根据推送的 `v*` 标签构建安装版、绿色免安装版和校验文件并发布，也可通过 `workflow_dispatch` 指定已有标签。已有同名 Release 时，工作流会拒绝覆盖。
 
 维护者应等待 GitHub Actions 的实际结果，确认 Release 已出现，并确认用户能够下载资产；只推送标签、只启动工作流或只上传 Actions artifact 不等于已经完成公开发版。GitHub 发版完成后，还应检查下方 Gitee 同步任务；GitHub 成功不能代替 Gitee 的发布结果。
 

@@ -59,6 +59,18 @@ jobs:
         run: cargo fetch --locked --target $env:RUST_TARGET
       - name: Run offline unit tests
         run: cargo test --locked --offline --target $env:RUST_TARGET
+      - name: Render native UI with the DirectX software adapter
+        env:
+          LEIGOD_UI_PREVIEW_DIR: target/ui-preview
+        run: cargo test --locked --offline --target $env:RUST_TARGET ui::presentation_tests::render_apple_preview -- --ignored --nocapture
+      - name: Upload native UI previews
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: native-ui-${{ github.sha }}
+          path: target/ui-preview/*.png
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Build release executable
         run: cargo build --release --locked --offline --target $env:RUST_TARGET
       - name: Save verified Rust build cache

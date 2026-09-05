@@ -179,6 +179,12 @@ fn publish_startup_status(shared: &Arc<Mutex<Shared>>, watch: &AutoPauseWatch, n
     }
 }
 
+fn publish_process_snapshot(shared: &Arc<Mutex<Shared>>, processes: Option<&[String]>) {
+    if let Ok(mut shared) = shared.lock() {
+        shared.process_snapshot = processes.map(<[String]>::to_vec);
+    }
+}
+
 fn consume_startup_request(
     shared: &Arc<Mutex<Shared>>,
     watch: &mut AutoPauseWatch,
@@ -272,11 +278,13 @@ fn auto_pause_guard_with_snapshot(
     let processes = match snapshot() {
         Ok(processes) => processes,
         Err(error) => {
+            publish_process_snapshot(shared, None);
             pause_watch.observation_failed();
             publish_startup_status(shared, pause_watch, now);
             return Err(AutoPauseBlock::ObservationFailed(error));
         }
     };
+    publish_process_snapshot(shared, Some(&processes));
     let matched = monitor::match_games(&processes, &watch);
     if !matched.is_empty() {
         pause_watch.observe(now, true, cfg.strategy.grace_secs);
@@ -496,6 +504,7 @@ pub fn run(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
                 processes
             }
             Err(e) => {
+                publish_process_snapshot(&shared, None);
                 pause_watch.observation_failed();
                 publish_startup_status(&shared, &pause_watch, Instant::now());
                 if !monitor_failed {
@@ -507,6 +516,7 @@ pub fn run(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
                 continue;
             }
         };
+        publish_process_snapshot(&shared, Some(&processes));
         let matched = watch
             .as_ref()
             .map(|watch| monitor::match_games(&processes, watch))
@@ -1183,6 +1193,7 @@ mod tests {
             );
             assert_eq!(result.unwrap(), "fixture pause succeeded");
             assert_eq!(snapshots.get(), 1);
+            assert_eq!(shared.lock().unwrap().process_snapshot, Some(vec![]));
             assert_eq!(calls.get(), 1);
         }
     }
@@ -1230,6 +1241,7 @@ mod tests {
         for change in 0..4 {
             let cfg = configured_fixture();
             let shared = Arc::new(Mutex::new(Shared::default()));
+            shared.lock().unwrap().process_snapshot = Some(vec!["fixture.exe".into()]);
             let mut watch = AutoPauseWatch::default();
             let calls = Cell::new(0);
             let result = request_after_token(
@@ -1267,6 +1279,12 @@ mod tests {
                 "change {change} was not blocked by the fresh guard"
             );
             assert_eq!(calls.get(), 0);
+            if change == 3 {
+                assert!(
+                    shared.lock().unwrap().process_snapshot.is_none(),
+                    "a failed scan must invalidate the UI's previous process status"
+                );
+            }
         }
     }
 

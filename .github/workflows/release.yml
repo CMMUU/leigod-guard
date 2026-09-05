@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing stable release tag, for example v0.8.3
+        description: Existing stable release tag, for example v0.9.0
         required: true
         type: string
 
@@ -81,6 +81,18 @@ jobs:
         run: cargo fetch --locked --target $env:RUST_TARGET
       - name: Run offline unit tests
         run: cargo test --locked --offline --target $env:RUST_TARGET
+      - name: Render native UI with the DirectX software adapter
+        env:
+          LEIGOD_UI_PREVIEW_DIR: target/ui-preview
+        run: cargo test --locked --offline --target $env:RUST_TARGET ui::presentation_tests::render_apple_preview -- --ignored --nocapture
+      - name: Upload native UI previews
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: native-ui-${{ github.ref_name }}
+          path: target/ui-preview/*.png
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Build release executable
         run: cargo build --release --locked --offline --target $env:RUST_TARGET
       - name: Save verified Rust build cache
@@ -138,7 +150,7 @@ jobs:
 
           **如何确认暂停生效：** 等待工具完成暂停后，打开雷神官方微信小程序，登录与本工具相同的雷神账号，下拉刷新，查看计时是否已暂停。核对时先只刷新查看，不要先手动点击暂停；工具的成功提示来自暂停接口返回，实际结果以小程序刷新后的账户计时状态为准。这里核对的是暂停计时，本工具没有停止客户端加速的功能。
 
-          本工作流在 Windows Server 2022 上构建 ``$env:RUST_TARGET``，已通过代码格式、离线单元测试、release 编译、静态 CRT 依赖检查、EXE / 安装器 / 绿色包图标资源校验，以及静默安装、快捷方式、版本号、覆盖升级、卸载和配置保留检查。更新集成测试使用无账号操作的下一版本测试程序，验证真实更新辅助进程的等待退出、安装版升级、绿色版替换、配置保留和重新启动。未验证真实账户登录、验证码、实际暂停请求、关机行为或图形界面交互。使用方法、触发条件及限制见仓库 README。
+          本工作流在 Windows Server 2022 上构建 ``$env:RUST_TARGET``，已通过代码格式、离线单元测试、release 编译、静态 CRT 依赖检查、EXE / 安装器 / 绿色包图标资源校验，以及静默安装、快捷方式、版本号、覆盖升级、卸载和配置保留检查。更新集成测试使用无账号操作的下一版本测试程序，验证真实更新辅助进程的等待退出、安装版升级、绿色版替换、配置保留和重新启动。原生界面通过独立状态的指针交互、窄窗口布局和 DirectX 软件渲染截图检查；未验证真实账户登录、验证码、实际暂停请求、关机行为或所有硬件显卡组合。使用方法、触发条件及限制见仓库 README。
 
           $($section.Groups[1].Value.Trim())
           "@
