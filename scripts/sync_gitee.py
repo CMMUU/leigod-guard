@@ -67,9 +67,16 @@ def validate_pair(repo, source, target):
             raise SyncError("Repository owner, name or visibility could not be confirmed")
     if str(source.get("full_name", "")).casefold() != f"{GH_OWNER}/{repo}".casefold():
         raise SyncError("GitHub source repository does not match the requested scope")
-    if (str(target.get("path", "")).casefold() != repo.casefold()
-            or str(target.get("html_url", "")).rstrip("/").casefold() != f"https://gitee.com/{GE_OWNER}/{repo}".casefold()):
-        raise SyncError("Gitee target path does not match the requested scope")
+    path_matches = str(target.get("path", "")).casefold() == repo.casefold()
+    url_matches = str(target.get("html_url", "")).rstrip("/").casefold() == f"https://gitee.com/{GE_OWNER}/{repo}".casefold()
+    if not path_matches or not url_matches:
+        # Report which public metadata field failed, never its raw value: a
+        # malformed response could contain credentials or a signed URL.
+        details = []
+        for field, matches in (("path", path_matches), ("html_url", url_matches)):
+            state = "matches" if matches else "missing" if not target.get(field) else "differs"
+            details.append(f"{field}={state}")
+        raise SyncError("Gitee target path does not match the requested scope (" + ", ".join(details) + ")")
     if source["private"] and not target["private"]:
         raise SyncError("Private GitHub source must never synchronize to a public Gitee target")
 
@@ -288,14 +295,14 @@ class Sync:
         self.source = None
 
     def guard(self):
-        self.source = self.gh.request(self.source_path)
-        target = self.ge.request(self.target_path)
-        validate_pair(self.repo, self.source, target)
-        # Public repository metadata can succeed without valid credentials.
-        # /user must authenticate the intended owner before any external write.
+        # Authenticate before interpreting public metadata so an invalid secret
+        # is distinguishable from an incompatible repository response shape.
         identity = self.ge.request("/user")
         if str(identity.get("login", "")).casefold() != GE_OWNER.casefold():
             raise SyncError("Gitee credential identity must match the permitted target owner")
+        self.source = self.gh.request(self.source_path)
+        target = self.ge.request(self.target_path)
+        validate_pair(self.repo, self.source, target)
         return target
 
     def sync_refs(self):

@@ -69,6 +69,8 @@ class SyncTests(unittest.TestCase):
                 return metadata(True, "CMMUU")
         class GE:
             def request(self, path):
+                if path == "/user":
+                    return {"login": "cmmuu"}
                 return metadata(False)
         job = sync.Sync("mihomo-codex", GH(), GE(), self.fixture())
         with patch.object(sync, "git_run") as git:
@@ -83,6 +85,18 @@ class SyncTests(unittest.TestCase):
                 with self.assertRaises(sync.SyncError):
                     sync.validate_pair("mihomo-codex", source, target)
         sync.validate_pair("mihomo-codex", source, metadata(True))
+
+    def test_scope_diagnostic_names_fields_without_echoing_response_values(self):
+        source = metadata(False, "CMMUU")
+        target = metadata(False)
+        target.pop("path")
+        with self.assertRaisesRegex(sync.SyncError, "path=missing, html_url=matches"):
+            sync.validate_pair("mihomo-codex", source, target)
+        target["path"] = "private-test-value"
+        target["html_url"] = "https://gitee.com/file?secret=private-test-value"
+        with self.assertRaisesRegex(sync.SyncError, "path=differs, html_url=differs") as error:
+            sync.validate_pair("mihomo-codex", source, target)
+        self.assertNotIn("private-test-value", str(error.exception))
 
     def test_public_repository_does_not_bypass_authenticated_owner_preflight(self):
         class GH:
