@@ -31,6 +31,10 @@ min_run_secs = 300
 autostart = false
 # 独立于 enabled；需要系统通知、有效 token 和可用网络。
 pause_on_shutdown = true
+# 默认关闭。开启后，从托盘完全退出雷神守护并重新打开才会生效。
+# 使用 Windows 进程加载限制保护本工具，不关闭游戏加加，也不修改游戏加加的配置。
+# 严格模式也会阻止其他不属于 Microsoft、Microsoft Store 或 WHQL 信任范围的 DLL；若有兼容问题，请关闭后完全退出并重新打开。
+block_gamepp_injection = false
 
 [updates]
 # 默认不在启动时联网检查更新；可在「关于与更新」页开启。

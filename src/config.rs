@@ -50,6 +50,9 @@ pub struct Strategy {
     /// 启动后连续确认没有名单游戏的宽限时间，与游戏退出宽限期独立。
     #[serde(default = "default_startup_grace_secs")]
     pub startup_grace_secs: u64,
+    /// 阻止游戏加加等不属于 Microsoft、Store 或 WHQL 信任范围的 DLL 注入本工具。
+    #[serde(default)]
+    pub block_gamepp_injection: bool,
 }
 
 fn default_true() -> bool {
@@ -67,6 +70,7 @@ impl Default for Strategy {
             pause_on_shutdown: true,
             pause_on_startup: true,
             startup_grace_secs: DEFAULT_STARTUP_GRACE_SECS,
+            block_gamepp_injection: false,
         }
     }
 }
@@ -165,6 +169,21 @@ mod tests {
         let restored: Config = toml::from_str(&toml::to_string(&cfg).unwrap()).unwrap();
         assert_eq!(restored.strategy.startup_grace_secs, 300);
         assert_eq!(restored.strategy.grace_secs, 90);
+    }
+
+    #[test]
+    fn gamepp_protection_is_opt_in_and_survives_serialization() {
+        let old = "games = []\nplans = []\n[strategy]\nenabled = true\ncheck_interval_secs = 3\ngrace_secs = 90\nmin_run_secs = 300\nautostart = false\n";
+        let old_cfg: Config = toml::from_str(old).unwrap();
+        assert!(!old_cfg.strategy.block_gamepp_injection);
+        assert!(!Config::default().strategy.block_gamepp_injection);
+
+        for enabled in [false, true] {
+            let mut cfg = Config::default();
+            cfg.strategy.block_gamepp_injection = enabled;
+            let restored: Config = toml::from_str(&toml::to_string(&cfg).unwrap()).unwrap();
+            assert_eq!(restored.strategy.block_gamepp_injection, enabled);
+        }
     }
 
     #[test]

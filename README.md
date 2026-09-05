@@ -8,7 +8,7 @@
 
 **Windows 10 / 11 x64 · MIT 开源 · 安装版 EXE / 绿色免安装 ZIP · 应用内更新**
 
-[下载 Windows 安装版（推荐）](https://github.com/CMMUU/leigod-guard/releases/download/v0.8.0/leigod-guard-v0.8.0-windows-x64-setup.exe) · [下载绿色免安装版](https://github.com/CMMUU/leigod-guard/releases/download/v0.8.0/leigod-guard-v0.8.0-windows-x64.zip) · [全部下载与校验文件](https://github.com/CMMUU/leigod-guard/releases/latest) · [版本记录](CHANGELOG.md) · [隐私与本地数据](docs/PRIVACY.md) · [问题反馈](https://github.com/CMMUU/leigod-guard/issues)
+[下载 Windows 安装版（推荐）](https://github.com/CMMUU/leigod-guard/releases/download/v0.8.1/leigod-guard-v0.8.1-windows-x64-setup.exe) · [下载绿色免安装版](https://github.com/CMMUU/leigod-guard/releases/download/v0.8.1/leigod-guard-v0.8.1-windows-x64.zip) · [全部下载与校验文件](https://github.com/CMMUU/leigod-guard/releases/latest) · [版本记录](CHANGELOG.md) · [隐私与本地数据](docs/PRIVACY.md) · [问题反馈](https://github.com/CMMUU/leigod-guard/issues)
 
 Leigod Guard is an unofficial, open-source Windows companion for the Leigod game accelerator. It helps save unused paid time after a game ends or when you reboot for other tasks. Startup protection waits 3 minutes by default; choose “Preparing to play” to defer it for 10 minutes. Detecting a configured game switches to normal game-exit monitoring, with a separate 90-second grace period. Installer, portable downloads, and in-app updates are available.
 
@@ -20,7 +20,7 @@ Leigod Guard is an unofficial, open-source Windows companion for the Leigod game
 2. **加入游戏名单**：从常用游戏下拉列表选择预设，或自定义进程文件名；也可启动游戏后用「从运行进程选择…」确认实际进程。加速与线路选择仍在雷神官方客户端操作。**首次启动时名单为空，配置后若要执行启动检查，请完全退出并重新打开本工具**；无需重新启动电脑。正常游戏退出监控在名单有效、总开关开启且观察到游戏运行后，当次即可工作。
 3. **后台守护计时**：保持工具运行，按下方「自动暂停规则」检查游戏。准备开玩时，可在尚未结束的启动检查中点击「准备游戏，延后10分钟」。暂停后，打开雷神官方微信小程序，登录同一账号并下拉刷新，核对计时状态。
 
-**0.8.0 将启动检查改为默认 3 分钟缓冲，旧配置升级后也采用此等待时间。** 启动暂停选项仍默认开启；可在「策略」调整「启动等待（秒）」或关闭「启动时无游戏运行则暂停计时」。这里的“游戏”指名单中的游戏，工具无法追回已经消耗的时长。
+**0.8.1 延续默认 3 分钟的启动缓冲，旧配置升级后也采用此等待时间，并新增默认关闭的游戏加加屏蔽选项。** 启动暂停选项仍默认开启；可在「策略」调整「启动等待（秒）」或关闭「启动时无游戏运行则暂停计时」。这里的“游戏”指名单中的游戏，工具无法追回已经消耗的时长。
 
 安装、验证码、托盘操作和更新方法见下方「下载与首次使用」。
 
@@ -97,7 +97,7 @@ Leigod Guard is an unofficial, open-source Windows companion for the Leigod game
 
 未列出的游戏请选择「自定义 / 手动填写」，或使用「从运行进程选择…」。请用本机实际游戏进程核对预设，特别留意区服、启动平台和客户端版本差异；同一进程不必重复添加。预设只减少输入，不表示已经逐款通过真实游戏、雷神账户暂停或反作弊兼容性测试。
 
-各项文件名的参考资料见 [预设定义与来源](https://github.com/CMMUU/leigod-guard/blob/v0.8.0/src/game_presets.rs)。其中 CS2、守望先锋参考了发行方项目或论坛中的用户运行日志，这些记录不代表发行方对本工具的兼容性认证。
+各项文件名的参考资料见 [预设定义与来源](https://github.com/CMMUU/leigod-guard/blob/v0.8.1/src/game_presets.rs)。其中 CS2、守望先锋参考了发行方项目或论坛中的用户运行日志，这些记录不代表发行方对本工具的兼容性认证。
 
 ## 适用范围
 
@@ -125,6 +125,7 @@ Windows 10 / 11 x64 是当前支持目标，并不表示所有系统版本、驱
 - 自定义检测间隔、自动暂停总开关和启动暂停选项。
 - 当前 Windows 用户登录时自动启动，并隐藏到托盘。
 - 收到 Windows 关机或注销通知时，尝试暂停计时。
+- 可在「策略」中按需阻止游戏加加向雷神守护进程注入；此选项默认关闭，从托盘完全退出雷神守护并重新打开后生效。它使用严格的进程 DLL 加载策略，因此也会阻止其他不属于 Microsoft、Microsoft Store 或 WHQL 信任范围的 DLL。
 - 查看账户状态与运行日志。
 - 手动检查新版本，或选择启动时自动检查；发现新版后点击「下载并更新」完成升级。
 
@@ -136,12 +137,12 @@ Windows 10 / 11 x64 是当前支持目标，并不表示所有系统版本、驱
 
 | 版本 | 下载后怎样使用 | 适合谁 |
 | --- | --- | --- |
-| [安装版 EXE](https://github.com/CMMUU/leigod-guard/releases/download/v0.8.0/leigod-guard-v0.8.0-windows-x64-setup.exe) | 双击安装，按需自动补装 WebView2，提供快捷方式和卸载入口 | 普通用户，推荐 |
-| [绿色免安装版 ZIP](https://github.com/CMMUU/leigod-guard/releases/download/v0.8.0/leigod-guard-v0.8.0-windows-x64.zip) | 解压到固定且可写的目录，运行 `leigod-guard.exe`；验证码需要已有 WebView2 Runtime | 希望自行管理程序目录的用户 |
+| [安装版 EXE](https://github.com/CMMUU/leigod-guard/releases/download/v0.8.1/leigod-guard-v0.8.1-windows-x64-setup.exe) | 双击安装，按需自动补装 WebView2，提供快捷方式和卸载入口 | 普通用户，推荐 |
+| [绿色免安装版 ZIP](https://github.com/CMMUU/leigod-guard/releases/download/v0.8.1/leigod-guard-v0.8.1-windows-x64.zip) | 解压到固定且可写的目录，运行 `leigod-guard.exe`；验证码需要已有 WebView2 Runtime | 希望自行管理程序目录的用户 |
 
 两种版本功能相同，都支持应用内更新。这里的「绿色免安装」指不需要安装向导：配置和日志仍保存在 `%APPDATA%\leigod-guard\`；若主动开启开机自启，也会写入当前用户的 Windows 自启注册表项。它不是将所有数据保存到程序目录、完全不写注册表的移动应用。
 
-1. 下载 [Windows x64 安装包](https://github.com/CMMUU/leigod-guard/releases/download/v0.8.0/leigod-guard-v0.8.0-windows-x64-setup.exe)：`leigod-guard-v0.8.0-windows-x64-setup.exe`。页面中的 `Source code` 是源码，不是安装程序。
+1. 下载 [Windows x64 安装包](https://github.com/CMMUU/leigod-guard/releases/download/v0.8.1/leigod-guard-v0.8.1-windows-x64-setup.exe)：`leigod-guard-v0.8.1-windows-x64-setup.exe`。页面中的 `Source code` 是源码，不是安装程序。
 2. 双击安装包，按向导完成安装，然后从开始菜单或桌面快捷方式打开「雷神守护」。**不需要解压或手动配置运行库。** 安装器会在需要时自动安装验证码窗口所需的 WebView2 Runtime；首次补装运行时需要联网。
 3. 打开「账户」页，用自己的雷神账户登录。提供密码、短信验证码和已有 token 三种方式；遇到人机验证时按窗口提示完成。不要把密码、短信验证码或 token 发到 Issues。
 4. 打开「游戏名单」，从「常用游戏」下拉列表选择游戏；未列出的游戏可选择「自定义 / 手动填写」，或先启动一次游戏，再用「从运行进程选择…」选择真正的游戏进程。请核对预设文件名与本机实际进程是否一致；自定义时填写例如 `ExampleGame.exe` 的文件名，不填完整路径、桌面快捷方式名称或 `*.exe`。
@@ -154,7 +155,7 @@ Windows 10 / 11 x64 是当前支持目标，并不表示所有系统版本、驱
 
 WebView2 Runtime 适用独立的 [微软许可条款](licenses/webview2-runtime/LICENSE.txt)。安装向导会展示相应条款；其中默认启用的 Microsoft Defender SmartScreen 会按微软隐私声明处理并向微软发送信息，详见 [隐私说明](docs/PRIVACY.md)。
 
-绿色免安装版下载文件为 `leigod-guard-v0.8.0-windows-x64.zip`，请完整解压后运行，不要直接从 ZIP 预览窗口启动。该版本不提供安装和卸载向导；普通用户建议使用上面的安装版。
+绿色免安装版下载文件为 `leigod-guard-v0.8.1-windows-x64.zip`，请完整解压后运行，不要直接从 ZIP 预览窗口启动。该版本不提供安装和卸载向导；普通用户建议使用上面的安装版。
 
 ### 应用内更新
 
@@ -162,7 +163,7 @@ WebView2 Runtime 适用独立的 [微软许可条款](licenses/webview2-runtime/
 2. 发现新版后查看版本信息，点击「下载并更新」。自动检查只负责提示，**不会未经点击就下载或安装新版**。若正在登录验证，请先完成或关闭验证码窗口。
 3. 程序下载并校验发布文件，然后关闭当前程序、完成升级并重新打开。安装版使用新版安装 EXE；绿色免安装版使用新版 ZIP 更新原目录，保持原有发行方式。
 
-升级保留用户配置、游戏名单和登录数据。**应用退出到重新打开之间不会监控游戏；更新器本身不请求暂停，但重新打开后的应用会执行正常启动策略。** 0.8.0 更新后重启会采用默认 180 秒的启动等待，满足条件且持续没有名单游戏时才尝试暂停；仍可使用准备游戏延后按钮。旧配置缺少启动暂停字段时默认开启，缺少启动等待字段时默认 180 秒。需要确保计时已暂停时，请先手动暂停并确认后再更新；更新前已经消耗的时长无法追回。
+升级保留用户配置、游戏名单和登录数据。**应用退出到重新打开之间不会监控游戏；更新器本身不请求暂停，但重新打开后的应用会执行正常启动策略。** 0.8.1 更新后重启会采用默认 180 秒的启动等待，满足条件且持续没有名单游戏时才尝试暂停；仍可使用准备游戏延后按钮。旧配置缺少启动暂停字段时默认开启，缺少启动等待字段时默认 180 秒。游戏加加屏蔽默认关闭；开启后也需要完全退出并重新打开本工具才生效。需要确保计时已暂停时，请先手动暂停并确认后再更新；更新前已经消耗的时长无法追回。
 
 检查与下载需要连接 GitHub，使用本仓库正式 Release 的公开信息和文件，不向 GitHub 发送雷神账户凭据。只提示版本号更高的正式版本，不自动降级或升级到预发布版本。下载会与同一 Release 的 `SHA256SUMS.txt` 核对；校验失败时不继续应用。SHA-256 用于校验文件完整性，不能替代发布者代码签名。网络、目录权限或文件被占用导致更新失败时，请按界面提示重试，或前往 [Release 下载页](https://github.com/CMMUU/leigod-guard/releases/latest) 手动下载。
 
@@ -185,7 +186,7 @@ WebView2 Runtime 适用独立的 [微软许可条款](licenses/webview2-runtime/
 在下载目录的 PowerShell 中运行：
 
 ```powershell
-Get-FileHash .\leigod-guard-v0.8.0-windows-x64-setup.exe -Algorithm SHA256
+Get-FileHash .\leigod-guard-v0.8.1-windows-x64-setup.exe -Algorithm SHA256
 ```
 
 将结果与同一 Release 提供的 `SHA256SUMS.txt` 中相同文件名的记录核对。便携 ZIP 也可用同样方式校验。哈希校验用于确认下载内容一致，不等同于 Windows 代码签名。
@@ -202,7 +203,7 @@ Get-FileHash .\leigod-guard-v0.8.0-windows-x64-setup.exe -Algorithm SHA256
 
 **刚手动开启加速，怎样避免准备游戏时被暂停？**
 
-0.8.0 启动后默认留出 3 分钟。检查尚未结束时，在首页或托盘点击「准备游戏，延后10分钟」，然后打开名单中的游戏。检测到游戏后会结束启动检查；本次检查已经成功完成或跳过时，也不会因为之后手动开启加速而重新启动。程序不能识别雷神的加速按钮；较长的准备过程可再次延后，或在「策略」调整启动等待。实际已在游戏中却倒计时时，请核对进程名是否匹配。0.7.0 没有这段启动缓冲，建议更新。
+0.8.1 启动后默认留出 3 分钟。检查尚未结束时，在首页或托盘点击「准备游戏，延后10分钟」，然后打开名单中的游戏。检测到游戏后会结束启动检查；本次检查已经成功完成或跳过时，也不会因为之后手动开启加速而重新启动。程序不能识别雷神的加速按钮；较长的准备过程可再次延后，或在「策略」调整启动等待。实际已在游戏中却倒计时时，请核对进程名是否匹配。0.7.0 没有这段启动缓冲，建议更新。
 
 **只关闭「启用自动暂停」总开关，就不会再暂停了吗？**
 
@@ -211,6 +212,14 @@ Get-FileHash .\leigod-guard-v0.8.0-windows-x64-setup.exe -Algorithm SHA256
 **关机后一定能暂停吗？**
 
 不能保证。关机暂停依赖程序仍在运行、Windows 通知能够送达、有效 token、网络和服务响应，而且系统可能只留很短的处理时间。断电、强制结束进程、系统崩溃、断网、休眠等情况不能依赖此功能兜底。需要确定暂停时，应先手动暂停并核对账户状态。
+
+**游戏加加的监控出现在本工具窗口上，怎样屏蔽？**
+
+在「策略 → OSD 与注入屏蔽」开启「阻止游戏加加向本工具注入」，再从托盘完全退出雷神守护并重新打开。该选项默认关闭，只保护雷神守护进程；它不会关闭游戏加加，不修改游戏加加的文件、注册表、进程或游戏内设置，也不需要管理员权限。
+
+此功能使用 Windows 严格的进程 DLL 加载策略，同时会阻止其他不属于 Microsoft、Microsoft Store 或 WHQL 信任范围的 DLL，可能影响其他 OSD、录屏或输入法插件。如雷神守护出现启动或显示异常，请关闭该选项并完全退出后重新打开。当前仅在 GamePP SDK 1.2.1615.625 与 NVIDIA 显卡环境实测阻止游戏加加注入；AMD、Intel 显卡环境尚未覆盖，是否成功屏蔽请以策略页状态及本机实测为准。
+
+如果开启后窗口完全无法显示，请确认本工具进程已经退出，用记事本打开 `%APPDATA%\leigod-guard\config.toml`，将 `block_gamepp_injection = true` 改为 `false` 后再启动；删除这一行也会恢复默认关闭。不要改动同一文件中的账户密文。
 
 **登录失效或验证码出不来？**
 

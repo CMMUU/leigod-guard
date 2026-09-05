@@ -55,6 +55,24 @@ fn main() {
 
     let minimized = args.iter().any(|a| a == "--minimized");
 
+    // Load the strategy before the instance mutex and graphics initialization.
+    // Strict GamePP blocking must be present at process creation time; the small
+    // bootstrap exits after starting the protected replacement.
+    let loaded_config = config::Config::load();
+    if loaded_config.strategy.block_gamepp_injection {
+        match osd::prepare_gamepp_protection(&args) {
+            osd::GameppProtectionPreparation::Relaunched => return,
+            osd::GameppProtectionPreparation::Active => {}
+            osd::GameppProtectionPreparation::ContinueUnprotected(message) => {
+                ui::msgbox_warn("游戏加加屏蔽未生效", &message)
+            }
+            osd::GameppProtectionPreparation::Abort(message) => {
+                ui::msgbox_warn("游戏加加屏蔽未生效", &message);
+                return;
+            }
+        }
+    }
+
     let _instance = match instance::InstanceGuard::acquire() {
         Ok(Some(guard)) => guard,
         Ok(None) => {
@@ -69,7 +87,7 @@ fn main() {
         }
     };
 
-    let config = Arc::new(Mutex::new(config::Config::load()));
+    let config = Arc::new(Mutex::new(loaded_config));
     let shared = Arc::new(Mutex::new(shared::Shared::default()));
 
     // 后台守护线程

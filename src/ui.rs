@@ -2135,8 +2135,9 @@ impl App {
             ui.add_space(12.0);
             ui.separator();
             ui.add_space(6.0);
-            ui.heading("OSD 屏蔽（微星小飞机）");
+            ui.heading("OSD 与注入屏蔽");
             ui.add_space(4.0);
+            ui.strong("微星小飞机（RTSS）");
             ui.label("本工具窗口使用 DirectX 渲染，微星小飞机（RTSS）会把它误判成 3D 游戏并叠加 OSD。\
                       这里可以写入 RTSS 官方排除配置（与其自带的非游戏应用模板一致），让它不再注入本工具。");
             ui.add_space(4.0);
@@ -2162,11 +2163,92 @@ impl App {
             } else {
                 ui.label("未检测到微星小飞机（RTSS）安装，无需处理");
             }
-            ui.add_space(4.0);
+
+            ui.add_space(10.0);
+            ui.strong("游戏加加");
+            let protection_active = osd::gamepp_protection_active();
+            let protection_error = osd::gamepp_protection_error();
+            let gamepp_modules_loaded = osd::gamepp_modules_loaded();
+            if ui
+                .checkbox(
+                    &mut c.strategy.block_gamepp_injection,
+                    "阻止游戏加加向本工具注入（完全退出并重新打开后生效）",
+                )
+                .changed()
+            {
+                self.dirty = true;
+            }
             ui.label(
-                "游戏加加暂不提供进程级排除入口。如果它的游戏内监控出现在本工具窗口上，\
-                      可按 Ctrl+F10 隐藏面板，或在游戏加加 设置 → 硬件监控 → 游戏内监控 中调整。",
+                egui::RichText::new(
+                    "默认关闭。更改后须从托盘完全退出并重新打开；关闭保护也要重启才能撤销。",
+                )
+                .weak()
+                .small(),
             );
+            ui.label(
+                egui::RichText::new(
+                    "严格策略只作用于新启动的雷神守护主进程，不改变游戏进程；不会关闭游戏加加或修改它的设置，无需管理员权限。",
+                )
+                .weak()
+                .small(),
+            );
+            ui.label(
+                egui::RichText::new(
+                    "它也会阻止其他不属于 Microsoft、Microsoft Store 或 WHQL 信任范围的 DLL，可能影响其他 OSD、录屏或输入法插件；如有异常，请关闭后完全退出并重新打开。",
+                )
+                .weak()
+                .small(),
+            );
+            ui.add_space(4.0);
+            match (c.strategy.block_gamepp_injection, protection_active) {
+                (false, false) => {
+                    ui.label("状态：未启用（默认关闭）");
+                    if gamepp_modules_loaded == Some(true) {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(220, 150, 50),
+                            "当前进程检测到游戏加加模块；如需屏蔽，请开启后完全退出并重新打开。",
+                        );
+                    }
+                }
+                (true, false) => {
+                    if let Some(error) = protection_error {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(230, 60, 60),
+                            format!("状态：本次启动保护失败，当前未受保护：{error}"),
+                        );
+                        ui.label("可关闭此选项继续普通使用，或完全退出后重试。");
+                    } else {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(220, 150, 50),
+                            "状态：当前未生效。设置已保存；从托盘完全退出并重新打开后尝试启用。",
+                        );
+                    }
+                }
+                (false, true) => {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(220, 150, 50),
+                        "状态：已保存关闭；当前进程仍受保护，完全退出后重新打开即可撤销。",
+                    );
+                }
+                (true, true) if gamepp_modules_loaded == Some(true) => {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(220, 120, 50),
+                        "Windows 保护策略已启用，但仍检测到游戏加加模块，本次未完全屏蔽；完全退出后再开或关闭兼容软件后重试。",
+                    );
+                }
+                (true, true) if gamepp_modules_loaded.is_none() => {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(220, 150, 50),
+                        "Windows 保护策略已启用，但无法读取本进程模块列表；请以窗口实际效果为准。",
+                    );
+                }
+                (true, true) => {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(80, 180, 80),
+                        "✔ Windows 报告保护策略已启用；当前模块扫描未发现游戏加加模块。",
+                    );
+                }
+            }
         }
         if !self.status_msg.is_empty() {
             ui.colored_label(egui::Color32::from_rgb(230, 60, 60), &self.status_msg);

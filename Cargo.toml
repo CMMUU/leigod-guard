@@ -1,6 +1,6 @@
 [package]
 name = "leigod-guard"
-version = "0.8.0"
+version = "0.8.1"
 edition = "2021"
 build = "build.rs"
 description = "Windows 雷神加速器自动暂停计时工具（非官方）"
