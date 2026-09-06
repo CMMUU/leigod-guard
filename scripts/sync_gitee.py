@@ -282,9 +282,15 @@ def git_run(repo, *args):
                 "GIT_ALLOW_PROTOCOL": "https"})
     helper = "!" + shlex.quote(Path(sys.executable).as_posix()) + " " + shlex.quote(Path(__file__).resolve().as_posix()) + " _git_credential"
     command = ["git", "-c", "credential.helper=", "-c", "credential.helper=" + helper,
-               "-c", "credential.useHttpPath=true", "-c", "core.askPass=", *args]
+               "-c", "credential.useHttpPath=true", "-c", "core.askPass=",
+               "-c", "http.https://gitee.com/.version=HTTP/1.1", *args]
+    network_markers = ("could not resolve", "failed to connect", "connection reset", "timed out", "rpc failed", "ssl", "tls")
     try:
         result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=300)
+        if operation == "ls-remote" and result.returncode and any(marker in result.stderr.casefold() for marker in network_markers):
+            # One bounded retry for a read-only transport failure. A push is
+            # never retried here; its outcome is checked by sync_refs instead.
+            result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=300)
     except (OSError, subprocess.TimeoutExpired):
         raise SyncError(f"Git {operation} failed or timed out; no credential output is logged") from None
     if result.returncode:
@@ -296,7 +302,7 @@ def git_run(repo, *args):
             (("does not support --atomic", "does not support atomic"), "atomic push unsupported"),
             (("--mirror can't be combined", "--mirror cannot be combined"), "mirror/refspec conflict"),
             (("non-fast-forward", "fetch first", "already exists"), "conflicting refs"),
-            (("could not resolve", "failed to connect", "connection reset", "timed out", "rpc failed", "ssl", "tls"), "network transport failure"),
+            (network_markers, "network transport failure"),
         ):
             if any(marker in detail for marker in markers):
                 reason = label

@@ -250,6 +250,22 @@ class SyncTests(unittest.TestCase):
             self.assertNotIn("offline-secret", str(error.exception))
             self.assertNotIn("private-value", str(error.exception))
 
+    def test_only_read_only_network_failure_is_retried_once(self):
+        failed = sync.subprocess.CompletedProcess([], 1, stdout="", stderr="error: RPC failed")
+        success = sync.subprocess.CompletedProcess([], 0, stdout="verified refs\n", stderr="")
+        with patch.object(sync.subprocess, "run", side_effect=[failed, success]) as run:
+            result = sync.git_run("leigod-guard", "ls-remote", "--refs", "https://gitee.com/cmmuu/leigod-guard.git")
+            self.assertEqual(result, "verified refs")
+            self.assertEqual(run.call_count, 2)
+            self.assertEqual(run.call_args_list[0], run.call_args_list[1])
+            self.assertIn("http.https://gitee.com/.version=HTTP/1.1", run.call_args.args[0])
+        for operation, failure, expected_calls in (("push", failed, 1), ("ls-remote", failed, 2),
+                ("ls-remote", sync.subprocess.CompletedProcess([], 1, stdout="", stderr="Authentication failed"), 1)):
+            with patch.object(sync.subprocess, "run", return_value=failure) as run:
+                with self.assertRaises(sync.SyncError):
+                    sync.git_run("leigod-guard", operation, "https://gitee.com/cmmuu/leigod-guard.git")
+                self.assertEqual(run.call_count, expected_calls)
+
     def test_ref_sync_copies_all_heads_and_tags_without_force_or_remote_deletion(self):
         job = sync.Sync("mihomo-codex", None, None, self.fixture())
         job.guard = lambda: None
