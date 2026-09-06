@@ -247,6 +247,8 @@ class SyncTests(unittest.TestCase):
             if "for-each-ref" in args:
                 return "\n".join(f"{ref} {sha}" for ref, sha in refs.items())
             if "ls-remote" in args:
+                if not any("push" in call for call in calls):
+                    return ""
                 return "\n".join(f"{sha}\t{ref}" for ref, sha in refs.items())
             return ""
         with patch.object(sync, "git_run", side_effect=git):
@@ -256,6 +258,42 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(pushes[0][-2:], ("refs/heads/*:refs/heads/*", "refs/tags/*:refs/tags/*"))
         self.assertIn("--atomic", pushes[0])
         self.assertFalse(any(option in pushes[0] for option in ("--force", "--mirror", "--prune", "--delete")))
+
+    def test_matching_refs_skip_push_and_uncertain_push_requires_full_verification(self):
+        refs = {"refs/heads/main": "a" * 40, "refs/tags/v0.11.0": "b" * 40}
+        for initial_match, final_state in ((True, "match"), (False, "match"),
+                                           (False, "missing-tag"), (False, "wrong-branch"),
+                                           (False, "read-failed")):
+            with self.subTest(initial_match=initial_match, final_state=final_state):
+                job = sync.Sync("leigod-guard", None, None, self.fixture())
+                job.guard = lambda: None
+                calls = []
+                def git(repo, *args):
+                    calls.append(args)
+                    if "for-each-ref" in args:
+                        return "\n".join(f"{ref} {sha}" for ref, sha in refs.items())
+                    if "push" in args:
+                        raise sync.SyncError("Uncertain transport result")
+                    if "ls-remote" in args:
+                        if not initial_match and not any("push" in call for call in calls):
+                            return ""
+                        if final_state == "read-failed":
+                            raise sync.SyncError("Verification read failed")
+                        actual = dict(refs)
+                        actual["refs/heads/gitee-only"] = "d" * 40
+                        if final_state == "missing-tag":
+                            actual.pop("refs/tags/v0.11.0")
+                        elif final_state == "wrong-branch":
+                            actual["refs/heads/main"] = "c" * 40
+                        return "\n".join(f"{sha}\t{ref}" for ref, sha in actual.items())
+                    return ""
+                with patch.object(sync, "git_run", side_effect=git):
+                    if final_state == "match":
+                        job.sync_refs()
+                    else:
+                        with self.assertRaises(sync.SyncError):
+                            job.sync_refs()
+                self.assertEqual(sum("push" in call for call in calls), 0 if initial_match else 1)
 
     def test_release_title_body_and_attachment_are_copied_once_then_reused(self):
         data = b"good"

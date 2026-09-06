@@ -323,13 +323,28 @@ class Sync:
             git_run(self.repo, "clone", "--mirror", source_url, str(bare))
         self.guard()  # Recheck privacy immediately before the first external write.
         destination = f"https://gitee.com/{GE_OWNER}/{self.repo}.git"
-        # Explicit namespaces: no deletion, force push, pull refs or remote configs.
-        git_run(self.repo, "--git-dir", str(bare), "push", "--atomic", destination,
-                "refs/heads/*:refs/heads/*", "refs/tags/*:refs/tags/*")
         expected = dict(line.split(" ", 1) for line in git_run(self.repo, "--git-dir", str(bare), "for-each-ref",
                         "--format=%(refname) %(objectname)", "refs/heads", "refs/tags").splitlines())
-        actual = {ref: sha for sha, ref in (line.split() for line in git_run(self.repo, "ls-remote", "--refs", destination).splitlines())}
-        if any(actual.get(ref) != sha for ref, sha in expected.items()):
+        if not expected:
+            raise SyncError("Source contains no branches or tags to verify")
+
+        def remote_matches():
+            actual = {ref: sha for sha, ref in (line.split() for line in git_run(self.repo, "ls-remote", "--refs", destination).splitlines())}
+            return all(actual.get(ref) == sha for ref, sha in expected.items())
+
+        if remote_matches():
+            return bare
+        # Explicit namespaces: no deletion, force push, pull refs or remote configs.
+        try:
+            git_run(self.repo, "--git-dir", str(bare), "push", "--atomic", destination,
+                    "refs/heads/*:refs/heads/*", "refs/tags/*:refs/tags/*")
+        except SyncError:
+            # The server can accept a push before the transport reports failure.
+            # Resolve that ambiguity with a fresh read, never a force or retry.
+            if not remote_matches():
+                raise
+            return bare
+        if not remote_matches():
             raise SyncError("Gitee branches or tags did not match the source after push")
         return bare
 
