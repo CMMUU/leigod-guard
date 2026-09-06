@@ -393,7 +393,7 @@ fn ensure_token(shared: &Arc<Mutex<Shared>>, cfg: &Arc<Mutex<Config>>) -> Option
                 }
             }
             if let Ok(mut s) = shared.lock() {
-                s.token = Some(token.clone());
+                s.set_token(Some(token.clone()));
             }
             Some(token)
         }
@@ -416,7 +416,7 @@ fn restore_token(shared: &Arc<Mutex<Shared>>, cfg: &Arc<Mutex<Config>>) {
     match dpapi::unprotect(&token_enc) {
         Ok(t) if !t.is_empty() => {
             if let Ok(mut s) = shared.lock() {
-                s.token = Some(t);
+                s.set_token(Some(t));
             }
             log(shared, "已恢复本地保存的 token");
         }
@@ -687,9 +687,7 @@ fn refresh_account_info(shared: &Arc<Mutex<Shared>>, cfg: &Arc<Mutex<Config>>) {
         match api::user_info(&t) {
             Ok(v) => {
                 if let Ok(mut s) = shared.lock() {
-                    if s.token.as_deref() == Some(t.as_str()) {
-                        s.account_info = Some(v);
-                    }
+                    s.set_account_info(&t, v);
                 }
             }
             Err(e) => crate::ui::dbglog(&format!("[worker] refresh user_info failed: {}", e.0)),
@@ -732,7 +730,7 @@ fn call_with_retry_checked(
                 if api::is_token_err(&e) {
                     // token 失效：清掉内存 token，下一轮 ensure_token 会尝试重登
                     if let Ok(mut s) = shared.lock() {
-                        s.token = None;
+                        s.set_token(None);
                     }
                     std::thread::sleep(Duration::from_secs(2));
                 } else {

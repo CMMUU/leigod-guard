@@ -43,6 +43,7 @@ enum UpdateEvent {
 // The HTTP request has a 12-second timeout. Also bound the UI wait in case its
 // background thread exits or never delivers a result.
 const ACCOUNT_QUERY_TIMEOUT: Duration = Duration::from_secs(15);
+const HOME_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
 struct AccountQuery {
     events: Receiver<Result<serde_json::Value, api::ApiError>>,
@@ -62,6 +63,7 @@ pub struct App {
 
     page: Page,
     brand: egui::TextureHandle,
+    backdrop: egui::TextureHandle,
     show_add_game: bool,
     dirty: bool,
     status_msg: String,
@@ -97,6 +99,7 @@ pub struct App {
     account_query: Option<AccountQuery>,
     account_query_message: String,
     account_query_error: bool,
+    next_home_refresh: Instant,
 
     // 人机验证等待状态：0=无 1=等验证后重试发短信 2=等验证后重试密码登录
     pending_captcha: u8,
@@ -347,7 +350,7 @@ fn hide_window_native() {
     }
 }
 
-/// 主窗口当前是否可见（调试用）
+/// 主窗口当前是否可见（同时用于阻止隐藏到托盘后的定时账户查询）
 fn is_main_visible() -> Option<bool> {
     use windows::Win32::UI::WindowsAndMessaging::IsWindowVisible;
     find_main_hwnd().map(|h| unsafe { IsWindowVisible(h).as_bool() })
@@ -626,6 +629,7 @@ impl App {
                 ),
                 egui::TextureOptions::LINEAR,
             ),
+            backdrop: theme::glass_backdrop(ctx),
             show_add_game: false,
             dirty: false,
             status_msg: String::new(),
@@ -660,6 +664,7 @@ impl App {
             account_query: None,
             account_query_message: String::new(),
             account_query_error: false,
+            next_home_refresh: Instant::now(),
             pending_captcha: 0,
             pending_user: String::new(),
             pending_md5: String::new(),
@@ -989,6 +994,7 @@ impl App {
             .exact_width(sidebar_width)
             .frame(egui::Frame::new())
             .show(ctx, |ui| {
+                theme::paint_backdrop(ui, &self.backdrop, ui.max_rect());
                 theme::sidebar_background(ui);
                 ui.add_space(if short { 14.0 } else { 42.0 });
                 ui.vertical_centered(|ui| {
@@ -1058,12 +1064,15 @@ impl App {
             });
         let margin = if screen.width() >= 1000.0 { 28 } else { 20 };
         egui::CentralPanel::default()
-            .frame(
-                egui::Frame::new()
-                    .fill(theme::BACKGROUND)
-                    .inner_margin(egui::Margin::symmetric(margin, 24)),
-            )
+            .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(margin, 24)))
             .show(ctx, |ui| {
+                let background = ui.max_rect().expand2(egui::vec2(margin as f32, 24.0));
+                theme::paint_backdrop(ui, &self.backdrop, background);
+                ui.painter().with_clip_rect(background).rect_filled(
+                    background,
+                    0,
+                    theme::glass_tint(35),
+                );
                 let content = egui::ScrollArea::vertical()
                     .id_salt(self.page as u8)
                     .auto_shrink([false, false])
@@ -1181,6 +1190,13 @@ impl eframe::App for App {
         }
 
         self.poll_account_query(Instant::now());
+        // Only refresh while the home window is in use. Tray/background games
+        // don't cause periodic account traffic; manual refresh remains available.
+        if self.home_refresh_due(Instant::now(), ctx.input(|i| i.focused)) {
+            if is_main_visible() == Some(true) {
+                self.refresh_account_info();
+            }
+        }
         self.render_shell(ctx);
 
         // 进程选择弹窗
@@ -1398,6 +1414,18 @@ impl App {
                 s.startup_defer_requested_at.is_some(),
                 s.process_snapshot.clone(),
                 s.status.clone(),
+                crate::ui_home::TimeBalance {
+                    seconds: s
+                        .account_info
+                        .as_ref()
+                        .and_then(api::account_remaining_seconds),
+                    checked_at: s
+                        .account_info_updated_at
+                        .map(|t| t.format("%H:%M:%S").to_string()),
+                    logged_in: s.token.is_some(),
+                    refreshing: self.account_query.is_some(),
+                    query_failed: self.account_query_error && s.account_info.is_none(),
+                },
             )
         });
         let state = HomeState {
@@ -1409,6 +1437,7 @@ impl App {
                 .as_ref()
                 .map(|s| s.3.as_str())
                 .unwrap_or("暂时无法读取监控状态"),
+            balance: snapshot.as_ref().map(|s| &s.4),
         };
         let mut enabled = config.strategy.enabled;
         let action = crate::ui_home::render(ui, &state, &mut enabled);
@@ -1428,6 +1457,8 @@ impl App {
             }
             HomeAction::Pause => self.request_manual_pause(),
             HomeAction::Strategy => self.page = Page::Strategy,
+            HomeAction::Account => self.page = Page::Account,
+            HomeAction::RefreshAccount => self.refresh_account_info(),
             HomeAction::AddGame => self.show_add_game = true,
             HomeAction::RemoveGame(index) => {
                 if let Ok(mut config) = self.config.lock() {
@@ -1697,8 +1728,8 @@ impl App {
         };
         self.cancel_account_query();
         if let Ok(mut s) = self.shared.lock() {
-            s.token = Some(token);
-            s.account_info = None;
+            s.set_token(Some(token));
+            s.clear_account_info();
             s.account_status =
                 format!("已登录（{}）", if user.is_empty() { "token" } else { user });
             s.log("账户登录成功，token 已加密保存");
@@ -1711,6 +1742,19 @@ impl App {
     /// 拉取账户信息并展示（登录后自动调用 + “刷新账户状态”按钮）
     fn refresh_account_info(&mut self) {
         self.start_account_query(api::user_info);
+    }
+
+    fn home_refresh_due(&self, now: Instant, focused: bool) -> bool {
+        focused
+            && self.page == Page::Games
+            && self.account_query.is_none()
+            && now >= self.next_home_refresh
+            && self.shared.lock().is_ok_and(|s| {
+                s.token.is_some()
+                    && s.account_info_received_at.is_none_or(|last| {
+                        now.saturating_duration_since(last) >= HOME_REFRESH_INTERVAL
+                    })
+            })
     }
 
     fn cancel_account_query(&mut self) {
@@ -1728,6 +1772,7 @@ impl App {
         if self.account_query.is_some() {
             return;
         }
+        self.next_home_refresh = Instant::now() + HOME_REFRESH_INTERVAL;
         let token = self.shared.lock().ok().and_then(|s| s.token.clone());
         let Some(token) = token else {
             self.account_query_message = "尚未登录，请先登录后再刷新账户状态。".into();
@@ -1818,7 +1863,7 @@ impl App {
                         chrono::Local::now().format("%H:%M:%S")
                     )
                 };
-                s.account_info = Some(v);
+                s.set_account_info(&pending.token, v);
                 s.account_status = if pending.user.is_empty() {
                     format!("已登录 · {state}")
                 } else {
@@ -1832,7 +1877,7 @@ impl App {
                 } else {
                     format!("查询失败：{e}；可点击“刷新账户状态”重试。")
                 };
-                s.account_info = None;
+                s.clear_account_info();
                 s.account_status = if api::is_token_err(&e) {
                     "登录已失效".into()
                 } else {
@@ -2060,8 +2105,8 @@ impl App {
                 self.cancel_account_query();
                 // 清空内存 token、本地加密凭据与界面状态
                 if let Ok(mut s) = self.shared.lock() {
-                    s.token = None;
-                    s.account_info = None;
+                    s.set_token(None);
+                    s.clear_account_info();
                     s.account_status = "未登录".into();
                     s.log("已退出登录，本地 token 与凭据已清除");
                 }
@@ -2132,7 +2177,7 @@ impl App {
                 None => ("计时状态：未知，请在小程序刷新核对", theme::MUTED),
             };
             ui.colored_label(color, txt);
-            ui.label("成功提示仅为请求反馈，最终以小程序刷新后的计时状态为准。\n核对：雷神官方微信小程序 → 登录同一账号 → 下拉刷新。\n暂停计时不代表已停止加速。账户资料和凭据不在此展示。");
+            ui.label("成功提示仅为请求反馈，最终以小程序刷新后的计时状态为准。\n核对：雷神官方微信小程序 → 登录同一账号 → 下拉刷新。\n暂停计时不代表已停止加速。首页展示上次查询的剩余时长，不展示原始账户资料或凭据。");
         }
     }
 

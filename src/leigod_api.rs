@@ -338,9 +338,79 @@ pub fn account_paused(info: &Value) -> Option<bool> {
     }
 }
 
+/// Public vip.leigod.com/js/user.js formats expiry_time_samp + experience_time
+/// as seconds. expiry_time itself is not a duration. Special activity packages
+/// use another server-clock calculation, so don't guess their balance here.
+pub fn account_remaining_seconds(info: &Value) -> Option<u64> {
+    let data = info.get("data")?;
+    if data
+        .get("expired_experience_time")
+        .is_some_and(|v| !v.is_null() && v.as_str().is_none_or(|s| !s.trim().is_empty()))
+    {
+        return None;
+    }
+    fn seconds(value: &Value) -> Option<i64> {
+        value.as_i64().or_else(|| {
+            let text = value.as_str()?.trim();
+            text.parse().ok()
+        })
+    }
+    let base = seconds(data.get("expiry_time_samp")?)?.max(0) as u64;
+    let trial = match data.get("experience_time") {
+        None | Some(Value::Null) => 0,
+        Some(value) => u64::try_from(seconds(value)?).ok()?,
+    };
+    // Reject overflow, malformed values and unsupported packages rather than
+    // showing a false zero or an unbounded number that breaks the home card.
+    let total = base.checked_add(trial)?;
+    (total <= 999_999 * 3600 + 3599).then_some(total)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remaining_time_uses_seconds_including_trial_without_guessing_dates() {
+        for (data, expected) in [
+            (
+                serde_json::json!({"expiry_time_samp": 460800, "experience_time": 2520}),
+                Some(463320),
+            ),
+            (
+                serde_json::json!({"expiry_time_samp": "3600", "experience_time": "60"}),
+                Some(3660),
+            ),
+            (serde_json::json!({"expiry_time_samp": 0}), Some(0)),
+            (
+                serde_json::json!({"expiry_time_samp": -30, "experience_time": 60}),
+                Some(60),
+            ),
+            (serde_json::json!({"expiry_time": "2099-01-01"}), None),
+            (serde_json::json!({"expiry_time_samp": null}), None),
+            (serde_json::json!({"expiry_time_samp": true}), None),
+            (serde_json::json!({"expiry_time_samp": 1.5}), None),
+            (serde_json::json!({"expiry_time_samp": "bad"}), None),
+            (
+                serde_json::json!({"expiry_time_samp": 60, "experience_time": -1}),
+                None,
+            ),
+            (
+                serde_json::json!({"expiry_time_samp": 60, "experience_time": "bad"}),
+                None,
+            ),
+            (serde_json::json!({"expiry_time_samp": i64::MAX}), None),
+            (
+                serde_json::json!({"expiry_time_samp": 60, "expired_experience_time": "2099-01-01"}),
+                None,
+            ),
+        ] {
+            assert_eq!(
+                account_remaining_seconds(&serde_json::json!({"data": data})),
+                expected
+            );
+        }
+    }
 
     #[test]
     fn account_timer_status_accepts_known_numbers_only() {

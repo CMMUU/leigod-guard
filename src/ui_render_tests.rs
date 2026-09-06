@@ -61,7 +61,14 @@ fn text_rect(shapes: &[egui::epaint::ClippedShape], wanted: &str) -> Rect {
     fn find(shape: &egui::Shape, wanted: &str) -> Option<Rect> {
         match shape {
             egui::Shape::Text(text) if text.galley.job.text == wanted => {
-                Some(Rect::from_min_size(text.pos, text.galley.size()))
+                // Wrapped horizontal labels carry first-row indentation in
+                // their row bounds; galley.size() includes that blank prefix.
+                let bounds = text
+                    .galley
+                    .rows
+                    .iter()
+                    .fold(Rect::NOTHING, |r, row| r.union(row.rect));
+                Some(bounds.translate(text.pos.to_vec2()))
             }
             egui::Shape::Vec(shapes) => shapes.iter().find_map(|s| find(s, wanted)),
             _ => None,
@@ -350,6 +357,103 @@ fn account_query_without_login_or_known_timer_state_is_not_success() {
     text_rect(&output.shapes, "计时状态：未知，请在小程序刷新核对");
 }
 
+fn set_demo_balance(app: &mut App, seconds: u64) {
+    let mut shared = app.shared.lock().unwrap();
+    shared.set_token(Some("fixture-account-token".into()));
+    shared.set_account_info(
+        "fixture-account-token",
+        serde_json::json!({"data": {"pause_status_id": 1, "expiry_time_samp": seconds, "experience_time": 0}}),
+    );
+}
+
+#[test]
+fn home_balance_and_protection_countdown_are_independent_and_fit_small_windows() {
+    let (ctx, mut app) = fixture();
+    set_demo_balance(&mut app, 128 * 3600 + 42 * 60);
+    for size in [[680.0, 460.0], [940.0, 660.0], [1180.0, 780.0]] {
+        let _ = frame(&ctx, &mut app, size, vec![]);
+        let output = frame(&ctx, &mut app, size, vec![]);
+        let balance = text_rect(&output.shapes, "128 小时 42 分钟");
+        let countdown = text_rect(&output.shapes, "02:36");
+        assert!(!balance.intersects(countdown));
+        text_rect(&output.shapes, "账户剩余时长");
+        text_rect(&output.shapes, "刷新时长");
+    }
+    set_demo_balance(&mut app, 999_999 * 3600 + 59 * 60);
+    for _ in 0..2 {
+        frame(&ctx, &mut app, [680.0, 460.0], vec![]);
+    }
+}
+
+#[test]
+fn home_balance_refresh_keeps_old_label_then_handles_success_failure_and_zero() {
+    let (ctx, mut app) = fixture();
+    set_demo_balance(&mut app, 3600);
+    let sender = pending_account_query(&mut app);
+    app.page = Page::Games;
+    let _ = frame(&ctx, &mut app, [1180.0, 780.0], vec![]);
+    let output = frame(&ctx, &mut app, [1180.0, 780.0], vec![]);
+    text_rect(&output.shapes, "1 小时 00 分钟");
+    text_rect(&output.shapes, "上次结果 · 正在刷新…");
+    click(&ctx, &mut app, "刷新时长"); // disabled: must not launch a real query
+    assert!(app.account_query.is_some());
+    sender
+        .send(Ok(
+            serde_json::json!({"data": {"pause_status_id": 1, "expiry_time_samp": 0}}),
+        ))
+        .unwrap();
+    app.poll_account_query(Instant::now());
+    let output = frame(&ctx, &mut app, [1180.0, 780.0], vec![]);
+    text_rect(&output.shapes, "0 小时 00 分钟");
+    assert!(app.shared.lock().unwrap().account_info_updated_at.is_some());
+
+    let sender = pending_account_query(&mut app);
+    app.page = Page::Games;
+    sender
+        .send(Err(api::ApiError("网络请求失败".into())))
+        .unwrap();
+    app.poll_account_query(Instant::now());
+    let output = frame(&ctx, &mut app, [1180.0, 780.0], vec![]);
+    text_rect(&output.shapes, "暂不可用");
+    text_rect(&output.shapes, "查询失败，请重试或重新登录");
+    assert!(app.shared.lock().unwrap().account_info_updated_at.is_none());
+    app.shared.lock().unwrap().set_token(None);
+    let output = frame(&ctx, &mut app, [1180.0, 780.0], vec![]);
+    text_rect(&output.shapes, "登录后查看");
+    click(&ctx, &mut app, "去登录");
+    assert!(app.page == Page::Account);
+}
+
+#[test]
+fn automatic_home_queries_are_focus_gated_freshness_checked_and_rate_limited() {
+    let (_, mut app) = fixture();
+    let now = Instant::now();
+    app.next_home_refresh = now;
+    assert!(!app.home_refresh_due(now, true));
+    app.shared
+        .lock()
+        .unwrap()
+        .set_token(Some("fixture-account-token".into()));
+    assert!(app.home_refresh_due(now, true));
+    assert!(!app.home_refresh_due(now, false));
+    app.page = Page::Account;
+    assert!(!app.home_refresh_due(now, true));
+    app.page = Page::Games;
+    set_demo_balance(&mut app, 60);
+    assert!(!app.home_refresh_due(Instant::now(), true));
+    let later = Instant::now() + HOME_REFRESH_INTERVAL;
+    assert!(app.home_refresh_due(later, true));
+    app.next_home_refresh = later + HOME_REFRESH_INTERVAL;
+    assert!(!app.home_refresh_due(later, true));
+    app.shared
+        .lock()
+        .unwrap()
+        .set_token(Some("different-fixture-token".into()));
+    let shared = app.shared.lock().unwrap();
+    assert!(shared.account_info.is_none());
+    assert!(shared.account_info_updated_at.is_none());
+}
+
 struct Offscreen {
     device: eframe::wgpu::Device,
     queue: eframe::wgpu::Queue,
@@ -516,12 +620,41 @@ fn render_apple_preview() {
     ] {
         let (ctx, mut app) = fixture();
         app.page = page;
+        if page == Page::Games {
+            set_demo_balance(&mut app, 128 * 3600 + 42 * 60);
+        }
         gpu.save(
             &ctx,
             &mut app,
             size,
             scale,
             &output.join(format!("{name}.png")),
+        );
+    }
+    for state in ["logged-out", "pending", "unavailable", "zero"] {
+        let (ctx, mut app) = fixture();
+        let _pending = if state == "pending" {
+            set_demo_balance(&mut app, 128 * 3600 + 42 * 60);
+            Some(pending_account_query(&mut app))
+        } else {
+            None
+        };
+        if state == "zero" {
+            set_demo_balance(&mut app, 0);
+        } else if state == "unavailable" {
+            app.shared
+                .lock()
+                .unwrap()
+                .set_token(Some("fixture-account-token".into()));
+            app.account_query_error = true;
+        }
+        app.page = Page::Games;
+        gpu.save(
+            &ctx,
+            &mut app,
+            [1180.0, 780.0],
+            1.0,
+            &output.join(format!("home-{state}.png")),
         );
     }
     for state in ["pending", "success", "failure"] {

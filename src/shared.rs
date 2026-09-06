@@ -31,8 +31,10 @@ pub struct Shared {
     pub alert: Option<String>,
     /// 账户状态展示文本
     pub account_status: String,
-    /// 最近一次 user_info 查询的原始结果（账户页展示用）
+    /// 最近一次 user_info 查询的原始结果（仅在内存中提取状态与时长）
     pub account_info: Option<serde_json::Value>,
+    pub account_info_updated_at: Option<chrono::DateTime<chrono::Local>>,
+    pub account_info_received_at: Option<Instant>,
     /// UI 手动指令
     pub manual_cmd: Option<ManualCmd>,
     /// 最近一次手动暂停的结果；独立于会被监控状态覆盖的展示文本。
@@ -58,6 +60,8 @@ impl Default for Shared {
             alert: None,
             account_status: "未登录".into(),
             account_info: None,
+            account_info_updated_at: None,
+            account_info_received_at: None,
             manual_cmd: None,
             manual_pause_result: None,
             startup_pause_status: StartupPauseStatus {
@@ -72,11 +76,62 @@ impl Default for Shared {
 }
 
 impl Shared {
+    pub fn clear_account_info(&mut self) {
+        self.account_info = None;
+        self.account_info_updated_at = None;
+        self.account_info_received_at = None;
+    }
+
+    pub fn set_token(&mut self, token: Option<String>) {
+        if self.token != token {
+            self.clear_account_info();
+        }
+        self.token = token;
+    }
+
+    pub fn set_account_info(&mut self, token: &str, value: serde_json::Value) {
+        if self.token.as_deref() == Some(token) {
+            self.account_info = Some(value);
+            self.account_info_updated_at = Some(chrono::Local::now());
+            self.account_info_received_at = Some(Instant::now());
+        }
+    }
+
     pub fn log(&mut self, msg: &str) {
         let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
         self.logs.push_back(format!("[{ts}] {msg}"));
         while self.logs.len() > 500 {
             self.logs.pop_front();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_account_responses_cannot_restore_balance_after_token_changes() {
+        let mut shared = Shared::default();
+        shared.set_token(Some("fixture-a".into()));
+        shared.set_account_info(
+            "fixture-a",
+            serde_json::json!({"data": {"expiry_time_samp": 3600}}),
+        );
+        assert!(shared.account_info_received_at.is_some());
+        shared.set_token(Some("fixture-b".into()));
+        assert!(shared.account_info.is_none());
+        assert!(shared.account_info_updated_at.is_none());
+        shared.set_account_info(
+            "fixture-a",
+            serde_json::json!({"data": {"expiry_time_samp": 9999}}),
+        );
+        assert!(shared.account_info.is_none());
+        shared.set_token(None);
+        shared.set_account_info(
+            "fixture-b",
+            serde_json::json!({"data": {"expiry_time_samp": 99}}),
+        );
+        assert!(shared.account_info_received_at.is_none());
     }
 }

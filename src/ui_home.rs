@@ -10,6 +10,26 @@ pub struct HomeState<'a> {
     pub games: &'a [GameEntry],
     pub processes: Option<&'a [String]>,
     pub status: &'a str,
+    pub balance: Option<&'a TimeBalance>,
+}
+
+#[derive(Default)]
+pub struct TimeBalance {
+    pub seconds: Option<u64>,
+    pub checked_at: Option<String>,
+    pub logged_in: bool,
+    pub refreshing: bool,
+    pub query_failed: bool,
+}
+
+fn duration_label(seconds: u64) -> String {
+    if seconds == 0 {
+        "0 小时 00 分钟".into()
+    } else if seconds < 60 {
+        "不足 1 分钟".into()
+    } else {
+        format!("{} 小时 {:02} 分钟", seconds / 3600, seconds % 3600 / 60)
+    }
 }
 
 #[derive(Default, Debug, PartialEq, Eq)]
@@ -19,6 +39,8 @@ pub enum HomeAction {
     Defer,
     Pause,
     Strategy,
+    Account,
+    RefreshAccount,
     AddGame,
     RemoveGame(usize),
 }
@@ -192,11 +214,11 @@ pub fn render(ui: &mut Ui, state: &HomeState<'_>, enabled: &mut bool) -> HomeAct
     if width >= 810.0 {
         ui.horizontal_top(|ui| {
             let left = (width - 20.0) * 0.64;
-            ui.allocate_ui_with_layout(
+            let protection = ui.allocate_ui_with_layout(
                 vec2(left, 0.0),
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
-                    action = protection_card(ui, &p);
+                    action = protection_card(ui, &p, state.balance);
                 },
             );
             ui.add_space(10.0);
@@ -204,16 +226,16 @@ pub fn render(ui: &mut Ui, state: &HomeState<'_>, enabled: &mut bool) -> HomeAct
                 vec2(width - left - 20.0, 0.0),
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
-                    if rules_card(ui, state.strategy) {
+                    if rules_card(ui, state.strategy, protection.response.rect.height()) {
                         action = HomeAction::Strategy;
                     }
                 },
             );
         });
     } else {
-        action = protection_card(ui, &p);
+        action = protection_card(ui, &p, state.balance);
         ui.add_space(10.0);
-        if rules_card(ui, state.strategy) {
+        if rules_card(ui, state.strategy, 0.0) {
             action = HomeAction::Strategy;
         }
     }
@@ -270,11 +292,11 @@ pub fn render(ui: &mut Ui, state: &HomeState<'_>, enabled: &mut bool) -> HomeAct
     action
 }
 
-fn protection_card(ui: &mut Ui, p: &Presentation) -> HomeAction {
+fn protection_card(ui: &mut Ui, p: &Presentation, balance: Option<&TimeBalance>) -> HomeAction {
     let mut action = HomeAction::None;
     theme::card().show(ui, |ui| {
         ui.set_min_width(ui.available_width());
-        ui.set_min_height(190.0);
+        ui.set_min_height(236.0);
         let width = ui.available_width();
         let ring = if width >= 430.0 { 130.0 } else { 106.0 };
         ui.horizontal_top(|ui| {
@@ -287,6 +309,11 @@ fn protection_card(ui: &mut Ui, p: &Presentation) -> HomeAction {
                     ui.add_space(7.0);
                     ui.label(theme::title(&p.title, 22.0));
                     ui.label(RichText::new(&p.detail).size(13.0).color(theme::MUTED));
+                    ui.add_space(12.0);
+                    let balance_action = time_balance(ui, balance);
+                    if balance_action != HomeAction::None {
+                        action = balance_action;
+                    }
                 },
             );
             countdown(ui, p, ring);
@@ -317,6 +344,72 @@ fn protection_card(ui: &mut Ui, p: &Presentation) -> HomeAction {
             .size(12.0)
             .color(theme::MUTED),
         );
+    });
+    action
+}
+
+fn time_balance(ui: &mut Ui, balance: Option<&TimeBalance>) -> HomeAction {
+    let fallback = TimeBalance::default();
+    let balance = balance.unwrap_or(&fallback);
+    let mut action = HomeAction::None;
+    ui.spacing_mut().item_spacing.y = 3.0;
+    ui.label(RichText::new("账户剩余时长").size(12.0).color(theme::MUTED));
+    // Always describe a server snapshot, never simulate billing by subtracting
+    // the protection countdown or assuming another device has not paused it.
+    let value = if !balance.logged_in {
+        "登录后查看".into()
+    } else if let Some(seconds) = balance.seconds {
+        duration_label(seconds)
+    } else if balance.refreshing {
+        "正在查询…".into()
+    } else {
+        "暂不可用".into()
+    };
+    let size = if ui.available_width() < 275.0 {
+        21.0
+    } else {
+        25.0
+    };
+    ui.label(theme::title(value, size));
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 7.0;
+        ui.spacing_mut().interact_size.y = 19.0;
+        let note = if !balance.logged_in {
+            "登录雷神账号后显示".into()
+        } else if balance.refreshing {
+            if balance.seconds.is_some() {
+                "上次结果 · 正在刷新…".into()
+            } else {
+                "最多等待 15 秒".into()
+            }
+        } else if let Some(time) = &balance.checked_at {
+            if balance.seconds.is_some() {
+                format!("上次查询 {time}")
+            } else {
+                "此套餐时长请在官方核对".into()
+            }
+        } else if balance.query_failed {
+            "查询失败，请重试或重新登录".into()
+        } else {
+            "等待查询账户信息".into()
+        };
+        ui.label(RichText::new(note).size(11.0).color(theme::MUTED));
+        if balance.logged_in {
+            if ui
+                .add_enabled(
+                    !balance.refreshing,
+                    egui::Link::new(RichText::new("刷新时长").size(11.0)),
+                )
+                .clicked()
+            {
+                action = HomeAction::RefreshAccount;
+            }
+        } else {
+            let response = ui.link(RichText::new("去登录").size(11.0));
+            if response.clicked() {
+                action = HomeAction::Account;
+            }
+        }
     });
     action
 }
@@ -371,11 +464,13 @@ fn wait_label(seconds: u64) -> String {
     }
 }
 
-fn rules_card(ui: &mut Ui, strategy: &Strategy) -> bool {
-    theme::card()
+fn rules_card(ui: &mut Ui, strategy: &Strategy, match_height: f32) -> bool {
+    let frame = theme::card();
+    let content_height = (match_height - frame.total_margin().sum().y).max(190.0);
+    frame
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.set_min_height(190.0);
+            ui.set_min_height(content_height);
             ui.label(theme::title("自动暂停规则", 16.0));
             ui.add_space(6.0);
             for (kind, label, value) in [
@@ -527,6 +622,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn subminute_balance_is_not_reported_as_zero() {
+        assert_eq!(duration_label(0), "0 小时 00 分钟");
+        assert_eq!(duration_label(1), "不足 1 分钟");
+        assert_eq!(duration_label(59), "不足 1 分钟");
+        assert_eq!(duration_label(60), "0 小时 01 分钟");
+    }
+
+    #[test]
     fn process_status_uses_exact_executables_and_preserves_unknown() {
         let processes = vec!["TSLGAME.EXE".into(), "cs2.exe.bak".into()];
         assert_eq!(game_running(Some(&processes), "tslgame.exe"), Some(true));
@@ -549,6 +652,7 @@ mod tests {
             games: &games,
             processes: None,
             status: "初始化…",
+            balance: None,
         };
         assert_eq!(presentation(&state).title, "等待有效检测");
         assert!(!presentation(&state).can_defer);

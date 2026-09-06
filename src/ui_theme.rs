@@ -1,14 +1,20 @@
 //! Shared native design tokens and controls for the approved light interface.
 use egui::{pos2, vec2, Color32, FontFamily, FontId, Rect, Response, RichText, Sense, Stroke, Ui};
 
-pub const BACKGROUND: Color32 = Color32::from_rgb(250, 251, 253);
+pub const BACKGROUND: Color32 = Color32::from_rgb(245, 248, 253);
 pub const TEXT: Color32 = Color32::from_rgb(23, 27, 37);
-pub const MUTED: Color32 = Color32::from_rgb(115, 121, 133);
+pub const MUTED: Color32 = Color32::from_rgb(99, 108, 125);
 pub const BORDER: Color32 = Color32::from_rgb(229, 232, 237);
 pub const BLUE: Color32 = Color32::from_rgb(0, 122, 255);
 pub const TEAL: Color32 = Color32::from_rgb(44, 201, 173);
 pub const GREEN: Color32 = Color32::from_rgb(35, 173, 113);
 pub const AMBER: Color32 = Color32::from_rgb(174, 112, 26);
+
+/// eframe's Unorm wgpu target blends in gamma space. Premultiply the white
+/// tint in that same space so layered glass does not saturate to solid white.
+pub fn glass_tint(alpha: u8) -> Color32 {
+    Color32::from_rgba_premultiplied(alpha, alpha, alpha, alpha)
+}
 
 pub fn install(ctx: &egui::Context) {
     ctx.set_theme(egui::Theme::Light);
@@ -77,16 +83,59 @@ pub fn title(text: impl Into<String>, size: f32) -> RichText {
 
 pub fn card() -> egui::Frame {
     egui::Frame::new()
-        .fill(Color32::WHITE)
-        .stroke(Stroke::new(1.0_f32, BORDER))
-        .corner_radius(16)
+        .fill(glass_tint(180))
+        .stroke(Stroke::new(1.0_f32, glass_tint(240)))
+        .corner_radius(18)
         .inner_margin(22)
         .shadow(egui::epaint::Shadow {
-            offset: [0, 2],
-            blur: 9,
+            offset: [0, 4],
+            blur: 18,
             spread: 0,
-            color: Color32::from_black_alpha(12),
+            color: Color32::from_rgba_unmultiplied(48, 73, 112, 15),
         })
+}
+
+/// A real Gaussian blur of an app-owned color field, uploaded once per App.
+/// Glass surfaces reveal this cached texture. No desktop capture, per-frame
+/// convolution or animated backdrop competes with games for GPU time.
+pub fn glass_backdrop(ctx: &egui::Context) -> egui::TextureHandle {
+    let mut pixels = image::RgbaImage::from_pixel(384, 256, image::Rgba([245, 248, 253, 255]));
+    for (x, y, pixel) in pixels.enumerate_pixels_mut() {
+        let x = x as f32 / 384.0;
+        let y = y as f32 / 256.0;
+        for (cx, cy, rx, ry, color) in [
+            (0.28, 0.18, 0.34, 0.26, [187, 215, 249]),
+            (0.87, 0.29, 0.29, 0.32, [175, 228, 216]),
+            (0.38, 0.92, 0.39, 0.30, [220, 205, 241]),
+        ] {
+            if ((x - cx) / rx).powi(2) + ((y - cy) / ry).powi(2) < 1.0 {
+                *pixel = image::Rgba([color[0], color[1], color[2], 255]);
+            }
+        }
+    }
+    let blurred = image::imageops::blur(&pixels, 20.0);
+    ctx.load_texture(
+        "glass-backdrop",
+        egui::ColorImage::from_rgba_unmultiplied([384, 256], blurred.as_raw()),
+        egui::TextureOptions::LINEAR,
+    )
+}
+
+pub fn paint_backdrop(ui: &Ui, texture: &egui::TextureHandle, rect: Rect) {
+    let screen = ui.ctx().screen_rect();
+    let uv = Rect::from_min_max(
+        pos2(
+            (rect.left() - screen.left()) / screen.width(),
+            (rect.top() - screen.top()) / screen.height(),
+        ),
+        pos2(
+            (rect.right() - screen.left()) / screen.width(),
+            (rect.bottom() - screen.top()) / screen.height(),
+        ),
+    );
+    ui.painter()
+        .with_clip_rect(rect)
+        .image(texture.id(), rect, uv, Color32::WHITE);
 }
 
 pub fn primary(ui: &mut Ui, text: &str) -> Response {
@@ -307,20 +356,9 @@ pub fn navigation(ui: &mut Ui, kind: Icon, label: &str, selected: bool) -> Respo
 
 pub fn sidebar_background(ui: &Ui) {
     let r = ui.max_rect();
-    let mut mesh = egui::Mesh::default();
-    for (pos, color) in [
-        (r.left_top(), Color32::from_rgb(240, 244, 249)),
-        (r.right_top(), Color32::from_rgb(237, 242, 248)),
-        (r.right_bottom(), Color32::from_rgb(236, 239, 245)),
-        (r.left_bottom(), Color32::from_rgb(242, 239, 244)),
-    ] {
-        mesh.colored_vertex(pos, color);
-    }
-    mesh.add_triangle(0, 1, 2);
-    mesh.add_triangle(0, 2, 3);
-    ui.painter().add(egui::Shape::mesh(mesh));
+    ui.painter().rect_filled(r, 0, glass_tint(95));
     ui.painter().line_segment(
         [r.right_top(), r.right_bottom()],
-        Stroke::new(1.0_f32, Color32::from_rgb(214, 220, 230)),
+        Stroke::new(1.0_f32, glass_tint(190)),
     );
 }
