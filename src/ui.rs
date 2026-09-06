@@ -2228,10 +2228,12 @@ impl App {
                 if ui.add_enabled(!self.update_busy, egui::Button::new("检查更新")).clicked() {
                     self.start_update_check(ui.ctx().clone());
                 }
-                ui.hyperlink_to("Gitee 下载", crate::updater::GITEE_RELEASES_PAGE);
-                ui.hyperlink_to("GitHub 下载", crate::updater::RELEASES_PAGE);
-                ui.hyperlink_to("项目使用说明", "https://github.com/CMMUU/leigod-guard#readme");
+                let can_download = !self.update_busy && self.update_kind.is_ok() && self.update_release.is_some();
+                if ui.add_enabled_ui(can_download, |ui| theme::primary(ui, "下载并自动更新")).inner.clicked() {
+                    self.start_update_download(ui.ctx().clone());
+                }
             });
+            ui.label(egui::RichText::new("先检查更新，再点击下载：应用内显示进度，校验通过后自动覆盖更新并重新打开，保留配置与账号信息。").size(13.0).color(theme::MUTED));
             ui.add_space(8.0);
             if self.update_error {
                 ui.colored_label(egui::Color32::from_rgb(230, 100, 70), &self.update_message);
@@ -2266,10 +2268,6 @@ impl App {
                 ui.label("点击后会下载并校验文件，再关闭当前程序完成更新并重新打开。监控会短暂停止；更新程序本身不暂停计时，重新打开后按启动设置等待并检查。");
                 ui.add_space(8.0);
                 ui.horizontal_wrapped(|ui| {
-                    if ui.add_enabled(!self.update_busy && self.update_kind.is_ok(),
-                        egui::Button::new("下载并更新")).clicked() {
-                        self.start_update_download(ui.ctx().clone());
-                    }
                     ui.hyperlink_to("查看此版本说明", &release.page_url);
                 });
                 if !release.notes.trim().is_empty() {
@@ -2281,6 +2279,15 @@ impl App {
                 ui.add_space(8.0);
                 ui.colored_label(egui::Color32::from_rgb(230, 100, 70), &self.status_msg);
             }
+            ui.add_space(12.0);
+            ui.collapsing("手动下载备用入口（网页）", |ui| {
+                ui.label(egui::RichText::new("应用内更新失败，或需要给另一台电脑下载安装包时，可打开发布页手动下载。").size(12.0).color(theme::MUTED));
+                ui.horizontal_wrapped(|ui| {
+                    ui.hyperlink_to("Gitee 发布页（国内）", crate::updater::GITEE_RELEASES_PAGE);
+                    ui.hyperlink_to("GitHub 发布页", crate::updater::RELEASES_PAGE);
+                    ui.hyperlink_to("项目使用说明", "https://github.com/CMMUU/leigod-guard#readme");
+                });
+            });
         });
     }
 

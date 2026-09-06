@@ -34,7 +34,7 @@
 
 ## 应用内更新与发布约定
 
-0.10.0 起，「关于与更新」默认采用「自动选择（国内优先）」：并行检查两个来源，选择完整可用的正式新版本，同版本优先 Gitee。保留「仅 Gitee（国内）」和「仅 GitHub」，两者严格只连接所选来源；已有配置的明确选择会保留。详细规则及维护约束见 [UPDATES.md](https://github.com/CMMUU/leigod-guard/blob/v0.11.0/docs/UPDATES.md) 与根目录 [AGENTS.md](https://github.com/CMMUU/leigod-guard/blob/main/AGENTS.md)。GitHub 使用本仓库的 `releases/latest` 公开接口；Gitee 比较公开列表最近 100 条的版本号，并读取所选 Release 的附件列表。切换来源清除旧结果，需重新检查；来源失败应明确提示检查不完整。「启动时自动检查更新」仍默认关闭，只有用户点击「下载并更新」才下载和安装。
+0.10.0 起，「关于与更新」默认采用「自动选择（国内优先）」：并行检查两个来源，选择完整可用的正式新版本，同版本优先 Gitee。保留「仅 Gitee（国内）」和「仅 GitHub」，两者严格只连接所选来源；已有配置的明确选择会保留。详细规则及维护约束见 [UPDATES.md](https://github.com/CMMUU/leigod-guard/blob/v0.11.0/docs/UPDATES.md) 与根目录 [AGENTS.md](https://github.com/CMMUU/leigod-guard/blob/main/AGENTS.md)。GitHub 使用本仓库的 `releases/latest` 公开接口；Gitee 比较公开列表最近 100 条的版本号，并读取所选 Release 的附件列表。切换来源清除旧结果，需重新检查；来源失败应明确提示检查不完整。「启动时自动检查更新」仍默认关闭，只有用户点击「下载并自动更新」才下载和安装。
 
 更新器按当前发行方式选择安装 EXE 或绿色 ZIP。必须继续使用上表的固定命名格式，并在同一 Release 中同时提供两个文件与 `SHA256SUMS.txt`。校验表对每个资产只保留一条精确文件名记录；程序检查文件大小、SHA-256，并核对可用的 GitHub 资产摘要。Gitee 的附件 API 没有独立摘要，使用对应 Release 的校验表，并核对 Release 与附件 API 的名称、编号、下载地址及大小。自动模式的备用下载必须固定同一标签、安装方式、文件名、大小及已确认哈希；不得改用另一个最新版或拼接残片。每个来源都验证其完整下载。Gitee 必须同步同一份构建，不能独立重编译成同版本的不同文件。不要在上传完整资产前公开正式版本，也不要复用旧版本号。完整性校验不能替代代码签名。
 
