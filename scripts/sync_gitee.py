@@ -272,6 +272,9 @@ def git_credential():
 
 
 def git_run(repo, *args):
+    operation = next((arg for arg in args if arg in {
+        "clone", "fetch", "push", "ls-remote", "for-each-ref", "rev-parse", "remote"
+    }), "operation")
     env = os.environ.copy()
     env.update({"SYNC_REPO": repo, "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "Never",
                 "GIT_TRACE": "0", "GIT_TRACE_CURL": "0", "GIT_CURL_VERBOSE": "0",
@@ -283,9 +286,22 @@ def git_run(repo, *args):
     try:
         result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=300)
     except (OSError, subprocess.TimeoutExpired):
-        raise SyncError("Git operation failed or timed out; no credential output is logged") from None
+        raise SyncError(f"Git {operation} failed or timed out; no credential output is logged") from None
     if result.returncode:
-        raise SyncError("Git operation failed (network, authorization, conflicting refs or unsupported atomic push); remote refs were not forced")
+        # Only emit fixed classifications, never the command, stderr or URLs.
+        detail = result.stderr.casefold()
+        reason = "unclassified failure"
+        for markers, label in (
+            (("authentication failed", "could not read username", "access denied", "error: 401", "error: 403"), "authorization rejected"),
+            (("does not support --atomic", "does not support atomic"), "atomic push unsupported"),
+            (("--mirror can't be combined", "--mirror cannot be combined"), "mirror/refspec conflict"),
+            (("non-fast-forward", "fetch first", "already exists"), "conflicting refs"),
+            (("could not resolve", "failed to connect", "connection reset", "timed out", "rpc failed", "ssl", "tls"), "network transport failure"),
+        ):
+            if any(marker in detail for marker in markers):
+                reason = label
+                break
+        raise SyncError(f"Git {operation} failed ({reason}); remote refs were not forced")
     return result.stdout.strip()
 
 

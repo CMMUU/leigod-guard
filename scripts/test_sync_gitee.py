@@ -237,6 +237,19 @@ class SyncTests(unittest.TestCase):
             api.request("/repos/CMMUU/leigod-guard/releases", "DELETE")
         self.assertEqual(api.opener.requests, [])
 
+    def test_git_failure_diagnostic_does_not_echo_credentials_or_raw_output(self):
+        for message, expected in (("fatal: --mirror can't be combined with refspecs", "mirror/refspec conflict"),
+                                  ("fatal: Authentication failed", "authorization rejected"),
+                                  ("error: RPC failed", "network transport failure")):
+            result = sync.subprocess.CompletedProcess([], 1, stdout="offline-secret",
+                stderr=message + " https://user:offline-secret@gitee.com/private-value")
+            with patch.object(sync.subprocess, "run", return_value=result):
+                with self.assertRaisesRegex(sync.SyncError, "Git push failed") as error:
+                    sync.git_run("leigod-guard", "push", "https://gitee.com/cmmuu/leigod-guard.git")
+            self.assertIn(expected, str(error.exception))
+            self.assertNotIn("offline-secret", str(error.exception))
+            self.assertNotIn("private-value", str(error.exception))
+
     def test_ref_sync_copies_all_heads_and_tags_without_force_or_remote_deletion(self):
         job = sync.Sync("mihomo-codex", None, None, self.fixture())
         job.guard = lambda: None
