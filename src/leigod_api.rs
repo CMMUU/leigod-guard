@@ -9,6 +9,7 @@ pub const PAUSE_PATH: &str = "/api/user/pause";
 pub const RECOVER_PATH: &str = "/api/user/recover";
 /// 账户信息接口（用于查询剩余时长，尽力而为）
 pub const USER_INFO_PATH: &str = "/api/user/info";
+const ACCOUNT_SERVER_TIME: &str = "_leigod_guard_server_time";
 
 // 已公开的客户端协议常量，不是任何用户的密码、账户 token 或私人 API 密钥。
 // 公开出处：https://github.com/XuHandsome/leigod-helper/blob/main/libs/consts.go
@@ -171,8 +172,24 @@ fn post_authed(path: &str, token: &str) -> Result<Value, ApiError> {
     let resp = authed_request(&client()?, path, token)
         .send()
         .map_err(|e| network_error("网络请求失败", e))?;
+    let server_time = resp
+        .headers()
+        .get(reqwest::header::DATE)
+        .and_then(|date| date.to_str().ok())
+        .and_then(|date| chrono::DateTime::parse_from_rfc2822(date).ok())
+        .map(|date| date.timestamp());
     let text = resp.text().map_err(|e| network_error("读取响应失败", e))?;
-    parse_json(&text)
+    let mut info = parse_json(&text)?;
+    if path == USER_INFO_PATH {
+        if let Some(object) = info.as_object_mut() {
+            // Local response metadata only; never trust a same-named body field.
+            object.remove(ACCOUNT_SERVER_TIME);
+            if let Some(time) = server_time {
+                object.insert(ACCOUNT_SERVER_TIME.into(), Value::from(time));
+            }
+        }
+    }
+    Ok(info)
 }
 
 fn authed_request(
@@ -338,17 +355,11 @@ pub fn account_paused(info: &Value) -> Option<bool> {
     }
 }
 
-/// Public vip.leigod.com/js/user.js formats expiry_time_samp + experience_time
-/// as seconds. expiry_time itself is not a duration. Special activity packages
-/// use another server-clock calculation, so don't guess their balance here.
+/// Public vip.leigod.com/js/user.js uses expiry_time_samp + experience_time
+/// in seconds. An activity expiry can equal "now" even with no activity time;
+/// its presence never makes an otherwise valid balance unavailable.
 pub fn account_remaining_seconds(info: &Value) -> Option<u64> {
     let data = info.get("data")?;
-    if data
-        .get("expired_experience_time")
-        .is_some_and(|v| !v.is_null() && v.as_str().is_none_or(|s| !s.trim().is_empty()))
-    {
-        return None;
-    }
     fn seconds(value: &Value) -> Option<i64> {
         value.as_i64().or_else(|| {
             let text = value.as_str()?.trim();
@@ -360,9 +371,22 @@ pub fn account_remaining_seconds(info: &Value) -> Option<u64> {
         None | Some(Value::Null) => 0,
         Some(value) => u64::try_from(seconds(value)?).ok()?,
     };
-    // Reject overflow, malformed values and unsupported packages rather than
-    // showing a false zero or an unbounded number that breaks the home card.
-    let total = base.checked_add(trial)?;
+    // While an activity is still running, the official UI splits base into
+    // pausable and activity time; it does not add trial time again. Use the
+    // same response's server clock, not a potentially incorrect PC clock.
+    let active_activity = data
+        .get("expired_experience_time")
+        .and_then(Value::as_str)
+        .and_then(|text| chrono::NaiveDateTime::parse_from_str(text, "%Y-%m-%d %H:%M:%S").ok())
+        .and_then(|expiry| {
+            let server_time = info.get(ACCOUNT_SERVER_TIME)?.as_i64()?;
+            let china = chrono::FixedOffset::east_opt(8 * 3600)?;
+            let expiry = expiry.and_local_timezone(china).single()?.timestamp();
+            Some(expiry > server_time)
+        })
+        .unwrap_or(false);
+    // Reject malformed durations and overflow; an expiry date is not a duration.
+    let total = base.checked_add(if active_activity { 0 } else { trial })?;
     (total <= 999_999 * 3600 + 3599).then_some(total)
 }
 
@@ -402,13 +426,39 @@ mod tests {
             (serde_json::json!({"expiry_time_samp": i64::MAX}), None),
             (
                 serde_json::json!({"expiry_time_samp": 60, "expired_experience_time": "2099-01-01"}),
-                None,
+                Some(60),
             ),
         ] {
             assert_eq!(
                 account_remaining_seconds(&serde_json::json!({"data": data})),
                 expected
             );
+        }
+    }
+
+    #[test]
+    fn activity_expiry_equal_to_server_now_does_not_hide_remaining_time() {
+        let now = chrono::DateTime::parse_from_rfc3339("2030-01-02T03:04:05+08:00")
+            .unwrap()
+            .timestamp();
+        for (expiry, expected) in [
+            (serde_json::json!("2030-01-02 03:04:05"), 3660),
+            (serde_json::json!("2030-01-02 03:04:04"), 3660),
+            (serde_json::json!("2030-01-02 03:04:06"), 3600),
+            (serde_json::json!(""), 3660),
+            (serde_json::json!(0), 3660),
+            (serde_json::json!(false), 3660),
+            (serde_json::json!(null), 3660),
+        ] {
+            let mut info = serde_json::json!({
+                "data": {"expiry_time_samp": 3600, "experience_time": 60,
+                    "expired_experience_time": expiry, "pause_status_id": 1}
+            });
+            info[ACCOUNT_SERVER_TIME] = serde_json::json!(now);
+            assert_eq!(account_remaining_seconds(&info), Some(expected));
+            info["data"]["experience_time"] = serde_json::json!(0);
+            assert_eq!(account_remaining_seconds(&info), Some(3600));
+            assert_eq!(account_paused(&info), Some(true));
         }
     }
 

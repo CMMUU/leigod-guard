@@ -194,6 +194,11 @@ fn pending_account_query(app: &mut App) -> mpsc::Sender<Result<serde_json::Value
         user: "demo".into(),
     });
     app.account_query_message = "正在查询账户信息…（最多等待 15 秒）".into();
+    let now = app.account_query.as_ref().unwrap().started_at;
+    app.startup_account_refresh = false;
+    app.account_refresh_requested = false;
+    app.last_account_request = Some(now);
+    app.next_account_refresh = now + ACCOUNT_REFRESH_INTERVAL;
     sender
 }
 
@@ -362,7 +367,8 @@ fn set_demo_balance(app: &mut App, seconds: u64) {
     shared.set_token(Some("fixture-account-token".into()));
     shared.set_account_info(
         "fixture-account-token",
-        serde_json::json!({"data": {"pause_status_id": 1, "expiry_time_samp": seconds, "experience_time": 0}}),
+        serde_json::json!({"data": {"pause_status_id": 1, "expiry_time_samp": seconds, "experience_time": 0,
+            "expired_experience_time": "2030-01-02 03:04:05"}}),
     );
 }
 
@@ -425,26 +431,91 @@ fn home_balance_refresh_keeps_old_label_then_handles_success_failure_and_zero() 
 }
 
 #[test]
-fn automatic_home_queries_are_focus_gated_freshness_checked_and_rate_limited() {
+fn automatic_queries_wait_for_restored_token_and_start_on_any_page() {
     let (_, mut app) = fixture();
     let now = Instant::now();
-    app.next_home_refresh = now;
-    assert!(!app.home_refresh_due(now, true));
+    app.page = Page::Account;
+    assert!(!app.auto_account_refresh_due(now, false));
     app.shared
         .lock()
         .unwrap()
         .set_token(Some("fixture-account-token".into()));
-    assert!(app.home_refresh_due(now, true));
-    assert!(!app.home_refresh_due(now, false));
-    app.page = Page::Account;
-    assert!(!app.home_refresh_due(now, true));
-    app.page = Page::Games;
+    assert!(app.auto_account_refresh_due(now, false));
+    let sender = pending_account_query(&mut app);
+    assert!(!app.auto_account_refresh_due(now, true));
+    assert!(!app.auto_account_refresh_due(now + ACCOUNT_REFRESH_INTERVAL, true));
+    sender
+        .send(Ok(
+            serde_json::json!({"data": {"pause_status_id": 1, "expiry_time_samp": 60,
+        "expired_experience_time": "2030-01-02 03:04:05"}}),
+        ))
+        .unwrap();
+    app.poll_account_query(now);
+    assert!(!app.auto_account_refresh_due(Instant::now(), true));
+    let shared = app.shared.lock().unwrap();
+    assert_eq!(
+        api::account_remaining_seconds(shared.account_info.as_ref().unwrap()),
+        Some(60)
+    );
+    assert!(shared.manual_cmd.is_none());
+}
+
+#[test]
+fn reopen_and_account_navigation_refresh_fresh_snapshots_with_debounce() {
+    for event in ["focus", "tray", "account-page"] {
+        let (_, mut app) = fixture();
+        set_demo_balance(&mut app, 60);
+        let now = Instant::now();
+        app.startup_account_refresh = false;
+        app.last_account_request = Some(now);
+        app.next_account_refresh = now + ACCOUNT_REFRESH_INTERVAL;
+        app.account_window_active = event != "focus";
+        if event == "tray" {
+            app.shared.lock().unwrap().account_refresh_requested = true;
+        } else if event == "account-page" {
+            app.page = Page::Account;
+        }
+        assert!(
+            !app.auto_account_refresh_due(now + Duration::from_secs(1), true),
+            "{event}"
+        );
+        assert!(
+            !app.auto_account_refresh_due(now + Duration::from_secs(6), false),
+            "{event}"
+        );
+        assert!(
+            app.auto_account_refresh_due(now + Duration::from_secs(6), true),
+            "{event}"
+        );
+        let _sender = pending_account_query(&mut app);
+        app.shared.lock().unwrap().account_refresh_requested = true;
+        assert!(!app.auto_account_refresh_due(now + Duration::from_secs(7), true));
+        assert!(!app.shared.lock().unwrap().account_refresh_requested);
+        assert!(app.shared.lock().unwrap().manual_cmd.is_none());
+    }
+}
+
+#[test]
+fn periodic_account_refresh_requires_active_account_or_home_page_and_obeys_backoff() {
+    let (_, mut app) = fixture();
     set_demo_balance(&mut app, 60);
-    assert!(!app.home_refresh_due(Instant::now(), true));
-    let later = Instant::now() + HOME_REFRESH_INTERVAL;
-    assert!(app.home_refresh_due(later, true));
-    app.next_home_refresh = later + HOME_REFRESH_INTERVAL;
-    assert!(!app.home_refresh_due(later, true));
+    let now = Instant::now();
+    app.startup_account_refresh = false;
+    app.account_window_active = true;
+    app.next_account_refresh = now + ACCOUNT_REFRESH_INTERVAL;
+    assert!(!app.auto_account_refresh_due(now, true));
+    let later = now + ACCOUNT_REFRESH_INTERVAL;
+    assert!(app.auto_account_refresh_due(later, true));
+    app.next_account_refresh = later + ACCOUNT_REFRESH_INTERVAL;
+    assert!(!app.auto_account_refresh_due(later, true));
+    assert!(!app.auto_account_refresh_due(later + ACCOUNT_REFRESH_INTERVAL, false));
+    app.account_window_active = true;
+    app.account_refresh_requested = false;
+    app.page = Page::Logs;
+    assert!(!app.auto_account_refresh_due(later + ACCOUNT_REFRESH_INTERVAL, true));
+    app.page = Page::Account;
+    app.last_account_page = Page::Account;
+    assert!(app.auto_account_refresh_due(later + ACCOUNT_REFRESH_INTERVAL, true));
     app.shared
         .lock()
         .unwrap()

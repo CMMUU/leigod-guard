@@ -386,7 +386,7 @@ fn time_balance(ui: &mut Ui, balance: Option<&TimeBalance>) -> HomeAction {
             if balance.seconds.is_some() {
                 format!("上次查询 {time}")
             } else {
-                "此套餐时长请在官方核对".into()
+                "未返回可识别的时长，请刷新重试".into()
             }
         } else if balance.query_failed {
             "查询失败，请重试或重新登录".into()

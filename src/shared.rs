@@ -35,6 +35,8 @@ pub struct Shared {
     pub account_info: Option<serde_json::Value>,
     pub account_info_updated_at: Option<chrono::DateTime<chrono::Local>>,
     pub account_info_received_at: Option<Instant>,
+    /// A tray open can happen while egui is asleep and misses the focus change.
+    pub account_refresh_requested: bool,
     /// UI 手动指令
     pub manual_cmd: Option<ManualCmd>,
     /// 最近一次手动暂停的结果；独立于会被监控状态覆盖的展示文本。
@@ -62,6 +64,7 @@ impl Default for Shared {
             account_info: None,
             account_info_updated_at: None,
             account_info_received_at: None,
+            account_refresh_requested: false,
             manual_cmd: None,
             manual_pause_result: None,
             startup_pause_status: StartupPauseStatus {

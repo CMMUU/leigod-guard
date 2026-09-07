@@ -43,7 +43,8 @@ enum UpdateEvent {
 // The HTTP request has a 12-second timeout. Also bound the UI wait in case its
 // background thread exits or never delivers a result.
 const ACCOUNT_QUERY_TIMEOUT: Duration = Duration::from_secs(15);
-const HOME_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+const ACCOUNT_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+const ACCOUNT_OPEN_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 
 struct AccountQuery {
     events: Receiver<Result<serde_json::Value, api::ApiError>>,
@@ -99,7 +100,12 @@ pub struct App {
     account_query: Option<AccountQuery>,
     account_query_message: String,
     account_query_error: bool,
-    next_home_refresh: Instant,
+    next_account_refresh: Instant,
+    last_account_request: Option<Instant>,
+    startup_account_refresh: bool,
+    account_refresh_requested: bool,
+    account_window_active: bool,
+    last_account_page: Page,
 
     // 人机验证等待状态：0=无 1=等验证后重试发短信 2=等验证后重试密码登录
     pending_captcha: u8,
@@ -358,12 +364,19 @@ fn is_main_visible() -> Option<bool> {
 
 /// 显示并聚焦主窗口：优先用原生 Win32（egui 的 Visible 命令在事件循环休眠时不生效），
 /// 同时发 egui 视口命令 + 重绘请求做双保险。
-fn show_window(ctx: &egui::Context, hwnd: &mut Option<windows::Win32::Foundation::HWND>) {
+fn show_window(
+    ctx: &egui::Context,
+    shared: &Arc<Mutex<Shared>>,
+    hwnd: &mut Option<windows::Win32::Foundation::HWND>,
+) {
     use windows::Win32::System::Threading::AttachThreadInput;
     use windows::Win32::UI::WindowsAndMessaging::{
         BringWindowToTop, GetForegroundWindow, GetWindowThreadProcessId, SetForegroundWindow,
         ShowWindow, SW_RESTORE,
     };
+    if let Ok(mut state) = shared.lock() {
+        state.account_refresh_requested = true;
+    }
     if hwnd.is_none() {
         *hwnd = find_main_hwnd();
     }
@@ -402,7 +415,7 @@ fn tray_event_loop(
         // 告警弹窗（暂停/恢复失败等）
         let alert = shared.lock().ok().and_then(|mut s| s.alert.take());
         if let Some(msg) = alert {
-            show_window(&ctx, &mut hwnd);
+            show_window(&ctx, &shared, &mut hwnd);
             msgbox_warn("雷神守护 - 警告", &msg);
         }
 
@@ -421,11 +434,11 @@ fn tray_event_loop(
                     button: MouseButton::Left,
                     button_state: MouseButtonState::Down,
                     ..
-                } => show_window(&ctx, &mut hwnd),
+                } => show_window(&ctx, &shared, &mut hwnd),
                 TrayIconEvent::DoubleClick {
                     button: MouseButton::Left,
                     ..
-                } => show_window(&ctx, &mut hwnd),
+                } => show_window(&ctx, &shared, &mut hwnd),
                 _ => {}
             }
         }
@@ -436,11 +449,11 @@ fn tray_event_loop(
                 continue;
             }
             if update_preparing.load(Ordering::Acquire) && (id == ids.pause || id == ids.quit) {
-                show_window(&ctx, &mut hwnd);
+                show_window(&ctx, &shared, &mut hwnd);
                 continue;
             }
             if id == ids.open {
-                show_window(&ctx, &mut hwnd);
+                show_window(&ctx, &shared, &mut hwnd);
             } else if id == ids.defer_startup {
                 if let Ok(mut s) = shared.lock() {
                     request_startup_defer(&mut s, Instant::now());
@@ -598,6 +611,11 @@ impl App {
         if check_on_startup {
             app.start_update_check(cc.egui_ctx.clone());
         }
+        // Start the read-only query as soon as a saved token is restored, even
+        // if this launch starts in the tray. A late restore is handled in update.
+        if app.auto_account_refresh_due(Instant::now(), false) {
+            app.refresh_account_info();
+        }
         app
     }
 
@@ -664,7 +682,12 @@ impl App {
             account_query: None,
             account_query_message: String::new(),
             account_query_error: false,
-            next_home_refresh: Instant::now(),
+            next_account_refresh: Instant::now(),
+            last_account_request: None,
+            startup_account_refresh: true,
+            account_refresh_requested: false,
+            account_window_active: false,
+            last_account_page: Page::Games,
             pending_captcha: 0,
             pending_user: String::new(),
             pending_md5: String::new(),
@@ -1058,6 +1081,7 @@ impl App {
                         if ui.small_button("隐藏到托盘").clicked() {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
                             hide_window_native();
+                            self.account_window_active = false;
                         }
                     });
                 });
@@ -1155,6 +1179,7 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
             hide_window_native();
+            self.account_window_active = false;
         }
 
         if !self.update_preparing.load(Ordering::Acquire) {
@@ -1190,12 +1215,9 @@ impl eframe::App for App {
         }
 
         self.poll_account_query(Instant::now());
-        // Only refresh while the home window is in use. Tray/background games
-        // don't cause periodic account traffic; manual refresh remains available.
-        if self.home_refresh_due(Instant::now(), ctx.input(|i| i.focused)) {
-            if is_main_visible() == Some(true) {
-                self.refresh_account_info();
-            }
+        let active = ctx.input(|i| i.focused) && is_main_visible() == Some(true);
+        if self.auto_account_refresh_due(Instant::now(), active) {
+            self.refresh_account_info();
         }
         self.render_shell(ctx);
 
@@ -1744,17 +1766,41 @@ impl App {
         self.start_account_query(api::user_info);
     }
 
-    fn home_refresh_due(&self, now: Instant, focused: bool) -> bool {
-        focused
-            && self.page == Page::Games
-            && self.account_query.is_none()
-            && now >= self.next_home_refresh
-            && self.shared.lock().is_ok_and(|s| {
-                s.token.is_some()
-                    && s.account_info_received_at.is_none_or(|last| {
-                        now.saturating_duration_since(last) >= HOME_REFRESH_INTERVAL
-                    })
-            })
+    fn auto_account_refresh_due(&mut self, now: Instant, active: bool) -> bool {
+        let opened = active && !self.account_window_active;
+        let entered_account =
+            active && self.page == Page::Account && self.last_account_page != Page::Account;
+        self.account_window_active = active;
+        self.last_account_page = self.page;
+        self.account_refresh_requested |= opened || entered_account;
+        let Ok(mut shared) = self.shared.lock() else {
+            return false;
+        };
+        self.account_refresh_requested |= std::mem::take(&mut shared.account_refresh_requested);
+        if self.account_query.is_some() {
+            // The in-flight query already supplies a fresh result for this open.
+            self.account_refresh_requested = false;
+            return false;
+        }
+        if shared.token.is_none() {
+            return false;
+        }
+        if self.startup_account_refresh {
+            return true;
+        }
+        if !active {
+            return false;
+        }
+        if self.account_refresh_requested {
+            return self.last_account_request.is_none_or(|last| {
+                now.saturating_duration_since(last) >= ACCOUNT_OPEN_REFRESH_INTERVAL
+            });
+        }
+        matches!(self.page, Page::Games | Page::Account)
+            && now >= self.next_account_refresh
+            && shared
+                .account_info_received_at
+                .is_none_or(|last| now.saturating_duration_since(last) >= ACCOUNT_REFRESH_INTERVAL)
     }
 
     fn cancel_account_query(&mut self) {
@@ -1763,6 +1809,7 @@ impl App {
         self.account_query = None;
         self.account_query_message.clear();
         self.account_query_error = false;
+        self.startup_account_refresh = true;
     }
 
     fn start_account_query(
@@ -1772,13 +1819,17 @@ impl App {
         if self.account_query.is_some() {
             return;
         }
-        self.next_home_refresh = Instant::now() + HOME_REFRESH_INTERVAL;
         let token = self.shared.lock().ok().and_then(|s| s.token.clone());
         let Some(token) = token else {
             self.account_query_message = "尚未登录，请先登录后再刷新账户状态。".into();
             self.account_query_error = true;
             return;
         };
+        let now = Instant::now();
+        self.next_account_refresh = now + ACCOUNT_REFRESH_INTERVAL;
+        self.last_account_request = Some(now);
+        self.startup_account_refresh = false;
+        self.account_refresh_requested = false;
         let user = self
             .config
             .lock()
@@ -1787,7 +1838,7 @@ impl App {
 
         let (sender, events) = mpsc::channel();
         let request_token = token.clone();
-        let started_at = Instant::now();
+        let started_at = now;
         match std::thread::Builder::new()
             .name("account-query".into())
             .spawn(move || {
@@ -1892,6 +1943,13 @@ impl App {
             egui::RichText::new(
                 "登录凭据加密保存在本机，仅当前 Windows 用户可读取。登录失效后，请重新登录。",
             )
+            .color(theme::MUTED),
+        );
+        ui.label(
+            egui::RichText::new(
+                "打开应用、从托盘打开面板或进入此页时自动刷新；前台停留期间每分钟刷新一次。",
+            )
+            .size(12.0)
             .color(theme::MUTED),
         );
         ui.add_space(6.0);
