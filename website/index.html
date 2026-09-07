@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>雷神守护 Leigod Guard · 雷神加速器自动暂停计时工具</title>
+  <meta name="description" content="雷神守护是配合雷神加速器使用的独立开源 Windows 工具。按游戏进程自动暂停计时、重启后检查闲置计时、查询剩余时长。提供 Gitee 国内下载与 GitHub 下载，支持安装版和绿色版。">
+  <link rel="canonical" href="{{SITE_URL}}/">
+  <link rel="icon" type="image/png" href="{{APP_ICON}}">
+  <link rel="stylesheet" href="{{STYLESHEET}}">
+  <meta property="og:type" content="website">
+  <meta property="og:locale" content="zh_CN">
+  <meta property="og:site_name" content="雷神守护 Leigod Guard">
+  <meta property="og:title" content="雷神守护 · 让加速时长，留给真正开玩的时刻。">
+  <meta property="og:description" content="配合雷神加速器使用的 Windows 开源计时守护工具。游戏退出后按规则暂停，重启后也能检查闲置计时。">
+  <meta property="og:url" content="{{SITE_URL}}/">
+  <meta property="og:image" content="{{SITE_URL}}/{{APP_SCREENSHOT}}">
+  <meta property="og:image:width" content="1180">
+  <meta property="og:image:height" content="780">
+  <meta property="og:image:alt" content="雷神守护应用首页，时长与游戏名单为演示数据">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="theme-color" content="#ffffff">
+  <script type="application/ld+json">{{STRUCTURED_DATA}}</script>
+</head>
+<body>
+  <a class="skip-link" href="#main">跳转到主要内容</a>
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="brand" href="#top" aria-label="雷神守护，回到页面顶部">
+        <img src="{{APP_ICON}}" width="44" height="44" alt="">
+        <span>雷神守护</span>
+      </a>
+      <nav aria-label="主导航">
+        <a href="#features">功能</a>
+        <a href="#rules">暂停规则</a>
+        <a href="#download">下载</a>
+      </nav>
+    </div>
+  </header>
+  <main id="main">
+    <section class="hero" id="top" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <h1 id="hero-title">让加速时长，<br><span>留给真正开玩的时刻。</span></h1>
+        <p class="hero-description">配合雷神加速器使用的 Windows 开源计时守护工具。<br class="desktop-break">游戏退出后按规则暂停，重启后也能检查闲置计时。</p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="https://gitee.com/cmmuu/leigod-guard/releases" data-download="gitee">Gitee 国内下载</a>
+          <a class="button button-secondary" href="https://github.com/CMMUU/leigod-guard/releases/latest" data-download="github">GitHub 下载</a>
+        </div>
+        <p class="platforms"><span>Windows 10 / 11 x64</span><span>安装版与绿色版</span><span>MIT 开源</span></p>
+      </div>
+      <figure class="product-preview">
+        <img class="product-image" src="{{APP_SCREENSHOT}}" alt="雷神守护 Windows 应用：账户剩余时长、启动等待倒计时、自动暂停规则和游戏名单。图中均为演示数据。" width="1180" height="780" fetchpriority="high">
+        <figcaption>真实应用界面 <span aria-hidden="true">·</span> 图中时长与游戏名单为演示数据</figcaption>
+      </figure>
+    </section>
+
+    <section class="rules section-container" id="rules" aria-labelledby="rules-title">
+      <h2 id="rules-title">三种场景，清楚的暂停规则。</h2>
+      <p class="section-intro">默认等待可调整；自动暂停需要有效名单、已开启的策略、登录与网络。</p>
+      <div class="rule-list">
+        <article class="rule-row">
+          <span class="rule-number" aria-hidden="true">01</span>
+          <div class="rule-copy"><h3>游戏结束，留一点缓冲</h3><p>先检测到名单游戏运行，全部退出后再等待；重开会取消倒计时。</p></div>
+          <p class="rule-time"><strong>90 秒</strong><span>默认退出宽限期</span></p>
+        </article>
+        <article class="rule-row">
+          <span class="rule-number" aria-hidden="true">02</span>
+          <div class="rule-copy"><h3>重启之后，也许只是工作</h3><p>本次启动检查有效、等待后仍无名单游戏时，尝试暂停计时。</p></div>
+          <p class="rule-time"><strong>3 分钟</strong><span>默认启动等待</span></p>
+        </article>
+        <article class="rule-row">
+          <span class="rule-number" aria-hidden="true">03</span>
+          <div class="rule-copy"><h3>准备开玩，给自己多一点时间</h3><p>启动检查尚未结束时可延后；检测到游戏后转入退出监控。</p></div>
+          <p class="rule-time"><strong>10 分钟</strong><span>从点击延后时计算</span></p>
+        </article>
+      </div>
+    </section>
+
+    <section class="balance-section" id="features" aria-labelledby="balance-title">
+      <div class="section-container balance-layout">
+        <figure class="balance-example">
+          <div class="balance-card" aria-label="应用内余额展示示例，不是访客账户数据">
+            <p class="balance-label">账户剩余时长</p>
+            <p class="balance-value">128 小时 42 分钟</p>
+            <p class="balance-status">已暂停</p>
+            <p class="balance-updated">最近查询 21:47 <span aria-hidden="true">·</span> <span class="example-refresh">刷新时长</span></p>
+          </div>
+          <figcaption>演示数据</figcaption>
+        </figure>
+        <div class="balance-copy">
+          <h2 id="balance-title">剩余时长，打开就看得到。</h2>
+          <ul>
+            <li>启动应用时自动查询</li>
+            <li>从托盘打开或进入账户页时刷新</li>
+            <li>首页与账户页在前台时，每分钟刷新</li>
+          </ul>
+          <p>显示最近查询结果，不模拟逐秒扣费。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="games section-container" aria-labelledby="games-title">
+      <h2 id="games-title">常用游戏预设，也保留你的自定义。</h2>
+      <p class="game-names">PUBG <span aria-hidden="true">·</span> Counter-Strike 2 <span aria-hidden="true">·</span> Apex Legends <span aria-hidden="true">·</span> 英雄联盟</p>
+      <p>可从运行进程选择，或手动填写；预设需按本机实际进程核对。</p>
+      <a class="text-link" href="https://gitee.com/cmmuu/leigod-guard/blob/main/README.md">查看完整使用规则 <span aria-hidden="true">→</span></a>
+    </section>
+
+    <section class="download-section" id="download" aria-labelledby="download-title">
+      <div class="download-heading">
+        <h2 id="download-title">现在，让守护留在后台。</h2>
+        <p>Windows 10 / 11 x64 <span aria-hidden="true">·</span> 安装版与绿色版</p>
+      </div>
+      <div class="download-panel">
+        <div class="providers">
+          <div class="provider">
+            <h3>Gitee 国内下载</h3>
+            <p>国内下载入口，包含安装版、绿色版和校验文件。</p>
+            <a class="button button-primary" href="https://gitee.com/cmmuu/leigod-guard/releases" data-download="gitee">前往 Gitee 发布页 <span aria-hidden="true">↗</span></a>
+          </div>
+          <div class="provider">
+            <h3>GitHub 下载</h3>
+            <p>项目主仓库，查看源码、版本记录与发布文件。</p>
+            <a class="button button-secondary" href="https://github.com/CMMUU/leigod-guard/releases/latest" data-download="github">前往 GitHub 发布页 <span aria-hidden="true">↗</span></a>
+          </div>
+        </div>
+        <dl class="editions">
+          <div class="edition-row">
+            <dt><span class="edition-icon installer-icon" aria-hidden="true"><svg viewBox="0 0 32 36" fill="none"><rect x="5" y="2" width="22" height="32" rx="3" stroke="currentColor" stroke-width="2"/><path d="M5 9h22M11 15h3v3h-3zm7 0h3v3h-3zm-7 7h3v3h-3zm7 0h3v3h-3z" fill="currentColor"/></svg></span>安装版 EXE</dt>
+            <dd>双击安装，适合日常使用。</dd>
+          </div>
+          <div class="edition-row">
+            <dt><span class="edition-icon portable-icon" aria-hidden="true"><svg viewBox="0 0 32 36" fill="none"><path d="M7 2h13l7 7v25H5V4a2 2 0 0 1 2-2Z" stroke="currentColor" stroke-width="2"/><path d="M19 2v8h8M13 11h3m-3 4h3m-3 4h3m-3 4h3" stroke="currentColor" stroke-width="2"/><rect x="11" y="26" width="7" height="5" rx="1" stroke="currentColor" stroke-width="2"/></svg></span>绿色版 ZIP</dt>
+            <dd>完整解压后运行，无需安装向导。</dd>
+          </div>
+        </dl>
+        <p class="update-hint"><span class="info-icon" aria-hidden="true">i</span><span>已有用户：<span class="update-path">关于与更新 <b aria-hidden="true">→</b> 检查更新 <b aria-hidden="true">→</b> 下载并自动更新</span></span></p>
+      </div>
+    </section>
+
+    <section class="faq" aria-labelledby="faq-title">
+      <h2 id="faq-title">下载前，你可能想知道。</h2>
+      <div class="faq-list">
+        <article class="faq-row"><span class="faq-number" aria-hidden="true">01</span><div><h3>这是雷神加速器官方软件吗？</h3><p>不是。这是独立开源项目，需要配合雷神官方客户端使用。</p></div></article>
+        <article class="faq-row"><span class="faq-number" aria-hidden="true">02</span><div><h3>暂停计时，会停止加速吗？</h3><p>本工具只请求暂停账户计时，不停止客户端中的加速。请到雷神官方微信小程序下拉刷新，核对计时状态。</p></div></article>
+        <article class="faq-row"><span class="faq-number" aria-hidden="true">03</span><div><h3>突然断电，也能自动暂停吗？</h3><p>断电后本地工具无法工作。下次启动可在等待结束、仍无名单游戏运行时尝试暂停，需要有效登录和网络；无法追回已消耗的时长。</p></div></article>
+      </div>
+    </section>
+  </main>
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div class="footer-top">
+        <a class="brand footer-brand" href="#top"><img src="{{APP_ICON}}" width="44" height="44" alt=""><span>雷神守护 <span class="brand-separator">·</span> <span class="brand-english">Leigod Guard</span></span></a>
+        <nav aria-label="项目文档">
+          <a href="https://gitee.com/cmmuu/leigod-guard/blob/main/README.md">使用说明</a>
+          <a href="https://gitee.com/cmmuu/leigod-guard/blob/main/docs/PRIVACY.md">隐私说明</a>
+          <a href="https://github.com/CMMUU/leigod-guard/issues">问题反馈</a>
+          <a href="https://gitee.com/cmmuu/leigod-guard/blob/main/LICENSE" rel="license">MIT License</a>
+        </nav>
+      </div>
+      <p>独立开源项目，与雷神加速器运营方无隶属、合作或授权关系。</p>
+    </div>
+  </footer>
+</body>
+</html>

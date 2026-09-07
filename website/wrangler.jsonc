@@ -1,0 +1,6 @@
+{
+  "name": "leigod-guard",
+  "pages_build_output_dir": "./dist",
+  "compatibility_date": "2026-09-07",
+  "send_metrics": false
+}

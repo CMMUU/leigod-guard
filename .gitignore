@@ -17,3 +17,6 @@ captcha-test*
 /.idea/
 /.vscode/
 __pycache__/
+/website/dist/
+/website/.wrangler/
+/website/node_modules/
