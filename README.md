@@ -4,19 +4,32 @@
 
 ### 让加速时长，留给真正开玩的时刻。
 
-雷神加速器的 Windows **自动暂停计时工具**。打完游戏忘了暂停，或异常关机后重启只是处理工作？雷神守护在后台检查游戏进程，满足条件时帮你暂停计时，减少无意间消耗的加速时长。准备开玩时，也给你留出启动游戏的时间。
+**雷神守护是配合雷神加速器使用的 Windows 开源计时守护工具。** 游戏结束忘了暂停，重启电脑却只是处理工作，或者刚开启加速、还在准备进游戏——它通过游戏进程和可调整的等待规则，帮助减少闲置时长消耗，也给开玩前的准备留出时间。
 
 **Windows 10 / 11 x64 · MIT 开源 · 安装版 EXE / 绿色免安装 ZIP · 应用内更新**
 
-首页启动保护卡片同时显示**账户剩余时长**和启动检查倒计时。剩余时长来自最近一次成功的账户查询，标注查询时间，可点「刷新时长」更新；它与右侧的启动等待时间相互独立。恢复已保存登录态后自动查询一次；重新打开应用面板、从托盘打开或进入账户页时自动刷新，快速重复打开会合并请求，最短间隔 5 秒。首页和账户页在前台停留时，每 60 秒刷新一次；隐藏到托盘或切到其他页面后停止定时查询。登录、暂停后的查询结果也会更新卡片。查询失败、尚未登录或时长无法识别时明确提示，不把未知时长显示为 0；兼容附带活动到期信息的账户，不会因此隐藏有效余额。时长以官方刷新后的结果为准，本地不模拟逐秒扣费。
+[前往 Gitee 下载（国内优先）](https://gitee.com/cmmuu/leigod-guard/releases) · [前往 GitHub 下载](https://github.com/CMMUU/leigod-guard/releases/latest)
 
-界面采用浅色毛玻璃卡片、半透明侧栏和经过高斯模糊的应用内背景。模糊纹理只生成并缓存一次，不持续计算或采集桌面；文字、按钮和倒计时保持清晰。
+两处发布页均提供**安装版 EXE、绿色免安装 ZIP 和校验文件**。一般用户选择安装版；希望解压即用的用户选择绿色版。已有用户可在「关于与更新」中检查新版，点击「下载并自动更新」完成升级。
 
-[Gitee 国内下载](https://gitee.com/cmmuu/leigod-guard/releases) · [GitHub 安装版（推荐）](https://github.com/CMMUU/leigod-guard/releases/download/v0.11.1/leigod-guard-v0.11.1-windows-x64-setup.exe) · [下载绿色免安装版](https://github.com/CMMUU/leigod-guard/releases/download/v0.11.1/leigod-guard-v0.11.1-windows-x64.zip) · [全部下载与校验文件](https://github.com/CMMUU/leigod-guard/releases/latest) · [版本记录](CHANGELOG.md) · [隐私与本地数据](docs/PRIVACY.md) · [问题反馈](https://github.com/CMMUU/leigod-guard/issues)
+[三步开始](#三步开始使用) · [暂停规则](#自动暂停规则) · [剩余时长](#账户剩余时长与自动刷新) · [常见游戏](#常见游戏使用场景) · [版本记录](CHANGELOG.md) · [隐私说明](docs/PRIVACY.md) · [问题反馈](https://github.com/CMMUU/leigod-guard/issues)
 
-Leigod Guard is an unofficial, open-source Windows companion for the Leigod game accelerator. It helps save unused paid time after a game ends or when you reboot for other tasks. Startup protection waits 3 minutes by default; choose “Preparing to play” to defer it for 10 minutes. Detecting a configured game switches to normal game-exit monitoring, with a separate 90-second grace period. Installer, portable downloads, and in-app updates are available.
+**这是个人维护的独立开源项目，不是雷神加速器官方产品，与其运营方没有隶属、合作或授权关系。** 游戏与线路选择、开启加速仍由雷神官方客户端完成；本工具请求暂停账户计时，不负责停止客户端中的加速。
 
-**本项目是个人维护的第三方开源工具，不是雷神加速器官方产品，与雷神加速器运营方没有隶属、合作或授权关系。** 此 README 是本项目的使用说明；雷神的账户服务、计时规则及客服仍以其官方渠道为准。
+## 它能帮你做什么
+
+| 使用场景 | 雷神守护的处理方式 |
+| --- | --- |
+| **游戏打完，忘记暂停** | 观察到名单游戏运行并全部退出后，默认等待 90 秒，再复查并尝试暂停计时。 |
+| **重启电脑，只想处理其他任务** | 启动检查有效时，默认连续等待 3 分钟；仍无名单游戏运行则尝试暂停，减少接下来的闲置消耗。 |
+| **刚开加速，还在准备游戏** | 在尚未结束的启动检查中点击「准备游戏，延后10分钟」，为启动游戏留出时间。 |
+| **想知道还剩多少时长** | 首页显示最近查询到的账户剩余时长和查询时间；打开面板时自动刷新，也可手动查询。 |
+
+上述自动暂停需要有效的游戏名单、已开启的对应策略、有效登录状态和网络连接。异常断电后，本地程序无法继续运行；重启检查也不能追回已经消耗的时长。完整条件见下方[自动暂停规则](#自动暂停规则)。
+
+![雷神守护 Windows 首页：账户剩余时长、启动保护倒计时、自动暂停规则与游戏名单](assets/ui-home.png)
+
+*v0.11.1 原生界面的离屏截图，时长、游戏名单和倒计时均为演示数据。浅色毛玻璃、半透明侧栏与高斯模糊背景属于界面设计；当前仅支持 Windows。设计与验证记录见[界面说明](docs/UI_DESIGN.md)。*
 
 ## 三步开始使用
 
@@ -24,13 +37,24 @@ Leigod Guard is an unofficial, open-source Windows companion for the Leigod game
 2. **加入游戏名单**：从常用游戏下拉列表选择预设，或自定义进程文件名；也可启动游戏后用「从运行进程选择…」确认实际进程。加速与线路选择仍在雷神官方客户端操作。**首次启动时名单为空，配置后若要执行启动检查，请完全退出并重新打开本工具**；无需重新启动电脑。正常游戏退出监控在名单有效、总开关开启且观察到游戏运行后，当次即可工作。
 3. **后台守护计时**：保持工具运行，按下方「自动暂停规则」检查游戏。准备开玩时，可在尚未结束的启动检查中点击「准备游戏，延后10分钟」。暂停后，打开雷神官方微信小程序，登录同一账号并下拉刷新，核对计时状态。
 
-**0.11.1 修复剩余时长显示「暂不可用」，并补齐打开应用与账户页时的自动刷新。** 账户余额、启动保护倒计时、规则摘要、游戏状态和常用操作集中在毛玻璃风格首页。保留游戏加加屏蔽修复及 Gitee / GitHub 双更新来源。启动暂停默认开启并等待 3 分钟，游戏加加屏蔽默认关闭；可在「策略」调整启动等待或关闭「启动时无游戏运行则暂停计时」。这里的“游戏”指名单中的游戏，工具无法追回已经消耗的时长。
+安装、验证码、托盘操作和更新方法见[下载与首次使用](#下载与首次使用)。首次使用时请核对真实游戏进程，并在雷神官方微信小程序下拉刷新，确认暂停结果。
 
-![雷神守护 Windows 版首页：启动保护倒计时、自动暂停规则与游戏名单](assets/ui-home.png)
+## 账户剩余时长与自动刷新
 
-*以上为 v0.11.1 原生界面的离屏截图，剩余时长、名单与倒计时均为演示数据；首次使用需自行登录并添加游戏。Apple 风格仅指界面设计，当前仍只支持 Windows。设计与验证记录见 [界面说明](docs/UI_DESIGN.md)。*
+首页启动保护卡片同时显示**账户剩余时长**和**启动检查倒计时**：前者来自账户查询，后者表示距离本次启动复查还需等待多久，两者相互独立。
 
-安装、验证码、托盘操作和更新方法见下方「下载与首次使用」。
+| 什么时候刷新 | 实际行为 |
+| --- | --- |
+| 应用启动、恢复已保存登录态 | 自动查询一次账户状态与剩余时长。 |
+| 重新打开面板、从托盘打开或进入账户页 | 自动刷新；快速重复打开会合并请求，最短间隔 5 秒。 |
+| 首页或账户页保持在前台 | 每 60 秒刷新一次；隐藏到托盘或切到其他页面后停止定时查询。 |
+| 想立即核对 | 点击「刷新时长」或「刷新账户状态」；登录、暂停后的查询结果也会更新卡片。 |
+
+卡片标注上次查询时间，本地不模拟逐秒扣费。未登录、查询失败或无法识别时长时会明确提示，不把未知余额显示为 0；最终以官方刷新后的结果为准。**如果旧版一直显示「暂不可用」，请更新到 v0.11.1 或更高版本**，该版本修复了活动到期字段导致有效余额被隐藏的问题。
+
+界面的模糊纹理只生成并缓存一次，不持续计算或采集桌面；文字、按钮和倒计时保持清晰。
+
+Leigod Guard is an independent, open-source Windows companion for the Leigod game accelerator. It checks configured game processes, requests a pause after the applicable grace period, and displays the latest queried account balance. Installer and portable packages are available on Gitee and GitHub, with in-app updates. It does not start or stop the official client's acceleration.
 
 ## 自动暂停规则
 
