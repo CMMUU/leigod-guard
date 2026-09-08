@@ -118,7 +118,10 @@ h3 { font-size: 24px; line-height: 1.5; font-weight: 700; letter-spacing: -.025e
 .footer-top { display: flex; justify-content: space-between; align-items: center; gap: 24px; }
 .footer-brand { font-size: 21px; gap: 12px; }
 .brand-english { font-weight: 600; letter-spacing: -.03em; }
-.footer-top nav { display: flex; gap: 30px; font-size: 17px; font-weight: 550; }
+.footer-top nav { display: flex; flex-wrap: wrap; gap: 18px 30px; font-size: 17px; font-weight: 550; }
+.not-found { max-width: 760px; margin: 15vh auto; padding: 32px; }
+.not-found h1 { font-size: 48px; }
+.not-found p { margin-block: 24px; font-size: 20px; line-height: 1.8; }
 .footer-inner > p { color: var(--muted); font-size: 16px; line-height: 1.8; margin-top: 32px; }
 @media (min-width: 1500px) { .hero { padding-top: 110px; } }
 @media (max-width: 1100px) {

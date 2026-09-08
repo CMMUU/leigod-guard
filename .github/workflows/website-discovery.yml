@@ -1,0 +1,38 @@
+name: Website discovery
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'website/**'
+      - 'assets/app-icon.png'
+      - 'assets/ui-home.png'
+      - 'Cargo.toml'
+      - 'README.md'
+      - '.github/workflows/website-discovery.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: website-discovery-main
+  cancel-in-progress: true
+
+jobs:
+  notify:
+    if: github.repository == 'CMMUU/leigod-guard' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build the public website
+        run: node website/build.mjs
+      - name: Wait for matching production deployment and notify IndexNow
+        run: node website/submit-indexnow.mjs

@@ -14,6 +14,8 @@
 
 [三步开始](#三步开始使用) · [暂停规则](#自动暂停规则) · [剩余时长](#账户剩余时长与自动刷新) · [常见游戏](#常见游戏使用场景) · [版本记录](CHANGELOG.md) · [隐私说明](docs/PRIVACY.md) · [问题反馈](https://github.com/CMMUU/leigod-guard/issues)
 
+项目资料也提供 [Markdown 概览](https://leigod.cmmuu.com/index.html.md) 和 [AI 资料索引](https://leigod.cmmuu.com/llms.txt)，与网站源码一起维护。站点维护者可参考 [SEO 与 AI 可发现性说明](docs/SEO.md)。
+
 **这是个人维护的独立开源项目，不是雷神加速器官方产品，与其运营方没有隶属、合作或授权关系。** 游戏与线路选择、开启加速仍由雷神官方客户端完成；本工具请求暂停账户计时，不负责停止客户端中的加速。
 
 ## 它能帮你做什么

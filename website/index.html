@@ -4,9 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
+  <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1">
+  <meta name="site-revision" content="{{SITE_REVISION}}">
   <title>雷神守护 Leigod Guard · 雷神加速器自动暂停计时工具</title>
   <meta name="description" content="雷神守护是配合雷神加速器使用的独立开源 Windows 工具。按游戏进程自动暂停计时、重启后检查闲置计时、查询剩余时长。提供 Gitee 国内下载与 GitHub 下载，支持安装版和绿色版。">
   <link rel="canonical" href="{{SITE_URL}}/">
+  <link rel="alternate" type="text/markdown" href="{{SITE_URL}}/index.html.md" title="雷神守护项目资料">
+  <link rel="describedby" href="{{SITE_URL}}/llms.txt" type="text/plain">
   <link rel="icon" type="image/png" href="{{APP_ICON}}">
   <link rel="stylesheet" href="{{STYLESHEET}}">
   <meta property="og:type" content="website">
@@ -20,6 +24,10 @@
   <meta property="og:image:height" content="780">
   <meta property="og:image:alt" content="雷神守护应用首页，时长与游戏名单为演示数据">
   <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="雷神守护 · 雷神加速器自动暂停计时工具">
+  <meta name="twitter:description" content="Windows 开源计时守护工具：游戏退出后按规则暂停，打开应用查询剩余时长。Gitee、GitHub 提供安装版与绿色版。">
+  <meta name="twitter:image" content="{{SITE_URL}}/{{APP_SCREENSHOT}}">
+  <meta name="twitter:image:alt" content="雷神守护原生应用首页，图中为演示数据">
   <meta name="theme-color" content="#ffffff">
   <script type="application/ld+json">{{STRUCTURED_DATA}}</script>
 </head>
@@ -42,7 +50,7 @@
     <section class="hero" id="top" aria-labelledby="hero-title">
       <div class="hero-copy">
         <h1 id="hero-title">让加速时长，<br><span>留给真正开玩的时刻。</span></h1>
-        <p class="hero-description">配合雷神加速器使用的 Windows 开源计时守护工具。<br class="desktop-break">游戏退出后按规则暂停，重启后也能检查闲置计时。</p>
+        <p class="hero-description">雷神守护，配合雷神加速器使用的 Windows 开源计时守护工具。<br class="desktop-break">游戏退出后按规则暂停，重启后也能检查闲置计时。</p>
         <div class="hero-actions">
           <a class="button button-primary" href="https://gitee.com/cmmuu/leigod-guard/releases" data-download="gitee">Gitee 国内下载</a>
           <a class="button button-secondary" href="https://github.com/CMMUU/leigod-guard/releases/latest" data-download="github">GitHub 下载</a>
@@ -139,12 +147,10 @@
       </div>
     </section>
 
-    <section class="faq" aria-labelledby="faq-title">
+    <section class="faq" id="faq" aria-labelledby="faq-title">
       <h2 id="faq-title">下载前，你可能想知道。</h2>
       <div class="faq-list">
-        <article class="faq-row"><span class="faq-number" aria-hidden="true">01</span><div><h3>这是雷神加速器官方软件吗？</h3><p>不是。这是独立开源项目，需要配合雷神官方客户端使用。</p></div></article>
-        <article class="faq-row"><span class="faq-number" aria-hidden="true">02</span><div><h3>暂停计时，会停止加速吗？</h3><p>本工具只请求暂停账户计时，不停止客户端中的加速。请到雷神官方微信小程序下拉刷新，核对计时状态。</p></div></article>
-        <article class="faq-row"><span class="faq-number" aria-hidden="true">03</span><div><h3>突然断电，也能自动暂停吗？</h3><p>断电后本地工具无法工作。下次启动可在等待结束、仍无名单游戏运行时尝试暂停，需要有效登录和网络；无法追回已消耗的时长。</p></div></article>
+        {{FAQ_HTML}}
       </div>
     </section>
   </main>
@@ -156,6 +162,7 @@
           <a href="https://gitee.com/cmmuu/leigod-guard/blob/main/README.md">使用说明</a>
           <a href="https://gitee.com/cmmuu/leigod-guard/blob/main/docs/PRIVACY.md">隐私说明</a>
           <a href="https://github.com/CMMUU/leigod-guard/issues">问题反馈</a>
+          <a href="/index.html.md">项目资料</a>
           <a href="https://gitee.com/cmmuu/leigod-guard/blob/main/LICENSE" rel="license">MIT License</a>
         </nav>
       </div>
