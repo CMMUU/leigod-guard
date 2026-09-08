@@ -677,6 +677,23 @@ fn render_apple_preview() {
         .unwrap_or_else(|| std::path::PathBuf::from("target/ui-preview"));
     std::fs::create_dir_all(&output).unwrap();
     let gpu = Offscreen::new();
+    for (suffix, size) in [("", [1180.0, 780.0]), ("-narrow", [680.0, 460.0])] {
+        let (ctx, mut app) = fixture();
+        {
+            let mut shared = app.shared.lock().unwrap();
+            shared.startup_pause_status = StartupPauseStatus::default();
+            shared.set_exit_grace(Instant::now() - Duration::from_secs(19), 90);
+        }
+        gpu.save(
+            &ctx,
+            &mut app,
+            size,
+            1.0,
+            &output.join(format!("home-exit-grace{suffix}.png")),
+        );
+        let rendered = frame(&ctx, &mut app, size, vec![]);
+        text_rect(&rendered.shapes, "游戏退出宽限期");
+    }
     for (name, page, size, scale) in [
         ("home", Page::Games, [1180.0, 780.0], 1.0),
         ("home-narrow", Page::Games, [680.0, 460.0], 1.0),

@@ -498,7 +498,7 @@ fn try_exit(
         ExitChoice::ExitNow => do_exit(config),
         ExitChoice::PauseThenExit => {
             if let Ok(mut s) = shared.lock() {
-                s.status = "正在暂停计时…".into();
+                s.set_status("正在暂停计时…");
                 s.manual_pause_result = None;
                 s.manual_cmd = Some(ManualCmd::Pause);
                 s.log("退出前自动暂停计时…");
@@ -1435,7 +1435,7 @@ impl App {
                 s.startup_pause_status,
                 s.startup_defer_requested_at.is_some(),
                 s.process_snapshot.clone(),
-                s.status.clone(),
+                s.status_at(Instant::now()),
                 crate::ui_home::TimeBalance {
                     seconds: s
                         .account_info

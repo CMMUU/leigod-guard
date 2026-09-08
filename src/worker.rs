@@ -313,6 +313,8 @@ fn auto_pause_guard_with_snapshot(
 struct PauseWatch {
     observed_running: bool,
     empty_since: Option<Instant>,
+    /// Last observed policy, also used by the UI countdown after a fresh guard check.
+    grace_secs: u64,
 }
 
 impl PauseWatch {
@@ -326,6 +328,7 @@ impl PauseWatch {
     }
 
     fn observe(&mut self, now: Instant, has_games: bool, grace_secs: u64) -> PauseDecision {
+        self.grace_secs = grace_secs;
         if has_games {
             self.observed_running = true;
             self.empty_since = None;
@@ -439,6 +442,7 @@ pub fn run(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
                 Err(_) => {
                     pause_watch.observation_failed();
                     publish_startup_status(&shared, &pause_watch, Instant::now());
+                    set_status(&shared, "暂时无法读取策略，等待下次检测");
                     std::thread::sleep(Duration::from_secs(3));
                     continue;
                 }
@@ -549,10 +553,10 @@ pub fn run(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
             }
             PauseDecision::GraceStarted => {
                 log(&shared, &format!("游戏已退出，进入 {grace_secs} 秒宽限期"));
-                set_status(&shared, "游戏已退出，宽限期中…");
+                set_exit_grace_status(&shared, &pause_watch.exit);
             }
-            PauseDecision::Waiting(left) => {
-                set_status(&shared, &format!("游戏已退出，{left} 秒后自动暂停"));
+            PauseDecision::Waiting(_) => {
+                set_exit_grace_status(&shared, &pause_watch.exit);
             }
             PauseDecision::RetryWaiting => {
                 set_status(&shared, "暂停失败，等待重试");
@@ -637,8 +641,8 @@ pub fn run(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
                             } => {
                                 set_startup_waiting_status(&shared, remaining_secs, preparing_game);
                             }
-                            PauseDecision::Waiting(left) => {
-                                set_status(&shared, &format!("游戏已退出，{left} 秒后自动暂停"));
+                            PauseDecision::GraceStarted | PauseDecision::Waiting(_) => {
+                                set_exit_grace_status(&shared, &pause_watch.exit);
                             }
                             PauseDecision::RetryWaiting => {
                                 set_status(&shared, "暂停未确认，等待重试")
@@ -661,7 +665,17 @@ pub fn run(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
 
 fn set_status(shared: &Arc<Mutex<Shared>>, status: &str) {
     if let Ok(mut s) = shared.lock() {
-        s.status = status.to_string();
+        s.set_status(status);
+    }
+}
+
+fn set_exit_grace_status(shared: &Arc<Mutex<Shared>>, watch: &PauseWatch) {
+    if let Ok(mut s) = shared.lock() {
+        if let Some(since) = watch.empty_since {
+            s.set_exit_grace(since, watch.grace_secs);
+        } else {
+            s.set_status("游戏已退出，等待下次检测");
+        }
     }
 }
 
@@ -764,14 +778,56 @@ fn request_after_token<R>(
 mod tests {
     use super::{
         auto_pause_guard_with_snapshot, checked_watch, consume_startup_request,
-        request_after_token, AutoPauseBlock, AutoPauseWatch, CheckedCallError, PauseDecision,
-        PauseWatch,
+        request_after_token, set_exit_grace_status, set_status, AutoPauseBlock, AutoPauseWatch,
+        CheckedCallError, PauseDecision, PauseWatch,
     };
     use crate::config::{Config, GameEntry};
     use crate::shared::{ManualCmd, Shared};
     use std::cell::Cell;
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn publishing_exit_countdown_keeps_the_original_clock_and_current_policy() {
+        let start = Instant::now();
+        let shared = Arc::new(Mutex::new(Shared::default()));
+        let mut watch = PauseWatch::default();
+        watch.observe(start, true, 90);
+        assert_eq!(watch.observe(start, false, 90), PauseDecision::GraceStarted);
+        set_exit_grace_status(&shared, &watch);
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .status_at(start + Duration::from_secs(2)),
+            "游戏已退出，88 秒后自动暂停"
+        );
+
+        // A later process scan must not restart or round the countdown's clock.
+        watch.observe(start + Duration::from_millis(3500), false, 90);
+        set_exit_grace_status(&shared, &watch);
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .status_at(start + Duration::from_secs(4)),
+            "游戏已退出，86 秒后自动暂停"
+        );
+
+        // A policy change detected by the final pause guard uses its fresh value.
+        watch.observe(start + Duration::from_secs(4), false, 120);
+        set_exit_grace_status(&shared, &watch);
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .status_at(start + Duration::from_secs(5)),
+            "游戏已退出，115 秒后自动暂停"
+        );
+        watch.observe(start + Duration::from_secs(6), true, 120);
+        set_status(&shared, "游戏运行中");
+        assert!(shared.lock().unwrap().exit_grace_countdown.is_none());
+    }
 
     #[test]
     fn ordinary_exit_watch_never_pauses_without_observing_a_game() {

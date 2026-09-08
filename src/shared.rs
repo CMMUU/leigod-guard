@@ -1,6 +1,6 @@
 //! UI 线程与后台工作线程之间的共享状态。
 use std::collections::VecDeque;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug)]
 pub enum ManualCmd {
@@ -17,9 +17,33 @@ pub struct StartupPauseStatus {
     pub preparing_game: bool,
 }
 
+/// Display-only countdown anchored to the worker's actual game-exit observation.
+/// Repainting this value never scans processes or sends a pause request.
+#[derive(Clone, Copy, Debug)]
+pub struct ExitGraceCountdown {
+    pub started_at: Instant,
+    pub grace_secs: u64,
+}
+
+impl ExitGraceCountdown {
+    fn status_at(self, now: Instant) -> String {
+        let remaining = Duration::from_secs(self.grace_secs)
+            .saturating_sub(now.saturating_duration_since(self.started_at));
+        if remaining.is_zero() {
+            "游戏已退出，宽限期已结束，等待复核".into()
+        } else {
+            let seconds = remaining
+                .as_secs()
+                .saturating_add(u64::from(remaining.subsec_nanos() != 0));
+            format!("游戏已退出，{seconds} 秒后自动暂停")
+        }
+    }
+}
+
 pub struct Shared {
     /// 当前状态描述：空闲 / 加速中 / 宽限期倒计时 等
     pub status: String,
+    pub exit_grace_countdown: Option<ExitGraceCountdown>,
     /// 当前检测到的在运行名单游戏
     pub running_games: Vec<String>,
     /// Latest successful basename-only process observation for the UI.
@@ -56,6 +80,7 @@ impl Default for Shared {
     fn default() -> Self {
         Self {
             status: "初始化…".into(),
+            exit_grace_countdown: None,
             running_games: Vec::new(),
             process_snapshot: None,
             logs: VecDeque::with_capacity(500),
@@ -79,6 +104,25 @@ impl Default for Shared {
 }
 
 impl Shared {
+    pub fn status_at(&self, now: Instant) -> String {
+        self.exit_grace_countdown
+            .map_or_else(|| self.status.clone(), |countdown| countdown.status_at(now))
+    }
+
+    pub fn set_status(&mut self, status: &str) {
+        self.exit_grace_countdown = None;
+        self.status = status.into();
+    }
+
+    pub fn set_exit_grace(&mut self, started_at: Instant, grace_secs: u64) {
+        let countdown = ExitGraceCountdown {
+            started_at,
+            grace_secs,
+        };
+        self.status = countdown.status_at(Instant::now());
+        self.exit_grace_countdown = Some(countdown);
+    }
+
     pub fn clear_account_info(&mut self) {
         self.account_info = None;
         self.account_info_updated_at = None;
@@ -112,6 +156,52 @@ impl Shared {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exit_countdown_ticks_each_second_without_another_worker_update() {
+        let start = Instant::now();
+        let mut shared = Shared::default();
+        shared.set_exit_grace(start, 90);
+        for (millis, seconds) in [
+            (0, 90),
+            (999, 90),
+            (1000, 89),
+            (2000, 88),
+            (2999, 88),
+            (3000, 87),
+        ] {
+            assert_eq!(
+                shared.status_at(start + Duration::from_millis(millis)),
+                format!("游戏已退出，{seconds} 秒后自动暂停")
+            );
+        }
+        for seconds in [90, 91, 120] {
+            assert_eq!(
+                shared.status_at(start + Duration::from_secs(seconds)),
+                "游戏已退出，宽限期已结束，等待复核"
+            );
+        }
+        assert!(shared.manual_cmd.is_none());
+        assert!(shared.manual_pause_result.is_none());
+    }
+
+    #[test]
+    fn leaving_exit_grace_discards_the_display_countdown() {
+        let start = Instant::now();
+        let mut shared = Shared::default();
+        for status in [
+            "游戏运行中",
+            "进程检测失败",
+            "自动暂停已停用",
+            "正在暂停计时…",
+            "暂停失败，等待重试",
+        ] {
+            shared.set_exit_grace(start, 90);
+            shared.set_status(status);
+            assert!(shared.exit_grace_countdown.is_none());
+            assert_eq!(shared.status_at(start + Duration::from_secs(20)), status);
+        }
+    }
 
     #[test]
     fn old_account_responses_cannot_restore_balance_after_token_changes() {
