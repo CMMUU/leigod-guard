@@ -9,6 +9,16 @@ on:
   release:
     types: [published, edited]
   workflow_dispatch:
+    inputs:
+      scope:
+        description: Release sync, refs only, or a full historical release audit
+        type: choice
+        options: [release, refs, all]
+        default: release
+      tag:
+        description: Exact published tag for release scope; empty selects GitHub latest
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -40,7 +50,8 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
           GITEE_ASSET_HOSTS: ${{ vars.GITEE_ASSET_HOSTS }}
-          SYNC_SCOPE: ${{ github.event_name == 'push' && 'refs' || 'all' }}
+          SYNC_SCOPE: ${{ github.event_name == 'push' && 'refs' || inputs.scope || 'release' }}
+          SYNC_TAG: ${{ github.event.release.tag_name || (github.event_name == 'workflow_run' && startsWith(github.event.workflow_run.head_branch, 'v') && github.event.workflow_run.head_branch) || inputs.tag || '' }}
         run: >-
           python3 scripts/sync_gitee.py --repo leigod-guard
-          --scope "$SYNC_SCOPE" --work-dir "$RUNNER_TEMP/gitee-sync" --apply
+          --scope "$SYNC_SCOPE" --tag "$SYNC_TAG" --work-dir "$RUNNER_TEMP/gitee-sync" --apply

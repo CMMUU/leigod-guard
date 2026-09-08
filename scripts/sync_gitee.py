@@ -448,9 +448,24 @@ class Sync:
             raise SyncError("Gitee release metadata does not match the source after synchronization")
         print(f"Synchronized {self.repo}: {tag}, {len(files)} attachment(s)", flush=True)
 
-    def run(self, scope, apply):
+    def run(self, scope, apply, tag=""):
+        if scope not in {"refs", "release", "all"}:
+            raise SyncError("Unknown synchronization scope")
+        if tag and (scope != "release" or not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag)):
+            raise SyncError("An explicit stable tag requires release scope")
         self.guard()
-        releases = self.gh.pages(self.source_path + "/releases") if scope == "all" else []
+        if scope == "release":
+            endpoint = "/releases/tags/" + tag if tag else "/releases/latest"
+            release = self.gh.request(self.source_path + endpoint)
+            if (not isinstance(release, dict) or release.get("draft") is not False
+                    or type(release.get("id")) is not int or release["id"] <= 0
+                    or not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", str(release.get("tag_name", "")))
+                    or (tag and release["tag_name"] != tag)
+                    or (not tag and release.get("prerelease") is not False)):
+                raise SyncError("Source release does not match the requested published version")
+            releases = [release]
+        else:
+            releases = self.gh.pages(self.source_path + "/releases") if scope == "all" else []
         if not apply:
             print(f"Preflight passed for {self.repo}; {len(releases)} release(s) found. No external changes without --apply.")
             return
@@ -462,7 +477,8 @@ class Sync:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", choices=sorted(REPOS), required=True)
-    parser.add_argument("--scope", choices=("refs", "all"), default="all")
+    parser.add_argument("--scope", choices=("refs", "release", "all"), default="all")
+    parser.add_argument("--tag", default="", help="Exact published stable-format tag for release scope; empty selects GitHub latest")
     parser.add_argument("--work-dir", type=Path, required=True)
     parser.add_argument("--apply", action="store_true", help="Explicitly authorize writes to the checked Gitee repository")
     args = parser.parse_args()
@@ -474,7 +490,7 @@ def main():
     extra_hosts = {value.strip().lower() for value in os.environ.get("GITEE_ASSET_HOSTS", "").split(",") if value.strip()}
     if any(not re.fullmatch(r"[a-z0-9]+(?:[.-][a-z0-9]+)*", host) for host in extra_hosts):
         raise SyncError("GITEE_ASSET_HOSTS accepts exact hostnames only, without wildcards or URLs")
-    Sync(args.repo, Api("github", gh_token), Api("gitee", ge_token, extra_hosts), args.work_dir).run(args.scope, args.apply)
+    Sync(args.repo, Api("github", gh_token), Api("gitee", ge_token, extra_hosts), args.work_dir).run(args.scope, args.apply, args.tag)
 
 
 if __name__ == "__main__":

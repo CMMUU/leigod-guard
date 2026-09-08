@@ -5,7 +5,7 @@ from io import BytesIO
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 
 import sync_gitee as sync
@@ -62,6 +62,61 @@ class SyncTests(unittest.TestCase):
         temp = tempfile.TemporaryDirectory(prefix="offline-sync-", dir=HERE)
         self.addCleanup(temp.cleanup)
         return Path(temp.name)
+
+    def test_single_release_sync_does_not_read_or_validate_historical_assets(self):
+        release = {"id": 13, "tag_name": "v0.11.3", "draft": False, "prerelease": False}
+        for tag, endpoint in (("v0.11.3", "/releases/tags/v0.11.3"), ("", "/releases/latest")):
+            gh = Mock()
+            gh.request.return_value = release
+            gh.pages.side_effect = sync.SyncError("Historical attachment validation failed")
+            job = sync.Sync("leigod-guard", gh, Mock(), self.fixture())
+            with patch.object(job, "guard"), patch.object(job, "sync_refs", return_value="bare") as refs, \
+                    patch.object(job, "sync_release") as copy:
+                job.run("release", True, tag)
+            gh.request.assert_called_once_with(job.source_path + endpoint)
+            gh.pages.assert_not_called()
+            refs.assert_called_once_with()
+            copy.assert_called_once_with(release, "bare")
+
+    def test_single_release_rejects_wrong_tag_drafts_and_invalid_selection_before_writes(self):
+        release = {"id": 13, "tag_name": "v0.11.3", "draft": False, "prerelease": False}
+        for scope, tag, response in [
+            ("release", "v0.11.3", {**release, "tag_name": "v0.11.2"}),
+            ("release", "v0.11.3", {**release, "draft": True}),
+            ("release", "", {**release, "prerelease": True}),
+            ("release", "v0.11.3", {}),
+            ("release", "v0.11.3", []),
+            ("release", "../../other", release),
+            ("all", "v0.11.3", release),
+            ("unknown", "", release),
+        ]:
+            with self.subTest(scope=scope, tag=tag, response=response):
+                gh = Mock()
+                gh.request.return_value = response
+                job = sync.Sync("leigod-guard", gh, Mock(), self.fixture())
+                with patch.object(job, "guard"), patch.object(job, "sync_refs") as refs, \
+                        patch.object(job, "sync_release") as copy:
+                    with self.assertRaises(sync.SyncError):
+                        job.run(scope, True, tag)
+                refs.assert_not_called()
+                copy.assert_not_called()
+
+    def test_release_dry_run_and_explicit_historical_scope_keep_their_boundaries(self):
+        releases = [{"id": 13, "tag_name": "v0.11.3", "draft": False, "prerelease": False},
+                    {"id": 1, "tag_name": "v0.5.0", "draft": False, "prerelease": False}]
+        for scope, apply, expected in (("release", False, []), ("refs", True, []),
+                                       ("all", True, list(reversed(releases)))):
+            gh = Mock()
+            gh.request.return_value = releases[0]
+            gh.pages.return_value = releases
+            job = sync.Sync("leigod-guard", gh, Mock(), self.fixture())
+            with patch.object(job, "guard"), patch.object(job, "sync_refs", return_value="bare") as refs, \
+                    patch.object(job, "sync_release") as copy, patch("builtins.print"):
+                job.run(scope, apply)
+            self.assertEqual(refs.call_count, int(apply))
+            self.assertEqual([call.args[0] for call in copy.call_args_list], expected)
+            if scope != "all":
+                gh.pages.assert_not_called()
 
     def test_private_to_public_is_blocked_before_git_or_release_writes(self):
         class GH:

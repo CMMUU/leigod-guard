@@ -135,11 +135,12 @@ git push origin v0.11.3
 
 1. 在 [Gitee 私人令牌设置](https://gitee.com/profile/personal_access_tokens) 创建允许读写 `cmmuu/leigod-guard` 仓库、Release 与附件的令牌。
 2. 在 [GitHub 仓库 Actions Secrets](https://github.com/CMMUU/leigod-guard/settings/secrets/actions) 添加名称为 `GITEE_TOKEN` 的仓库密钥，将令牌直接保存在密钥值中。不要写入源码、工作流正文、Issue 或聊天。GitHub 侧使用 Actions 自动提供的只读 `github.token`。
-3. 打开 GitHub Actions 的 **Sync GitHub to Gitee**，手动运行一次并确认成功，补齐已有代码、标签和公开版本。之后正常在 GitHub 发版即可；令牌过期或权限变化时才需要更新此密钥。
+3. 打开 GitHub Actions 的 **Sync GitHub to Gitee**，首次补齐历史版本时选择 `scope=all`，手动运行并确认成功。之后正常在 GitHub 发版即可；令牌过期或权限变化时才需要更新此密钥。
 
 触发与完成条件：
 
-- 推送 `main` 自动同步代码与标签。**Publish Windows release** 成功后自动同步所有已公开的 Release、说明、安装 EXE、绿色 ZIP 和 `SHA256SUMS.txt`；直接发布或编辑 Release、手动运行也可触发。构建失败不触发发布同步。
+- 推送 `main` 自动同步代码与标签。**Publish Windows release** 成功后同步该标签的说明、安装 EXE、绿色 ZIP 和 `SHA256SUMS.txt`；手动发布工作流未提供标签分支时选择 GitHub 最新正式版。直接发布或编辑 Release 时同步事件中的确切标签。构建失败不触发发布同步。
+- 手动同步默认 `scope=release`，可填写 `tag`（例如 `v0.11.3`）处理指定公开版本，留空选择 GitHub 最新正式版；`scope=all` 单独执行完整历史同步和校验，`scope=refs` 只同步代码和标签。`all`、`refs` 不接受 `tag`。自动发版不再逐次下载全部历史附件，旧版附件异常不会阻塞独立的新版本同步；目标版本仍执行完整的大小与 SHA-256 校验。
 - 使用 `workflow_run` 接续发布工作流，覆盖 GitHub 内置令牌创建 Release 不会再触发普通 `release` 工作流的情况。同步任务串行运行，只允许本项目的可信主分支脚本操作固定的目标仓库。
 - Gitee 无草稿 Release API；新版本先以**预发布**状态创建，上传并重新下载每个附件核对大小与 SHA-256，全部通过后才按 GitHub 状态转为正式版。同步中的预发布可能在网页可见，应用会忽略它。GitHub 原本为预发布时仍保持预发布。
 - 现有同名附件先下载校验，一致则复用；冲突或重复名称会报错，不替换或删除文件。分支和标签采用非强制推送，遇到冲突停止；不会删除 Gitee 独有引用。
