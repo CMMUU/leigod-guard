@@ -375,17 +375,17 @@ fn set_demo_balance(app: &mut App, seconds: u64) {
 #[test]
 fn home_balance_and_protection_countdown_are_independent_and_fit_small_windows() {
     let (ctx, mut app) = fixture();
-    set_demo_balance(&mut app, 128 * 3600 + 42 * 60);
+    set_demo_balance(&mut app, 8941 * 3600 + 15 * 60 + 1);
     for size in [[680.0, 460.0], [940.0, 660.0], [1180.0, 780.0]] {
         let _ = frame(&ctx, &mut app, size, vec![]);
         let output = frame(&ctx, &mut app, size, vec![]);
-        let balance = text_rect(&output.shapes, "128 小时 42 分钟");
+        let balance = text_rect(&output.shapes, "8941 时 15 分 01 秒");
         let countdown = text_rect(&output.shapes, "02:36");
         assert!(!balance.intersects(countdown));
         text_rect(&output.shapes, "账户剩余时长");
         text_rect(&output.shapes, "刷新时长");
     }
-    set_demo_balance(&mut app, 999_999 * 3600 + 59 * 60);
+    set_demo_balance(&mut app, 999_999 * 3600 + 59 * 60 + 59);
     for _ in 0..2 {
         frame(&ctx, &mut app, [680.0, 460.0], vec![]);
     }
@@ -399,7 +399,7 @@ fn home_balance_refresh_keeps_old_label_then_handles_success_failure_and_zero() 
     app.page = Page::Games;
     let _ = frame(&ctx, &mut app, [1180.0, 780.0], vec![]);
     let output = frame(&ctx, &mut app, [1180.0, 780.0], vec![]);
-    text_rect(&output.shapes, "1 小时 00 分钟");
+    text_rect(&output.shapes, "1 时 00 分 00 秒");
     text_rect(&output.shapes, "上次结果 · 正在刷新…");
     click(&ctx, &mut app, "刷新时长"); // disabled: must not launch a real query
     assert!(app.account_query.is_some());
@@ -410,7 +410,7 @@ fn home_balance_refresh_keeps_old_label_then_handles_success_failure_and_zero() 
         .unwrap();
     app.poll_account_query(Instant::now());
     let output = frame(&ctx, &mut app, [1180.0, 780.0], vec![]);
-    text_rect(&output.shapes, "0 小时 00 分钟");
+    text_rect(&output.shapes, "0 时 00 分 00 秒");
     assert!(app.shared.lock().unwrap().account_info_updated_at.is_some());
 
     let sender = pending_account_query(&mut app);

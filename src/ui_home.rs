@@ -23,13 +23,12 @@ pub struct TimeBalance {
 }
 
 fn duration_label(seconds: u64) -> String {
-    if seconds == 0 {
-        "0 小时 00 分钟".into()
-    } else if seconds < 60 {
-        "不足 1 分钟".into()
-    } else {
-        format!("{} 小时 {:02} 分钟", seconds / 3600, seconds % 3600 / 60)
-    }
+    format!(
+        "{} 时 {:02} 分 {:02} 秒",
+        seconds / 3600,
+        seconds % 3600 / 60,
+        seconds % 60
+    )
 }
 
 #[derive(Default, Debug, PartialEq, Eq)]
@@ -623,10 +622,10 @@ mod tests {
 
     #[test]
     fn subminute_balance_is_not_reported_as_zero() {
-        assert_eq!(duration_label(0), "0 小时 00 分钟");
-        assert_eq!(duration_label(1), "不足 1 分钟");
-        assert_eq!(duration_label(59), "不足 1 分钟");
-        assert_eq!(duration_label(60), "0 小时 01 分钟");
+        assert_eq!(duration_label(0), "0 时 00 分 00 秒");
+        assert_eq!(duration_label(1), "0 时 00 分 01 秒");
+        assert_eq!(duration_label(59), "0 时 00 分 59 秒");
+        assert_eq!(duration_label(60), "0 时 01 分 00 秒");
     }
 
     #[test]

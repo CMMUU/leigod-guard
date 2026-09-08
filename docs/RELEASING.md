@@ -11,12 +11,12 @@
 - `CHANGELOG.md` 中相应版本的实际变化与限制。
 - Git 标签、Release 标题、安装程序版本以及 EXE / ZIP 文件名。
 
-`v0.11.2` 的发布资产为：
+`v0.11.3` 的发布资产为：
 
 | 资产 | 用途 |
 | --- | --- |
-| `leigod-guard-v0.11.2-windows-x64-setup.exe` | 推荐下载；Windows x64 安装程序 |
-| `leigod-guard-v0.11.2-windows-x64.zip` | 绿色免安装程序包 |
+| `leigod-guard-v0.11.3-windows-x64-setup.exe` | 推荐下载；Windows x64 安装程序 |
+| `leigod-guard-v0.11.3-windows-x64.zip` | 绿色免安装程序包 |
 | `SHA256SUMS.txt` | 发布文件的 SHA-256 校验值 |
 | GitHub 自动提供的 `Source code` | 对应标签的源码归档，不是可运行程序 |
 
@@ -34,7 +34,7 @@
 
 ## 应用内更新与发布约定
 
-0.10.0 起，「关于与更新」默认采用「自动选择（国内优先）」：并行检查两个来源，选择完整可用的正式新版本，同版本优先 Gitee。保留「仅 Gitee（国内）」和「仅 GitHub」，两者严格只连接所选来源；已有配置的明确选择会保留。详细规则及维护约束见 [UPDATES.md](https://github.com/CMMUU/leigod-guard/blob/v0.11.2/docs/UPDATES.md) 与根目录 [AGENTS.md](https://github.com/CMMUU/leigod-guard/blob/main/AGENTS.md)。GitHub 使用本仓库的 `releases/latest` 公开接口；Gitee 比较公开列表最近 100 条的版本号，并读取所选 Release 的附件列表。切换来源清除旧结果，需重新检查；来源失败应明确提示检查不完整。「启动时自动检查更新」仍默认关闭，只有用户点击「下载并自动更新」才下载和安装。
+0.10.0 起，「关于与更新」默认采用「自动选择（国内优先）」：并行检查两个来源，选择完整可用的正式新版本，同版本优先 Gitee。保留「仅 Gitee（国内）」和「仅 GitHub」，两者严格只连接所选来源；已有配置的明确选择会保留。详细规则及维护约束见 [UPDATES.md](https://github.com/CMMUU/leigod-guard/blob/v0.11.3/docs/UPDATES.md) 与根目录 [AGENTS.md](https://github.com/CMMUU/leigod-guard/blob/main/AGENTS.md)。GitHub 使用本仓库的 `releases/latest` 公开接口；Gitee 比较公开列表最近 100 条的版本号，并读取所选 Release 的附件列表。切换来源清除旧结果，需重新检查；来源失败应明确提示检查不完整。「启动时自动检查更新」仍默认关闭，只有用户点击「下载并自动更新」才下载和安装。
 
 更新器按当前发行方式选择安装 EXE 或绿色 ZIP。必须继续使用上表的固定命名格式，并在同一 Release 中同时提供两个文件与 `SHA256SUMS.txt`。校验表对每个资产只保留一条精确文件名记录；程序检查文件大小、SHA-256，并核对可用的 GitHub 资产摘要。Gitee 的附件 API 没有独立摘要，使用对应 Release 的校验表，并核对 Release 与附件 API 的名称、编号、下载地址及大小。自动模式的备用下载必须固定同一标签、安装方式、文件名、大小及已确认哈希；不得改用另一个最新版或拼接残片。每个来源都验证其完整下载。Gitee 必须同步同一份构建，不能独立重编译成同版本的不同文件。不要在上传完整资产前公开正式版本，也不要复用旧版本号。完整性校验不能替代代码签名。
 
@@ -46,7 +46,7 @@
 
 ## 构建与检查
 
-0.11.2 的退出宽限期显示需覆盖：后台尚未再次扫描时仍逐秒更新、跨过截止时间不出现负数或提前报告成功、后续扫描不重置显示起点、策略变化与游戏重开清理旧状态。原生截图新增退出宽限期的正常窗口与窄窗口场景；进程扫描、账户查询和暂停调用仍由原有后台策略驱动。
+0.11.2 起的退出宽限期显示需覆盖：后台尚未再次扫描时仍逐秒更新、跨过截止时间不出现负数或提前报告成功、后续扫描不重置显示起点、策略变化与游戏重开清理旧状态。原生截图新增退出宽限期的正常窗口与窄窗口场景；进程扫描、账户查询和暂停调用仍由原有后台策略驱动。
 
 Windows 本机需准备 Rust、Visual Studio C++ Build Tools 和 Windows SDK。在仓库根目录执行：
 
@@ -117,11 +117,11 @@ CI 和发布工作流都会运行 `scripts/test-updater.ps1`。该集成测试�
 先将通过检查的源码和文档提交到仓库，确认提交已经推送。然后为该提交创建带说明的版本标签，例如：
 
 ```powershell
-git tag -a v0.11.2 -m "Release v0.11.2"
-git push origin v0.11.2
+git tag -a v0.11.3 -m "Release v0.11.3"
+git push origin v0.11.3
 ```
 
-仓库的 [CI 工作流](https://github.com/CMMUU/leigod-guard/blob/v0.11.2/.github/workflows/ci.yml) 执行自动检查，[发布工作流](https://github.com/CMMUU/leigod-guard/blob/v0.11.2/.github/workflows/release.yml) 根据推送的 `v*` 标签构建安装版、绿色免安装版和校验文件并发布，也可通过 `workflow_dispatch` 指定已有标签。已有同名 Release 时，工作流会拒绝覆盖。
+仓库的 [CI 工作流](https://github.com/CMMUU/leigod-guard/blob/v0.11.3/.github/workflows/ci.yml) 执行自动检查，[发布工作流](https://github.com/CMMUU/leigod-guard/blob/v0.11.3/.github/workflows/release.yml) 根据推送的 `v*` 标签构建安装版、绿色免安装版和校验文件并发布，也可通过 `workflow_dispatch` 指定已有标签。已有同名 Release 时，工作流会拒绝覆盖。
 
 维护者应等待 GitHub Actions 的实际结果，确认 Release 已出现，并确认用户能够下载资产；只推送标签、只启动工作流或只上传 Actions artifact 不等于已经完成公开发版。GitHub 发版完成后，还应检查下方 Gitee 同步任务；GitHub 成功不能代替 Gitee 的发布结果。
 
