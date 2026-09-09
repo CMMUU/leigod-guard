@@ -63,7 +63,7 @@ pub struct App {
     _tray: Option<TrayIcon>,
 
     page: Page,
-    brand: egui::TextureHandle,
+    hide_requested: bool,
     backdrop: egui::TextureHandle,
     show_add_game: bool,
     dirty: bool,
@@ -668,14 +668,7 @@ impl App {
             config,
             _tray: tray,
             page: Page::Games,
-            brand: ctx.load_texture(
-                "leigod-brand",
-                egui::ColorImage::from_rgba_unmultiplied(
-                    [256, 256],
-                    include_bytes!("../assets/app-icon-256.rgba"),
-                ),
-                egui::TextureOptions::LINEAR,
-            ),
+            hide_requested: false,
             backdrop: theme::glass_backdrop(ctx),
             show_add_game: false,
             dirty: false,
@@ -1036,8 +1029,9 @@ impl App {
     fn render_shell(&mut self, ctx: &egui::Context) {
         let screen = ctx.screen_rect();
         let short = screen.height() < 620.0;
+        self.hide_requested |= crate::ui_chrome::render(ctx, &self.backdrop);
         let sidebar_width = if screen.width() >= 1000.0 {
-            208.0
+            210.0
         } else {
             170.0
         };
@@ -1048,23 +1042,9 @@ impl App {
             .show(ctx, |ui| {
                 theme::paint_backdrop(ui, &self.backdrop, ui.max_rect());
                 theme::sidebar_background(ui);
-                ui.add_space(if short { 14.0 } else { 42.0 });
-                ui.vertical_centered(|ui| {
-                    let size = if short { 44.0 } else { 76.0 };
-                    ui.add(egui::Image::new(&self.brand).fit_to_exact_size(egui::vec2(size, size)));
-                    ui.add_space(if short { 0.0 } else { 4.0 });
-                    ui.label(theme::title("雷神守护", if short { 19.0 } else { 23.0 }));
-                    if !short {
-                        ui.label(
-                            egui::RichText::new("Leigod Guard")
-                                .size(14.0)
-                                .color(theme::MUTED),
-                        );
-                    }
-                });
-                ui.add_space(if short { 8.0 } else { 22.0 });
+                ui.add_space(if short { 12.0 } else { 20.0 });
                 egui::Frame::new()
-                    .inner_margin(egui::Margin::symmetric(16, 0))
+                    .inner_margin(egui::Margin::symmetric(10, 0))
                     .show(ui, |ui| {
                         ui.spacing_mut().item_spacing.y = if short { 3.0 } else { 10.0 };
                         for (page, icon, label) in [
@@ -1108,14 +1088,12 @@ impl App {
                             .color(theme::MUTED),
                         );
                         if ui.small_button("隐藏到托盘").clicked() {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-                            hide_window_native();
-                            self.account_window_active = false;
+                            self.hide_requested = true;
                         }
                     });
                 });
             });
-        let margin = if screen.width() >= 1000.0 { 28 } else { 20 };
+        let margin = if screen.width() >= 1000.0 { 36 } else { 18 };
         egui::CentralPanel::default()
             .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(margin, 24)))
             .show(ctx, |ui| {
@@ -1184,7 +1162,7 @@ impl App {
                 .default_pos(screen.center() - egui::vec2(237.0, 200.0))
                 .default_width(430.0)
                 .default_height(290.0)
-                .frame(theme::card())
+                .frame(theme::card().fill(theme::BACKGROUND))
                 .max_width((screen.width() - 70.0).max(280.0))
                 .max_height((screen.height() - 80.0).max(220.0))
                 .vscroll(true)
@@ -1195,7 +1173,7 @@ impl App {
 }
 
 fn page_header(ui: &mut egui::Ui, title: &str, subtitle: &str) {
-    ui.label(theme::title(title, 27.0));
+    ui.label(theme::title(title, 30.0));
     ui.label(egui::RichText::new(subtitle).color(theme::MUTED));
     ui.add_space(18.0);
 }
@@ -1249,6 +1227,11 @@ impl eframe::App for App {
             self.refresh_account_info();
         }
         self.render_shell(ctx);
+        if std::mem::take(&mut self.hide_requested) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            hide_window_native();
+            self.account_window_active = false;
+        }
 
         // 进程选择弹窗
         if self.show_proc_picker {
@@ -1313,7 +1296,7 @@ fn game_entry_form(
         egui::RichText::new(
             "选择后自动填入名称和进程名，下面仍可修改。不同区服或版本可从运行进程中确认。",
         )
-        .weak()
+        .color(theme::MUTED)
         .small(),
     );
     if let Some(preset) = selected.and_then(|index| PRESETS.get(index)) {
@@ -1321,7 +1304,7 @@ fn game_entry_form(
         if preset.exe == "League of Legends.exe" {
             ui.label(
                 egui::RichText::new("英雄联盟此项仅识别对局；返回大厅后会进入退出宽限期。")
-                    .weak()
+                    .color(theme::MUTED)
                     .small(),
             );
         }
@@ -2219,7 +2202,7 @@ impl App {
                 egui::RichText::new(
                     "点关闭按钮只是最小化到托盘；要彻底退出请用「退出程序」或托盘菜单",
                 )
-                .weak()
+                .color(theme::MUTED)
                 .small(),
             );
         });
@@ -2309,7 +2292,7 @@ impl App {
             }
             ui.label(egui::RichText::new(
                 "自动选择会检查两个来源，选择可用的新版本，同版本优先 Gitee，下载失败后尝试备用源。选择“仅 Gitee”或“仅 GitHub”时，只连接该来源。启动检查默认关闭，点击更新后才会下载并安装。"
-            ).weak().small());
+            ).color(theme::MUTED).small());
             ui.add_space(8.0);
             ui.horizontal_wrapped(|ui| {
                 if ui.add_enabled(!self.update_busy, egui::Button::new("检查更新")).clicked() {
@@ -2381,28 +2364,26 @@ impl App {
     fn page_strategy(&mut self, ui: &mut egui::Ui) {
         ui.add_space(8.0);
         if let Ok(mut c) = self.config.lock() {
-            if ui
-                .checkbox(&mut c.strategy.enabled, "启用自动暂停（总开关）")
-                .changed()
+            if theme::switch_row(ui, &mut c.strategy.enabled, "启用自动暂停（总开关）").changed()
             {
                 self.dirty = true;
             }
             ui.label(
                 egui::RichText::new("控制启动等待后的检查，以及游戏全部退出后的暂停。")
-                    .weak()
+                    .color(theme::MUTED)
                     .small(),
             );
             ui.add_space(4.0);
-            if ui
-                .checkbox(
-                    &mut c.strategy.pause_on_startup,
-                    "启动时无游戏运行则暂停计时",
-                )
-                .changed()
+            if theme::switch_row(
+                ui,
+                &mut c.strategy.pause_on_startup,
+                "启动时无游戏运行则暂停计时",
+            )
+            .changed()
             {
                 self.dirty = true;
             }
-            ui.label(egui::RichText::new("默认开启。启动后先等待，再检查名单中的游戏。关闭会结束本次等待，重新开启要下次启动才检查；空名单或检测失败不会被当作无游戏。").weak().small());
+            ui.label(egui::RichText::new("默认开启。启动后先等待，再检查名单中的游戏。关闭会结束本次等待，重新开启要下次启动才检查；空名单或检测失败不会被当作无游戏。").color(theme::MUTED).small());
             ui.add_space(4.0);
             ui.horizontal_wrapped(|ui| {
                 ui.label("启动等待（秒）:");
@@ -2413,7 +2394,7 @@ impl App {
                     self.dirty = true;
                 }
             });
-            ui.label(egui::RichText::new("默认180秒（3分钟），调整会影响尚未完成的启动等待。正在准备游戏时，可在首页或托盘延后10分钟；检测到游戏就结束本次启动检查。").weak().small());
+            ui.label(egui::RichText::new("默认180秒（3分钟），调整会影响尚未完成的启动等待。正在准备游戏时，可在首页或托盘延后10分钟；检测到游戏就结束本次启动检查。").color(theme::MUTED).small());
             ui.add_space(8.0);
             ui.horizontal_wrapped(|ui| {
                 ui.label("游戏退出宽限期（秒）:");
@@ -2424,7 +2405,7 @@ impl App {
                     self.dirty = true;
                 }
             });
-            ui.label(egui::RichText::new("默认90秒。名单中的游戏全部退出后，连续等待这段时间再暂停，给切换游戏留出余地。").weak().small());
+            ui.label(egui::RichText::new("默认90秒。名单中的游戏全部退出后，连续等待这段时间再暂停，给切换游戏留出余地。").color(theme::MUTED).small());
             ui.add_space(8.0);
             ui.horizontal_wrapped(|ui| {
                 ui.label("进程检测间隔（秒）:");
@@ -2438,9 +2419,7 @@ impl App {
             // 二期功能：最短运行时间与自动恢复配套，暂时隐藏（字段保留在配置中）
             ui.add_space(8.0);
             let mut auto = autostart::is_enabled();
-            if ui
-                .checkbox(&mut auto, "开机静默启动（仅驻留托盘）")
-                .changed()
+            if theme::switch_row(ui, &mut auto, "开机静默启动（仅驻留托盘）").changed()
             {
                 match autostart::set_enabled(auto) {
                     Ok(()) => {
@@ -2460,12 +2439,15 @@ impl App {
                 egui::RichText::new(
                     "开机不打开主界面，后台继续守护；点击托盘图标或再次运行程序可打开面板。",
                 )
-                .weak()
+                .color(theme::MUTED)
                 .small(),
             );
-            if ui
-                .checkbox(&mut c.strategy.pause_on_shutdown, "关机/注销前自动暂停计时")
-                .changed()
+            if theme::switch_row(
+                ui,
+                &mut c.strategy.pause_on_shutdown,
+                "关机/注销前自动暂停计时",
+            )
+            .changed()
             {
                 self.dirty = true;
             }
@@ -2473,7 +2455,7 @@ impl App {
                 egui::RichText::new(
                     "开启后，收到 Windows 关机或注销通知时尝试暂停计时；断电或强制结束无法保证。",
                 )
-                .weak()
+                .color(theme::MUTED)
                 .small(),
             );
 
@@ -2514,12 +2496,12 @@ impl App {
             let protection_active = osd::gamepp_protection_active();
             let protection_error = osd::gamepp_protection_error();
             let gamepp_modules_loaded = osd::gamepp_modules_loaded();
-            if ui
-                .checkbox(
-                    &mut c.strategy.block_gamepp_injection,
-                    "阻止游戏加加向本工具注入（完全退出并重新打开后生效）",
-                )
-                .changed()
+            if theme::switch_row(
+                ui,
+                &mut c.strategy.block_gamepp_injection,
+                "阻止游戏加加向本工具注入（完全退出并重新打开后生效）",
+            )
+            .changed()
             {
                 self.dirty = true;
             }
@@ -2527,21 +2509,21 @@ impl App {
                 egui::RichText::new(
                     "默认关闭。更改后须从托盘完全退出并重新打开；关闭保护也要重启才能撤销。",
                 )
-                .weak()
+                .color(theme::MUTED)
                 .small(),
             );
             ui.label(
                 egui::RichText::new(
                     "严格策略只作用于新启动的雷神守护主进程，不改变游戏进程；不会关闭游戏加加或修改它的设置，无需管理员权限。",
                 )
-                .weak()
+                .color(theme::MUTED)
                 .small(),
             );
             ui.label(
                 egui::RichText::new(
                     "它也会阻止其他不属于 Microsoft、Microsoft Store 或 WHQL 信任范围的 DLL，可能影响其他 OSD、录屏或输入法插件；如有异常，请关闭后完全退出并重新打开。",
                 )
-                .weak()
+                .color(theme::MUTED)
                 .small(),
             );
             ui.add_space(4.0);

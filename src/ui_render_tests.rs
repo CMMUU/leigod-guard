@@ -181,6 +181,113 @@ fn all_pages_render_at_minimum_and_standard_window_sizes() {
     }
 }
 
+#[test]
+fn light_titlebar_commands_keep_close_as_hide_and_support_native_window_gestures() {
+    let (ctx, mut app) = fixture();
+    let size = [1180.0, 780.0];
+    for _ in 0..2 {
+        frame(&ctx, &mut app, size, vec![]);
+    }
+    let pointer = |p: Pos2, pressed| {
+        vec![
+            Event::PointerMoved(p),
+            Event::PointerButton {
+                pos: p,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]
+    };
+    for (x, expected) in [(1052.5, "minimize"), (1102.5, "maximize"), (1152.5, "hide")] {
+        let p = egui::pos2(x, 25.0);
+        frame(&ctx, &mut app, size, pointer(p, true));
+        let output = frame(&ctx, &mut app, size, pointer(p, false));
+        let commands = &output.viewport_output[&egui::ViewportId::ROOT].commands;
+        assert!(!commands
+            .iter()
+            .any(|c| matches!(c, egui::ViewportCommand::Close)));
+        match expected {
+            "minimize" => assert!(commands
+                .iter()
+                .any(|c| matches!(c, egui::ViewportCommand::Minimized(true)))),
+            "maximize" => assert!(commands
+                .iter()
+                .any(|c| matches!(c, egui::ViewportCommand::Maximized(true)))),
+            _ => assert!(app.hide_requested),
+        }
+    }
+    app.hide_requested = false;
+    frame(&ctx, &mut app, size, pointer(egui::pos2(400.0, 25.0), true));
+    let output = frame(
+        &ctx,
+        &mut app,
+        size,
+        vec![Event::PointerMoved(egui::pos2(425.0, 35.0))],
+    );
+    assert!(output.viewport_output[&egui::ViewportId::ROOT]
+        .commands
+        .iter()
+        .any(|c| matches!(c, egui::ViewportCommand::StartDrag)));
+    frame(
+        &ctx,
+        &mut app,
+        size,
+        pointer(egui::pos2(425.0, 35.0), false),
+    );
+    let output = frame(
+        &ctx,
+        &mut app,
+        size,
+        pointer(egui::pos2(1178.0, 778.0), true),
+    );
+    assert!(output.viewport_output[&egui::ViewportId::ROOT]
+        .commands
+        .iter()
+        .any(|c| matches!(
+            c,
+            egui::ViewportCommand::BeginResize(egui::ResizeDirection::SouthEast)
+        )));
+    assert!(!app.hide_requested);
+}
+
+#[test]
+fn narrow_home_scroll_reaches_games_without_moving_window_navigation() {
+    let (ctx, mut app) = fixture();
+    for _ in 0..2 {
+        frame(&ctx, &mut app, [680.0, 460.0], vec![]);
+    }
+    let mut output = frame(&ctx, &mut app, [680.0, 460.0], vec![]);
+    let navigation = text_rect(&output.shapes, "首页与游戏");
+    for _ in 0..12 {
+        output = frame(
+            &ctx,
+            &mut app,
+            [680.0, 460.0],
+            vec![
+                Event::PointerMoved(egui::pos2(480.0, 340.0)),
+                Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: vec2(0.0, -45.0),
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        if output
+            .shapes
+            .iter()
+            .any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.job.text == "＋ 添加游戏"))
+        {
+            let button = text_rect(&output.shapes, "＋ 添加游戏");
+            if button.top() > 50.0 && button.bottom() < 424.0 {
+                assert_eq!(navigation, text_rect(&output.shapes, "首页与游戏"));
+                return;
+            }
+        }
+    }
+    panic!("the game controls must be reachable in a small window");
+}
+
 // Controlled responses exercise the live completion and rendering paths without
 // reading account files or connecting to the Leigod service.
 fn pending_account_query(app: &mut App) -> mpsc::Sender<Result<serde_json::Value, api::ApiError>> {

@@ -15,6 +15,7 @@ mod osd;
 mod shared;
 mod shutdown;
 mod ui;
+mod ui_chrome;
 mod ui_home;
 mod ui_theme;
 mod update_apply;
@@ -113,6 +114,7 @@ fn main() {
         // 关掉后按设计默认尺寸打开，仍允许缩放到紧凑布局。
         persist_window: false,
         viewport: egui::ViewportBuilder::default()
+            .with_decorations(false)
             // 默认打开 1180x780（winit 0.30 在 Windows 下 with_resizable(false)
             // 和 min=max 都会把窗口压成 70x90 的残废尺寸，只能用默认大小约束）
             .with_inner_size([1180.0, 780.0])
