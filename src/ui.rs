@@ -1104,10 +1104,13 @@ impl App {
                     0,
                     theme::glass_tint(35),
                 );
-                let content = egui::ScrollArea::vertical()
-                    .id_salt(self.page as u8)
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
+                let content = crate::ui_scroll::show(
+                    ui,
+                    egui::ScrollArea::vertical()
+                        .id_salt(self.page as u8)
+                        .auto_shrink([false, false]),
+                    !self.show_add_game && !self.show_proc_picker,
+                    |ui| {
                         ui.set_min_width(ui.available_width());
                         match self.page {
                             Page::Games => self.page_games(ui),
@@ -1142,7 +1145,8 @@ impl App {
                                 self.page_updates(ui);
                             }
                         }
-                    });
+                    },
+                );
                 #[cfg(test)]
                 assert!(
                     content.content_size.x <= content.inner_rect.width() + 1.0,
@@ -1166,6 +1170,7 @@ impl App {
                 .max_width((screen.width() - 70.0).max(280.0))
                 .max_height((screen.height() - 80.0).max(220.0))
                 .vscroll(true)
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
                 .show(ctx, |ui| self.game_add_form(ui));
             self.show_add_game &= open;
         }
@@ -1599,17 +1604,22 @@ impl App {
                 });
                 ui.separator();
                 let filter = self.proc_filter.to_lowercase();
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    let list = self.proc_list.clone();
-                    for p in list {
-                        if !filter.is_empty() && !p.to_lowercase().contains(&filter) {
-                            continue;
+                crate::ui_scroll::show(
+                    ui,
+                    egui::ScrollArea::vertical().id_salt("process-list"),
+                    true,
+                    |ui| {
+                        let list = self.proc_list.clone();
+                        for p in list {
+                            if !filter.is_empty() && !p.to_lowercase().contains(&filter) {
+                                continue;
+                            }
+                            if ui.button(&p).clicked() {
+                                picked = Some(p);
+                            }
                         }
-                        if ui.button(&p).clicked() {
-                            picked = Some(p);
-                        }
-                    }
-                });
+                    },
+                );
             });
         self.show_proc_picker = open;
         if let Some(process) = picked {
@@ -2609,9 +2619,14 @@ impl App {
             ui.add_space(12.0);
             return;
         }
-        egui::ScrollArea::vertical()
-            .stick_to_bottom(true)
-            .show(ui, |ui| {
+        crate::ui_scroll::show(
+            ui,
+            egui::ScrollArea::vertical()
+                .id_salt("live-log-scroll")
+                .max_height((ui.ctx().screen_rect().height() - 310.0).clamp(120.0, 520.0))
+                .stick_to_bottom(true),
+            !self.show_add_game && !self.show_proc_picker,
+            |ui| {
                 ui.add(
                     egui::TextEdit::multiline(&mut text.as_str())
                         .font(egui::TextStyle::Monospace)
@@ -2620,6 +2635,7 @@ impl App {
                         .desired_width(f32::INFINITY)
                         .interactive(false),
                 );
-            });
+            },
+        );
     }
 }

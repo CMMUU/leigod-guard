@@ -11,12 +11,12 @@
 - `CHANGELOG.md` 中相应版本的实际变化与限制。
 - Git 标签、Release 标题、安装程序版本以及 EXE / ZIP 文件名。
 
-`v0.12.0` 的发布资产为：
+`v0.12.1` 的发布资产为：
 
 | 资产 | 用途 |
 | --- | --- |
-| `leigod-guard-v0.12.0-windows-x64-setup.exe` | 推荐下载；Windows x64 安装程序 |
-| `leigod-guard-v0.12.0-windows-x64.zip` | 绿色免安装程序包 |
+| `leigod-guard-v0.12.1-windows-x64-setup.exe` | 推荐下载；Windows x64 安装程序 |
+| `leigod-guard-v0.12.1-windows-x64.zip` | 绿色免安装程序包 |
 | `SHA256SUMS.txt` | 发布文件的 SHA-256 校验值 |
 | GitHub 自动提供的 `Source code` | 对应标签的源码归档，不是可运行程序 |
 
@@ -34,7 +34,7 @@
 
 ## 应用内更新与发布约定
 
-0.10.0 起，「关于与更新」默认采用「自动选择（国内优先）」：并行检查两个来源，选择完整可用的正式新版本，同版本优先 Gitee。保留「仅 Gitee（国内）」和「仅 GitHub」，两者严格只连接所选来源；已有配置的明确选择会保留。详细规则及维护约束见 [UPDATES.md](https://github.com/CMMUU/leigod-guard/blob/v0.12.0/docs/UPDATES.md) 与根目录 [AGENTS.md](https://github.com/CMMUU/leigod-guard/blob/main/AGENTS.md)。GitHub 使用本仓库的 `releases/latest` 公开接口；Gitee 比较公开列表最近 100 条的版本号，并读取所选 Release 的附件列表。切换来源清除旧结果，需重新检查；来源失败应明确提示检查不完整。「启动时自动检查更新」仍默认关闭，只有用户点击「下载并自动更新」才下载和安装。
+0.10.0 起，「关于与更新」默认采用「自动选择（国内优先）」：并行检查两个来源，选择完整可用的正式新版本，同版本优先 Gitee。保留「仅 Gitee（国内）」和「仅 GitHub」，两者严格只连接所选来源；已有配置的明确选择会保留。详细规则及维护约束见 [UPDATES.md](https://github.com/CMMUU/leigod-guard/blob/v0.12.1/docs/UPDATES.md) 与根目录 [AGENTS.md](https://github.com/CMMUU/leigod-guard/blob/main/AGENTS.md)。GitHub 使用本仓库的 `releases/latest` 公开接口；Gitee 比较公开列表最近 100 条的版本号，并读取所选 Release 的附件列表。切换来源清除旧结果，需重新检查；来源失败应明确提示检查不完整。「启动时自动检查更新」仍默认关闭，只有用户点击「下载并自动更新」才下载和安装。
 
 更新器按当前发行方式选择安装 EXE 或绿色 ZIP。必须继续使用上表的固定命名格式，并在同一 Release 中同时提供两个文件与 `SHA256SUMS.txt`。校验表对每个资产只保留一条精确文件名记录；程序检查文件大小、SHA-256，并核对可用的 GitHub 资产摘要。Gitee 的附件 API 没有独立摘要，使用对应 Release 的校验表，并核对 Release 与附件 API 的名称、编号、下载地址及大小。自动模式的备用下载必须固定同一标签、安装方式、文件名、大小及已确认哈希；不得改用另一个最新版或拼接残片。每个来源都验证其完整下载。Gitee 必须同步同一份构建，不能独立重编译成同版本的不同文件。不要在上传完整资产前公开正式版本，也不要复用旧版本号。完整性校验不能替代代码签名。
 
@@ -119,11 +119,11 @@ CI 和发布工作流都会运行 `scripts/test-updater.ps1`。该集成测试�
 先将通过检查的源码和文档提交到仓库，确认提交已经推送。然后为该提交创建带说明的版本标签，例如：
 
 ```powershell
-git tag -a v0.12.0 -m "Release v0.12.0"
-git push origin v0.12.0
+git tag -a v0.12.1 -m "Release v0.12.1"
+git push origin v0.12.1
 ```
 
-仓库的 [CI 工作流](https://github.com/CMMUU/leigod-guard/blob/v0.12.0/.github/workflows/ci.yml) 执行自动检查，[发布工作流](https://github.com/CMMUU/leigod-guard/blob/v0.12.0/.github/workflows/release.yml) 根据推送的 `v*` 标签构建安装版、绿色免安装版和校验文件并发布，也可通过 `workflow_dispatch` 指定已有标签。已有同名 Release 时，工作流会拒绝覆盖。
+仓库的 [CI 工作流](https://github.com/CMMUU/leigod-guard/blob/v0.12.1/.github/workflows/ci.yml) 执行自动检查，[发布工作流](https://github.com/CMMUU/leigod-guard/blob/v0.12.1/.github/workflows/release.yml) 根据推送的 `v*` 标签构建安装版、绿色免安装版和校验文件并发布，也可通过 `workflow_dispatch` 指定已有标签。已有同名 Release 时，工作流会拒绝覆盖。
 
 维护者应等待 GitHub Actions 的实际结果，确认 Release 已出现，并确认用户能够下载资产；只推送标签、只启动工作流或只上传 Actions artifact 不等于已经完成公开发版。GitHub 发版完成后，还应检查下方 Gitee 同步任务；GitHub 成功不能代替 Gitee 的发布结果。
 
@@ -142,7 +142,7 @@ git push origin v0.12.0
 触发与完成条件：
 
 - 推送 `main` 自动同步代码与标签。**Publish Windows release** 成功后同步该标签的说明、安装 EXE、绿色 ZIP 和 `SHA256SUMS.txt`；手动发布工作流未提供标签分支时选择 GitHub 最新正式版。直接发布或编辑 Release 时同步事件中的确切标签。构建失败不触发发布同步。
-- 手动同步默认 `scope=release`，可填写 `tag`（例如 `v0.12.0`）处理指定公开版本，留空选择 GitHub 最新正式版；`scope=all` 单独执行完整历史同步和校验，`scope=refs` 只同步代码和标签。`all`、`refs` 不接受 `tag`。自动发版不再逐次下载全部历史附件，旧版附件异常不会阻塞独立的新版本同步；目标版本仍执行完整的大小与 SHA-256 校验。
+- 手动同步默认 `scope=release`，可填写 `tag`（例如 `v0.12.1`）处理指定公开版本，留空选择 GitHub 最新正式版；`scope=all` 单独执行完整历史同步和校验，`scope=refs` 只同步代码和标签。`all`、`refs` 不接受 `tag`。自动发版不再逐次下载全部历史附件，旧版附件异常不会阻塞独立的新版本同步；目标版本仍执行完整的大小与 SHA-256 校验。
 - 使用 `workflow_run` 接续发布工作流，覆盖 GitHub 内置令牌创建 Release 不会再触发普通 `release` 工作流的情况。同步任务串行运行，只允许本项目的可信主分支脚本操作固定的目标仓库。
 - Gitee 无草稿 Release API；新版本先以**预发布**状态创建，上传并重新下载每个附件核对大小与 SHA-256，全部通过后才按 GitHub 状态转为正式版。同步中的预发布可能在网页可见，应用会忽略它。GitHub 原本为预发布时仍保持预发布。
 - 现有同名附件先下载校验，一致则复用；冲突或重复名称会报错，不替换或删除文件。分支和标签采用非强制推送，遇到冲突停止；不会删除 Gitee 独有引用。

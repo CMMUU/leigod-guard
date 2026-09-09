@@ -812,11 +812,21 @@ fn render_apple_preview() {
         ("updates", Page::Updates, [1180.0, 780.0], 1.0),
         ("updates-narrow", Page::Updates, [680.0, 460.0], 1.0),
         ("logs", Page::Logs, [1180.0, 780.0], 1.0),
+        ("logs-narrow", Page::Logs, [680.0, 460.0], 1.0),
     ] {
         let (ctx, mut app) = fixture();
         app.page = page;
         if page == Page::Games {
             set_demo_balance(&mut app, 128 * 3600 + 42 * 60);
+        }
+        if page == Page::Logs {
+            let mut shared = app.shared.lock().unwrap();
+            for index in 0..80 {
+                shared.logs.push_back(format!(
+                    "[12:00:{:02}] 演示日志 {index}：检测完成，继续按策略守护。",
+                    index % 60
+                ));
+            }
         }
         gpu.save(
             &ctx,

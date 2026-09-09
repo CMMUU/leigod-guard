@@ -17,6 +17,7 @@ mod shutdown;
 mod ui;
 mod ui_chrome;
 mod ui_home;
+mod ui_scroll;
 mod ui_theme;
 mod update_apply;
 mod updater;
