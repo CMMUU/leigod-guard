@@ -336,6 +336,9 @@ fn find_main_hwnd() -> Option<windows::Win32::Foundation::HWND> {
 pub fn activate_existing_window() {
     use windows::Win32::UI::WindowsAndMessaging::{SetForegroundWindow, ShowWindow, SW_RESTORE};
     if let Some(hwnd) = find_main_hwnd() {
+        if !crate::window_visibility::allow_show(hwnd) {
+            return;
+        }
         unsafe {
             let _ = ShowWindow(hwnd, SW_RESTORE);
             let _ = SetForegroundWindow(hwnd);
@@ -382,6 +385,9 @@ fn show_window(
     }
     dbglog(&format!("show_window called, hwnd={:?}", hwnd.map(|h| h.0)));
     if let Some(h) = *hwnd {
+        if !crate::window_visibility::allow_show(h) {
+            return;
+        }
         unsafe {
             let _ = ShowWindow(h, SW_RESTORE); // 隐藏/最小化状态一并恢复
                                                // 抢前台：附加到当前前台线程的输入队列
@@ -411,12 +417,23 @@ fn tray_event_loop(
 ) {
     dbglog("tray event loop started");
     let mut hwnd = find_main_hwnd();
+    let mut pending_alert = None;
     loop {
         // 告警弹窗（暂停/恢复失败等）
         let alert = shared.lock().ok().and_then(|mut s| s.alert.take());
         if let Some(msg) = alert {
-            show_window(&ctx, &shared, &mut hwnd);
-            msgbox_warn("雷神守护 - 警告", &msg);
+            if crate::window_visibility::startup_hidden() {
+                if let Ok(mut state) = shared.lock() {
+                    state.log(&format!("后台提醒：{msg}"));
+                }
+            }
+            pending_alert = Some(msg);
+        }
+        if !crate::window_visibility::startup_hidden() {
+            if let Some(msg) = pending_alert.take() {
+                show_window(&ctx, &shared, &mut hwnd);
+                msgbox_warn("雷神守护 - 警告", &msg);
+            }
         }
 
         while let Ok(event) = TrayIconEvent::receiver().try_recv() {
@@ -548,6 +565,7 @@ impl App {
         cc: &eframe::CreationContext<'_>,
         shared: Arc<Mutex<Shared>>,
         config: Arc<Mutex<Config>>,
+        start_hidden: bool,
     ) -> Self {
         load_cjk_fonts(&cc.egui_ctx);
         let update_preparing = Arc::new(AtomicBool::new(false));
@@ -578,6 +596,17 @@ impl App {
                     .build()
                     .ok()
             });
+
+        // The tray must exist before suppressing the framework's first show.
+        // If it fails, leave the panel accessible instead of hiding the app.
+        if start_hidden && tray.is_some() {
+            if let Err(error) = crate::window_visibility::install(cc) {
+                dbglog(&format!("silent startup unavailable: {error}"));
+                if let Ok(mut state) = shared.lock() {
+                    state.log("静默启动初始化失败，已打开主界面；可手动隐藏到托盘。");
+                }
+            }
+        }
 
         // 托盘事件独立线程轮询：窗口隐藏时 egui 可能暂停重绘，
         // 若事件放在 update() 里处理会全部堆积无响应。
@@ -2410,7 +2439,7 @@ impl App {
             ui.add_space(8.0);
             let mut auto = autostart::is_enabled();
             if ui
-                .checkbox(&mut auto, "开机自动启动（最小化到托盘）")
+                .checkbox(&mut auto, "开机静默启动（仅驻留托盘）")
                 .changed()
             {
                 match autostart::set_enabled(auto) {
@@ -2418,7 +2447,7 @@ impl App {
                         c.strategy.autostart = auto;
                         self.dirty = true;
                         self.status_msg = if auto {
-                            "已开启开机自启".into()
+                            "已开启开机静默启动".into()
                         } else {
                             "已关闭开机自启".into()
                         };
@@ -2427,6 +2456,13 @@ impl App {
                 }
             }
             ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(
+                    "开机不打开主界面，后台继续守护；点击托盘图标或再次运行程序可打开面板。",
+                )
+                .weak()
+                .small(),
+            );
             if ui
                 .checkbox(&mut c.strategy.pause_on_shutdown, "关机/注销前自动暂停计时")
                 .changed()

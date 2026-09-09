@@ -19,6 +19,7 @@ mod ui_home;
 mod ui_theme;
 mod update_apply;
 mod updater;
+mod window_visibility;
 mod worker;
 
 use std::sync::{Arc, Mutex};
@@ -117,6 +118,7 @@ fn main() {
             .with_inner_size([1180.0, 780.0])
             .with_min_inner_size([680.0, 460.0])
             .with_visible(!minimized)
+            .with_active(!minimized)
             .with_icon(egui::IconData {
                 rgba,
                 width: w,
@@ -131,7 +133,7 @@ fn main() {
         "雷神守护 - LeigodGuard",
         options,
         Box::new(move |cc| {
-            Ok(Box::new(ui::App::new(cc, shared_ui, config_ui)) as Box<dyn eframe::App>)
+            Ok(Box::new(ui::App::new(cc, shared_ui, config_ui, minimized)) as Box<dyn eframe::App>)
         }),
     ) {
         eprintln!("GUI 启动失败: {e}");

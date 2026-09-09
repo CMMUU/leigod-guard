@@ -2389,7 +2389,7 @@ dependencies = [
 
 [[package]]
 name = "leigod-guard"
-version = "0.11.3"
+version = "0.11.4"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -2399,6 +2399,7 @@ dependencies = [
  "image",
  "md-5",
  "pollster",
+ "raw-window-handle",
  "reqwest",
  "serde",
  "serde_json",
