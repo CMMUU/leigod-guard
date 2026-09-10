@@ -35,7 +35,7 @@ await mkdir(path.join(output, 'assets'), { recursive: true });
 
 async function asset(input, name, extension) {
   const inputBytes = await readFile(input);
-  const bytes = extension === 'css' ? Buffer.from(inputBytes.toString('utf8').replaceAll('\r\n', '\n')) : inputBytes;
+  const bytes = ['css', 'js'].includes(extension) ? Buffer.from(inputBytes.toString('utf8').replaceAll('\r\n', '\n')) : inputBytes;
   const hash = createHash('sha256').update(bytes).digest('hex').slice(0, 12);
   const relative = `assets/${name}.${hash}.${extension}`;
   await writeFile(path.join(output, relative), bytes);
@@ -44,6 +44,7 @@ async function asset(input, name, extension) {
 const icon = await asset(path.join(repo, 'assets', 'app-icon.png'), 'app-icon', 'png');
 const screenshot = await asset(path.join(repo, 'assets', 'ui-home.png'), 'ui-home', 'png');
 const stylesheet = await asset(path.join(source, 'styles.css'), 'styles', 'css');
+const downloadScript = await asset(path.join(source, 'downloads.js'), 'downloads', 'js');
 const cargo = await readFile(path.join(repo, 'Cargo.toml'), 'utf8');
 const version = cargo.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
 if (!version) throw new Error('Could not read the application version.');
@@ -57,7 +58,7 @@ const application = {
   applicationCategory: 'UtilitiesApplication',
   operatingSystem: 'Windows 10 / 11 x64',
   softwareVersion: version,
-  downloadUrl: 'https://gitee.com/cmmuu/leigod-guard/releases',
+  downloadUrl: site.origin + '/download/installer',
   license: 'https://github.com/CMMUU/leigod-guard/blob/main/LICENSE',
   screenshot: site.origin + '/' + screenshot,
   image: site.origin + '/' + icon,
@@ -74,7 +75,7 @@ const structuredData = JSON.stringify({
     { '@type': 'FAQPage', '@id': site.origin + '/#faq', url: site.origin + '/#faq', isPartOf: { '@id': site.origin + '/#webpage' }, mainEntity: faq.map(item => ({ '@type': 'Question', name: item.question, acceptedAnswer: { '@type': 'Answer', text: item.answer } })) }
   ]
 }).replaceAll('<', '\\u003c');
-const replacements = { SITE_URL: site.origin, SITE_REVISION: revision, APP_ICON: icon, APP_SCREENSHOT: screenshot, STYLESHEET: stylesheet, STRUCTURED_DATA: structuredData, FAQ_HTML: faqHtml, APP_VERSION: version, LAST_MODIFIED: lastModified, FAQ_MARKDOWN: faq.map(item => `### ${item.question}\n\n${item.answer}`).join('\n\n') };
+const replacements = { SITE_URL: site.origin, SITE_REVISION: revision, APP_ICON: icon, APP_SCREENSHOT: screenshot, STYLESHEET: stylesheet, DOWNLOAD_SCRIPT: downloadScript, STRUCTURED_DATA: structuredData, FAQ_HTML: faqHtml, APP_VERSION: version, LAST_MODIFIED: lastModified, FAQ_MARKDOWN: faq.map(item => `### ${item.question}\n\n${item.answer}`).join('\n\n') };
 function render(template) {
   const result = template.replaceAll('\r\n', '\n').replace(/\{\{([A-Z_]+)\}\}/g, (_, key) => {
     if (!(key in replacements)) throw new Error(`Unknown template field: ${key}`);
@@ -107,7 +108,7 @@ await writeFile(path.join(output, '_headers'), `/*
   Referrer-Policy: strict-origin-when-cross-origin
   X-Frame-Options: DENY
   Permissions-Policy: camera=(), microphone=(), geolocation=()
-  Content-Security-Policy: default-src 'none'; style-src 'self'; img-src 'self'; script-src 'sha256-${jsonHash}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+  Content-Security-Policy: default-src 'none'; style-src 'self'; img-src 'self'; script-src 'self' 'sha256-${jsonHash}'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
 /assets/*
   Cache-Control: public, max-age=31536000, immutable
 https://leigod-guard.pages.dev/*
@@ -124,6 +125,7 @@ https://leigod-guard.pages.dev/*
   X-Robots-Tag: noindex
 `);
 const searchBots = ['Googlebot', 'Bingbot', 'Baiduspider', 'OAI-SearchBot', 'ChatGPT-User', 'PerplexityBot', 'Perplexity-User', 'Claude-SearchBot', 'Claude-User'];
+await writeFile(path.join(output, '_routes.json'), JSON.stringify({ version: 1, include: ['/api/downloads', '/download/*'], exclude: [] }));
 const trainingBots = ['GPTBot', 'ClaudeBot', 'CCBot', 'Google-Extended', 'Applebot-Extended', 'Bytespider', 'meta-externalagent'];
 await writeFile(path.join(output, 'robots.txt'), `# Search and answer retrieval are welcome. Training preference is unchanged.\nUser-agent: *\nAllow: /\nContent-Signal: search=yes,ai-input=yes,ai-train=no,use=reference\n\n${searchBots.map(bot => `User-agent: ${bot}\nAllow: /\nContent-Signal: search=yes,ai-input=yes,ai-train=no,use=reference`).join('\n\n')}\n\n${trainingBots.map(bot => `User-agent: ${bot}\nDisallow: /`).join('\n\n')}\n\nSitemap: ${site.origin}/sitemap.xml\n`);
 await writeFile(path.join(output, 'sitemap.xml'), `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>${site.origin}/</loc><lastmod>${lastModified}</lastmod></url></urlset>\n`);

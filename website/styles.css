@@ -91,6 +91,16 @@ h3 { font-size: 24px; line-height: 1.5; font-weight: 700; letter-spacing: -.025e
 .download-heading > p { font-size: 22px; line-height: 1.8; color: var(--muted); margin-top: 18px; }
 .download-panel { width: min(1160px, calc(100% - 112px)); margin: 60px auto 0; padding: 56px; border-radius: 25px; background: var(--glass); border: 1px solid white; box-shadow: 0 24px 24px -15px rgb(44 65 118 / 22%), inset 0 1px 0 white; -webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px); }
 .providers { display: grid; grid-template-columns: 1fr 1fr; }
+.download-controls { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 12px; color: var(--muted); }
+.download-controls[hidden] { display: none; }
+.download-controls select, .download-controls button { font: inherit; font-size: 15px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 9px; background: white; color: var(--ink); max-width: 100%; }
+.download-controls button { cursor: pointer; color: var(--blue); }
+.download-controls button:disabled { opacity: .6; cursor: wait; }
+.download-status { text-align: center; color: var(--muted); font-size: 16px; line-height: 1.8; min-height: 29px; margin: 20px 0 30px; }
+.download-mirrors { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 14px; margin-top: 16px; min-height: 25px; color: var(--muted); font-size: 14px; line-height: 1.8; }
+.download-mirrors a, .release-pages a { color: var(--blue); text-decoration: underline; text-underline-offset: 3px; }
+.release-pages, .download-note { color: var(--muted); text-align: center; font-size: 14px; line-height: 1.9; margin-top: 18px; }
+.download-note { margin-top: 8px; }
 .provider { text-align: center; padding: 0 30px 20px 0; }
 .provider + .provider { border-left: 1px solid var(--line); padding: 0 0 20px 30px; }
 .provider p { color: var(--muted); font-size: 16px; line-height: 1.8; min-height: 58px; margin-top: 28px; }

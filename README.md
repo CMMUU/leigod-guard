@@ -12,6 +12,8 @@
 
 两处发布页均提供**安装版 EXE、绿色免安装 ZIP 和校验文件**。一般用户选择安装版；希望解压即用的用户选择绿色版。已有用户可在「关于与更新」中检查新版，点击「下载并自动更新」完成升级。
 
+也可在[官网直接下载最新可用版本](https://leigod.cmmuu.com/#download)：点击「下载安装版」或「下载绿色版」，自动比较完整正式版，同版本优先 Gitee；支持指定单一来源和同版本备用下载。下载信息最多缓存 5 分钟，文件交给浏览器下载，安装需手动打开安装包。
+
 [三步开始](#三步开始使用) · [暂停规则](#自动暂停规则) · [剩余时长](#账户剩余时长与自动刷新) · [常见游戏](#常见游戏使用场景) · [版本记录](CHANGELOG.md) · [隐私说明](docs/PRIVACY.md) · [问题反馈](https://github.com/CMMUU/leigod-guard/issues)
 
 项目资料也提供 [Markdown 概览](https://leigod.cmmuu.com/index.html.md) 和 [AI 资料索引](https://leigod.cmmuu.com/llms.txt)，与网站源码一起维护。站点维护者可参考 [SEO 与 AI 可发现性说明](docs/SEO.md)。

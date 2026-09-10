@@ -12,11 +12,12 @@ Leigod Guard is an independent, MIT-licensed Windows companion for the Leigod ac
 
 ## 下载与更新
 
+- [自动下载最新可用安装版]({{SITE_URL}}/download/installer) · [自动下载最新可用绿色版]({{SITE_URL}}/download/portable)：比较完整正式版，同版本优先 Gitee。下载信息最多缓存 5 分钟；一个来源不可用时，不保证已确认所有来源的最新版本。
 - [Gitee 国内发布页](https://gitee.com/cmmuu/leigod-guard/releases)：安装版 EXE、绿色版 ZIP 和校验文件。
 - [GitHub 最新正式版](https://github.com/CMMUU/leigod-guard/releases/latest)：主发布源与备用下载入口。
 - 安装版：双击 EXE 安装；绿色版：完整解压 ZIP 后运行。
 - 已有用户在应用内「关于与更新 → 检查更新 → 下载并自动更新」升级。自动模式比较可用的新版本，同版本优先 Gitee，GitHub 备用；也可明确选择单一来源。
-- 两个平台的同步可能有延迟，下载时以实际发布页为准。
+- 下载页可选择仅 Gitee 或仅 GitHub；指定单源时不查询另一平台。下载交给浏览器，传输失败后可手动选择同版本、同文件大小及 SHA-256 的备用入口；网站不自动安装软件。
 
 ## 三种暂停场景
 

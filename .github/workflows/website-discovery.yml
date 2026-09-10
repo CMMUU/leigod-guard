@@ -34,5 +34,7 @@ jobs:
           node-version: '22'
       - name: Build the public website
         run: node website/build.mjs
+      - name: Verify release download selection
+        run: node --test website/release-service.test.mjs
       - name: Wait for matching production deployment and notify IndexNow
         run: node website/submit-indexnow.mjs

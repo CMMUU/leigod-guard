@@ -6,7 +6,7 @@
 
 | 项目 | 实现与用途 |
 | --- | --- |
-| 可直接读取的正文 | 首页采用静态 HTML，下载、规则、FAQ 无需执行 JavaScript。 |
+| 可直接读取的正文 | 首页采用静态 HTML，下载入口、规则、FAQ 无需执行 JavaScript；最新可用版本信息由下载脚本补充，不影响正文抓取。 |
 | 唯一地址 | 首页 canonical 指向正式域名；默认 Pages 域名使用 noindex 响应头，减少重复收录。 |
 | 页面身份 | 中文标题、摘要、分享卡片、真实截图说明，以及 WebSite、WebPage、SoftwareApplication 和 FAQPage JSON-LD。 |
 | 内容一致 | FAQ 的可见文字、JSON-LD 与 Markdown 来自同一份 JSON；版本、内容修改时间来自 Cargo 与 Git。 |

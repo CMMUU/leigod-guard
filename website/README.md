@@ -1,6 +1,6 @@
 # 雷神守护项目网站
 
-单页源码与 Windows 应用在同一仓库维护，设计稿位于 [`docs/website-design/`](../docs/website-design/README.md)。网站采用真实 HTML/CSS，不依赖前端框架、运行时脚本或外部字体。
+单页源码与 Windows 应用在同一仓库维护，设计稿位于 [`docs/website-design/`](../docs/website-design/README.md)。正文采用静态 HTML/CSS，不依赖前端框架或外部字体；下载区域通过一个本站脚本和 Pages Functions 查询公开正式版本。
 
 访问地址：[leigod.cmmuu.com](https://leigod.cmmuu.com)。Cloudflare 默认地址：[leigod-guard.pages.dev](https://leigod-guard.pages.dev)。
 
@@ -46,7 +46,15 @@ python -m http.server 8877 --bind 127.0.0.1 --directory website/dist
 
 图标和应用截图来自仓库 `assets/app-icon.png`、`assets/ui-home.png`，版本来自 `Cargo.toml`，无需维护另一套副本。`dist/` 和工具缓存不提交。
 
-网站链接到两个平台的公开发布页，由用户选择安装版 EXE 或绿色版 ZIP；不额外托管安装包、不查询访客账户。网站改版不需要新增 Windows 软件版本或重复发版。
+## 自动下载入口
+
+首页与下载区域提供安装版 EXE、绿色版 ZIP 两个直接下载按钮。`downloads.js` 请求本站 `/api/downloads`，由 `release-service.mjs` 比较两个来源的完整正式版，同版本优先 Gitee。Gitee 检查最近 100 条公开发布，GitHub 使用正式最新版接口；仅接受标准 `vX.Y.Z`、安装 EXE、绿色 ZIP 和 SHA256SUMS 全部就绪的发布。并行检查共用 8 秒期限，每个来源的成功结果在边缘缓存 5 分钟；来源失败显示检查不完整，不宣称已确认最新版。无需新增 token 或每次改写链接。
+
+「仅 Gitee」「仅 GitHub」只检查所选平台。两种下载均通过 `/download/installer` 或 `/download/portable` 跳转到官方文件地址；显示版本后固定版本、文件大小和 SHA-256，备用入口只提供相同文件。浏览器开始文件传输后，网页无法可靠检测传输失败，因此保留手动同版本备用入口，不承诺浏览器自动换源或自动安装。服务异常保留发布页；无 JavaScript 时默认下载链接仍可由服务器解析。
+
+只代理公开版本和小型校验清单，不代理安装包、不查询访客账户、不转发访客凭据。`functions/` 与 `dist/_routes.json` 只路由下载接口，正文、SEO 文件和图片保持静态服务。网站改版不需要新增 Windows 软件版本或重复发版。
+
+验证：`node --test website/release-service.test.mjs`。包含来源不同步、单源、预发布、附件不完整、超时/离线、篡改地址和固定版本校验。Python 静态预览不运行 Functions；完整本地预览需在 `website` 目录执行 `npx wrangler pages dev dist --port 8877`。
 
 ## 搜索与 AI 资料维护
 
