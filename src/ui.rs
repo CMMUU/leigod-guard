@@ -61,6 +61,7 @@ pub struct App {
     config: Arc<Mutex<Config>>,
     /// 托盘图标本体（Rc 类型，必须留在 UI 线程；事件处理在独立托盘线程）
     _tray: Option<TrayIcon>,
+    tray_retry: Option<(Menu, Instant)>,
 
     page: Page,
     hide_requested: bool,
@@ -560,12 +561,22 @@ fn do_exit(config: &Arc<Mutex<Config>>) -> ! {
     std::process::exit(0);
 }
 
+fn create_tray(menu: &Menu) -> Option<TrayIcon> {
+    let (rgba, w, h) = make_tray_icon_rgba();
+    let icon = tray_icon::Icon::from_rgba(rgba, w, h).ok()?;
+    TrayIconBuilder::new()
+        .with_menu(Box::new(menu.clone()))
+        .with_tooltip("雷神守护 - 自动暂停")
+        .with_icon(icon)
+        .build()
+        .ok()
+}
+
 impl App {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
         shared: Arc<Mutex<Shared>>,
         config: Arc<Mutex<Config>>,
-        start_hidden: bool,
     ) -> Self {
         load_cjk_fonts(&cc.egui_ctx);
         let update_preparing = Arc::new(AtomicBool::new(false));
@@ -585,26 +596,12 @@ impl App {
             &PredefinedMenuItem::separator(),
             &menu_quit,
         ]);
-        let (rgba, w, h) = make_tray_icon_rgba();
-        let tray = tray_icon::Icon::from_rgba(rgba, w, h)
-            .ok()
-            .and_then(|icon| {
-                TrayIconBuilder::new()
-                    .with_menu(Box::new(menu))
-                    .with_tooltip("雷神守护 - 自动暂停")
-                    .with_icon(icon)
-                    .build()
-                    .ok()
-            });
-
-        // The tray must exist before suppressing the framework's first show.
-        // If it fails, leave the panel accessible instead of hiding the app.
-        if start_hidden && tray.is_some() {
-            if let Err(error) = crate::window_visibility::install(cc) {
-                dbglog(&format!("silent startup unavailable: {error}"));
-                if let Ok(mut state) = shared.lock() {
-                    state.log("静默启动初始化失败，已打开主界面；可手动隐藏到托盘。");
-                }
+        let tray = create_tray(&menu);
+        let tray_retry = tray.is_none().then(|| (menu, Instant::now()));
+        if tray_retry.is_some() {
+            dbglog("tray unavailable; retrying in background");
+            if let Ok(mut state) = shared.lock() {
+                state.log("托盘暂时不可用，后台每 5 秒重试；可通过快捷方式打开面板。");
             }
         }
 
@@ -632,6 +629,7 @@ impl App {
             crate::update_apply::detect_package_kind(),
             update_preparing,
         );
+        app.tray_retry = tray_retry;
         let check_on_startup = app
             .config
             .lock()
@@ -667,6 +665,7 @@ impl App {
             shared,
             config,
             _tray: tray,
+            tray_retry: None,
             page: Page::Games,
             hide_requested: false,
             backdrop: theme::glass_backdrop(ctx),
@@ -1185,6 +1184,18 @@ fn page_header(ui: &mut egui::Ui, title: &str, subtitle: &str) {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Explorer may not have finished creating the tray at Windows login.
+        // Retry on its owning UI thread without releasing the startup guard.
+        if let Some((menu, last_attempt)) = self.tray_retry.as_mut() {
+            if last_attempt.elapsed() >= Duration::from_secs(5) {
+                *last_attempt = Instant::now();
+                if let Some(tray) = create_tray(menu) {
+                    self._tray = Some(tray);
+                    self.tray_retry = None;
+                    dbglog("tray recovered in background");
+                }
+            }
+        }
         // 关闭按钮 → 隐藏到托盘而不是退出
         if ctx.input(|i| i.viewport().close_requested()) {
             dbglog("close_requested -> CancelClose + hide");

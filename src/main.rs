@@ -59,6 +59,11 @@ fn main() {
     }
 
     let minimized = args.iter().any(|a| a == "--minimized");
+    ui::dbglog(&format!(
+        "startup v{}: minimized={minimized}",
+        env!("CARGO_PKG_VERSION")
+    ));
+    let mut startup_warning = None;
 
     // Load the strategy before the instance mutex and graphics initialization.
     // Strict GamePP blocking must be present at process creation time; the small
@@ -69,10 +74,15 @@ fn main() {
             osd::GameppProtectionPreparation::Relaunched => return,
             osd::GameppProtectionPreparation::Active => {}
             osd::GameppProtectionPreparation::ContinueUnprotected(message) => {
-                ui::msgbox_warn("游戏加加屏蔽未生效", &message)
+                if minimized {
+                    ui::dbglog(&format!("游戏加加屏蔽未生效: {message}"));
+                    startup_warning = Some(message);
+                } else {
+                    ui::msgbox_warn("游戏加加屏蔽未生效", &message);
+                }
             }
             osd::GameppProtectionPreparation::Abort(message) => {
-                ui::msgbox_warn("游戏加加屏蔽未生效", &message);
+                startup_error(minimized, "游戏加加屏蔽未生效", &message);
                 return;
             }
         }
@@ -87,13 +97,20 @@ fn main() {
             return;
         }
         Err(_) => {
-            ui::msgbox_warn("启动失败", "无法确认程序运行状态，请退出已有实例后重试。");
+            startup_error(
+                minimized,
+                "启动失败",
+                "无法确认程序运行状态，请退出已有实例后重试。",
+            );
             std::process::exit(1);
         }
     };
 
     let config = Arc::new(Mutex::new(loaded_config));
     let shared = Arc::new(Mutex::new(shared::Shared::default()));
+    if let Some(message) = startup_warning {
+        shared.lock().unwrap().alert = Some(message);
+    }
 
     // 后台守护线程
     {
@@ -136,10 +153,24 @@ fn main() {
         "雷神守护 - LeigodGuard",
         options,
         Box::new(move |cc| {
-            Ok(Box::new(ui::App::new(cc, shared_ui, config_ui, minimized)) as Box<dyn eframe::App>)
+            if minimized {
+                // Install before tray creation or any background UI callbacks.
+                // Failure must not turn an unattended launch into a visible one.
+                window_visibility::install(cc)?;
+                ui::dbglog("silent startup window guard installed");
+            }
+            Ok(Box::new(ui::App::new(cc, shared_ui, config_ui)) as Box<dyn eframe::App>)
         }),
     ) {
         eprintln!("GUI 启动失败: {e}");
+        ui::dbglog(&format!("GUI 启动失败: {e}"));
         std::process::exit(1);
+    }
+}
+
+fn startup_error(minimized: bool, title: &str, message: &str) {
+    ui::dbglog(&format!("{title}: {message}"));
+    if !minimized {
+        ui::msgbox_warn(title, message);
     }
 }

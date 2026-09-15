@@ -48,7 +48,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: windows-msvc-${{ steps.rust.outputs.compiler }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/config.toml', 'build.rs', 'src/**', 'assets/**') }}
+          key: windows-msvc-${{ steps.rust.outputs.compiler }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/config.toml', 'build.rs', 'src/**', 'examples/**', 'assets/**') }}
           restore-keys: |
             windows-msvc-${{ steps.rust.outputs.compiler }}-
       - name: Check formatting
@@ -59,6 +59,8 @@ jobs:
         run: cargo fetch --locked --target $env:RUST_TARGET
       - name: Run offline unit tests
         run: cargo test --locked --offline --target $env:RUST_TARGET
+      - name: Verify silent and manual startup with actual eframe
+        run: ./scripts/test-silent-start.ps1 -Target $env:RUST_TARGET
       - name: Render native UI with the DirectX software adapter
         env:
           LEIGOD_UI_PREVIEW_DIR: target/ui-preview

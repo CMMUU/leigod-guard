@@ -4,8 +4,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
-    SendMessageTimeoutW, SMTO_ABORTIFHUNG, SWP_SHOWWINDOW, WINDOWPOS, WM_APP, WM_NCDESTROY,
-    WM_WINDOWPOSCHANGING,
+    GetWindowLongW, SendMessageTimeoutW, SetWindowLongW, GWL_EXSTYLE, GWL_STYLE, SMTO_ABORTIFHUNG,
+    STYLESTRUCT, SWP_SHOWWINDOW, WINDOWPOS, WM_APP, WM_NCDESTROY, WM_STYLECHANGING,
+    WM_WINDOWPOSCHANGING, WS_EX_NOACTIVATE, WS_VISIBLE,
 };
 
 const SUBCLASS_ID: usize = 0x4c47;
@@ -29,7 +30,22 @@ pub fn install(cc: &eframe::CreationContext<'_>) -> Result<(), String> {
 fn install_on_window(hwnd: HWND) -> Result<(), String> {
     // Called on the UI thread before eframe's first paint. Do not poll for a
     // visible window and hide it later: that would flash and steal focus.
-    if unsafe { SetWindowSubclass(hwnd, Some(silent_start_proc), SUBCLASS_ID, 0) }.as_bool() {
+    let original_noactivate =
+        unsafe { GetWindowLongW(hwnd, GWL_EXSTYLE) } as u32 & WS_EX_NOACTIVATE.0;
+    if unsafe {
+        SetWindowSubclass(
+            hwnd,
+            Some(silent_start_proc),
+            SUBCLASS_ID,
+            original_noactivate as usize,
+        )
+    }
+    .as_bool()
+    {
+        unsafe {
+            let style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+            SetWindowLongW(hwnd, GWL_EXSTYLE, (style | WS_EX_NOACTIVATE.0) as i32);
+        }
         STARTUP_HIDDEN.store(true, Ordering::Release);
         Ok(())
     } else {
@@ -60,9 +76,22 @@ unsafe extern "system" fn silent_start_proc(
     wparam: WPARAM,
     lparam: LPARAM,
     _id: usize,
-    _data: usize,
+    data: usize,
 ) -> LRESULT {
     match message {
+        WM_STYLECHANGING if lparam.0 != 0 => {
+            // winit writes WS_VISIBLE after ShowWindow, then refreshes the
+            // frame. A WINDOWPOS-only guard is bypassed by that style write.
+            // Apply the invariant after downstream handlers as well.
+            let result = DefSubclassProc(hwnd, message, wparam, lparam);
+            let style = &mut *(lparam.0 as *mut STYLESTRUCT);
+            if wparam.0 as i32 == GWL_STYLE.0 {
+                style.styleNew &= !WS_VISIBLE.0;
+            } else if wparam.0 as i32 == GWL_EXSTYLE.0 {
+                style.styleNew |= WS_EX_NOACTIVATE.0;
+            }
+            return result;
+        }
         WM_WINDOWPOSCHANGING if lparam.0 != 0 => {
             // Windows explicitly permits changing WINDOWPOS flags here.
             // https://learn.microsoft.com/windows/win32/winmsg/wm-windowposchanging
@@ -71,6 +100,12 @@ unsafe extern "system" fn silent_start_proc(
         }
         OPEN_REQUEST => {
             if RemoveWindowSubclass(hwnd, Some(silent_start_proc), SUBCLASS_ID).as_bool() {
+                let style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+                SetWindowLongW(
+                    hwnd,
+                    GWL_EXSTYLE,
+                    ((style & !WS_EX_NOACTIVATE.0) | data as u32) as i32,
+                );
                 STARTUP_HIDDEN.store(false, Ordering::Release);
             }
             return LRESULT(1);
@@ -89,10 +124,10 @@ mod tests {
     use super::*;
     use windows::core::w;
     use windows::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DestroyWindow, DispatchMessageW, IsWindowVisible, PeekMessageW,
-        SetWindowPos, ShowWindow, MSG, PM_REMOVE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-        SWP_NOZORDER, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-        WS_POPUP,
+        CreateWindowExW, DestroyWindow, DispatchMessageW, GetWindowLongW, IsWindowVisible,
+        PeekMessageW, SetWindowLongW, SetWindowPos, ShowWindow, GWL_STYLE, MSG, PM_REMOVE,
+        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE,
+        WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE,
     };
 
     struct TestWindow(HWND);
@@ -110,7 +145,7 @@ mod tests {
         // account, configuration, tray, or monitor is started.
         let window = TestWindow(unsafe {
             CreateWindowExW(
-                WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                WS_EX_TOOLWINDOW,
                 w!("STATIC"),
                 w!("LeigodGuard silent-start test"),
                 WS_POPUP,
@@ -129,6 +164,10 @@ mod tests {
         install_on_window(hwnd).unwrap();
         assert!(startup_hidden());
         unsafe {
+            assert_ne!(
+                GetWindowLongW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_NOACTIVATE.0,
+                0
+            );
             for _ in 0..3 {
                 let _ = ShowWindow(hwnd, SW_SHOW);
                 assert!(
@@ -146,6 +185,19 @@ mod tests {
                 )
                 .unwrap();
                 assert!(!IsWindowVisible(hwnd).as_bool());
+                // winit 0.30 applies the entire style after ShowWindow. Its
+                // WS_VISIBLE write bypasses a WINDOWPOS-only startup guard.
+                let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
+                SetWindowLongW(hwnd, GWL_STYLE, (style | WS_VISIBLE.0) as i32);
+                assert!(
+                    !IsWindowVisible(hwnd).as_bool(),
+                    "winit's style update must not bypass silent startup"
+                );
+                SetWindowLongW(hwnd, GWL_EXSTYLE, WS_EX_TOOLWINDOW.0 as i32);
+                assert_ne!(
+                    GetWindowLongW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_NOACTIVATE.0,
+                    0
+                );
             }
             // Tray clicks call from another thread; subclass removal must run
             // on the window's owning thread, with a bounded wait if it is hung.
@@ -161,6 +213,10 @@ mod tests {
             }
             assert!(open.join().unwrap());
             assert!(!startup_hidden());
+            assert_eq!(
+                GetWindowLongW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_NOACTIVATE.0,
+                0
+            );
             let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
             assert!(IsWindowVisible(hwnd).as_bool());
             let _ = ShowWindow(hwnd, SW_HIDE);
