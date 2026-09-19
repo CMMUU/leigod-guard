@@ -1,103 +1,150 @@
-//! 关机/注销前自动暂停计时。
-//!
-//! Windows 关机或注销时，系统会向所有顶层窗口广播 WM_QUERYENDSESSION /
-//! WM_ENDSESSION。这里在独立线程创建一个永不显示的顶层窗口来接收广播：
-//! - WM_QUERYENDSESSION → 返回 TRUE（不阻止关机）
-//! - WM_ENDSESSION(TRUE) → 使用内存凭据立即尝试暂停（已暂停时接口按成功处理）
-//!
-//! 注意：消息循环结束后 drop 窗口可能触发问题，窗口与类直接泄漏（进程级一次性资源）。
-use crate::config::Config;
-use crate::leigod_api as api;
-use crate::shared::Shared;
-use std::sync::{Arc, Mutex, OnceLock};
+//! Best-effort shutdown pause with a main-window handler and a fallback window.
+use crate::{config::Config, leigod_api as api, session_end::SessionEnd, shared::Shared};
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use std::sync::{mpsc, Arc, Mutex, OnceLock, TryLockError};
+use std::time::{Duration, Instant};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 
-static SHARED: OnceLock<Arc<Mutex<Shared>>> = OnceLock::new();
-static CONFIG: OnceLock<Arc<Mutex<Config>>> = OnceLock::new();
+static HANDLER: OnceLock<Arc<SessionEnd>> = OnceLock::new();
+static TRACE: OnceLock<mpsc::SyncSender<String>> = OnceLock::new();
 
-/// 启动关机监听线程（进程内调用一次）
+// Window procedures must not wait for the UI's shared/configuration mutexes or
+// disk logging. Diagnostics are queued to a separate thread and contain no token.
+fn trace(message: &str) {
+    if let Some(sender) = TRACE.get() {
+        let _ = sender.try_send(message.to_owned());
+    }
+}
+
 pub fn start(shared: Arc<Mutex<Shared>>, config: Arc<Mutex<Config>>) {
-    let _ = SHARED.set(shared);
-    let _ = CONFIG.set(config);
-    std::thread::spawn(|| unsafe { window_thread() });
+    let (sender, receiver) = mpsc::sync_channel::<String>(64);
+    let _ = TRACE.set(sender);
+    let _ = std::thread::Builder::new()
+        .name("shutdown-log".into())
+        .spawn(move || {
+            for message in receiver {
+                crate::ui::dbglog(&format!("[shutdown] {message}"));
+            }
+        });
+    let handler = SessionEnd::new(
+        move |deadline| {
+            let result = pause_before_deadline(&shared, &config, deadline, api::pause_for_shutdown);
+            // Finish writing the outcome before releasing the waiting windows.
+            // A slow disk writer is still bounded by SessionEnd's outer deadline.
+            crate::ui::dbglog(&format!("[shutdown] {result}"));
+        },
+        trace,
+    );
+    if HANDLER.set(handler).is_err() {
+        return;
+    }
+    // Higher levels are processed first; normal applications use 0x280.
+    // No shutdown cancellation, registry timeout changes or administrator right.
+    unsafe {
+        if windows::Win32::System::Threading::SetProcessShutdownParameters(0x3ff, 0).is_err() {
+            trace("无法调整关机通知顺序，继续使用系统默认顺序");
+        }
+    }
+    if std::thread::Builder::new()
+        .name("shutdown-window".into())
+        .spawn(|| unsafe { window_thread() })
+        .is_err()
+    {
+        trace("独立关机监听线程启动失败，将依赖主窗口监听");
+    }
 }
 
-fn log_line(msg: &str) {
-    crate::ui::dbglog(&format!("[shutdown] {msg}"));
-    if let Some(s) = SHARED.get() {
-        if let Ok(mut s) = s.lock() {
-            s.log(&format!("[关机检测] {msg}"));
+pub fn install_main_window(cc: &eframe::CreationContext<'_>) -> Result<(), String> {
+    let handle = cc.window_handle().map_err(|_| "无法取得主窗口句柄")?;
+    let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+        return Err("无法取得 Windows 主窗口句柄".into());
+    };
+    let handler = HANDLER.get().ok_or("关机监听尚未初始化")?;
+    crate::session_end::install(HWND(handle.hwnd.get() as *mut _), Arc::clone(handler))?;
+    trace("主窗口关机监听已安装（显示、隐藏及静默启动均生效）");
+    Ok(())
+}
+
+fn snapshot<T, R>(lock: &Mutex<T>, deadline: Instant, read: impl FnOnce(&T) -> R) -> Option<R> {
+    loop {
+        match lock.try_lock() {
+            Ok(value) => return Some(read(&value)),
+            Err(TryLockError::Poisoned(_)) => return None,
+            Err(TryLockError::WouldBlock) => {
+                if Instant::now() >= deadline {
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
         }
     }
 }
 
-/// 关机/注销时尽力暂停；系统终止进程或断网可能使请求无法完成。
-fn on_session_ending() {
-    log_line("收到系统关机/注销广播");
-    let Some(cfg) = CONFIG.get() else { return };
-    let enabled = match cfg.lock() {
-        Ok(c) => c.strategy.pause_on_shutdown,
-        Err(_) => return,
-    };
-    if !enabled {
-        log_line("关机前自动暂停已被用户关闭，跳过");
-        return;
+fn pause_before_deadline(
+    shared: &Mutex<Shared>,
+    config: &Mutex<Config>,
+    deadline: Instant,
+    pause: impl FnOnce(&str, Duration) -> Result<String, api::ApiError>,
+) -> String {
+    // Windows can synchronously invoke the UI subclass while UI code owns config.
+    // Never wait indefinitely or guess that a busy/poisoned policy is enabled.
+    let snapshot_deadline = deadline.min(Instant::now() + Duration::from_millis(250));
+    match snapshot(config, snapshot_deadline, |c| c.strategy.pause_on_shutdown) {
+        Some(false) => return "关机暂停选项已关闭，跳过".into(),
+        None => return "无法及时读取关机策略，暂停未确认".into(),
+        Some(true) => {}
     }
-    // token 只存在于内存（Shared），不落盘明文
-    let token = match SHARED.get().and_then(|s| s.lock().ok()) {
-        Some(s) => s.token.clone().unwrap_or_default(),
-        None => String::new(),
+    let token = match snapshot(shared, snapshot_deadline, |s| s.token.clone()) {
+        Some(Some(token)) if !token.is_empty() => token,
+        Some(_) => return "未登录，关机暂停未确认".into(),
+        None => return "无法及时读取登录状态，关机暂停未确认".into(),
     };
-    if token.is_empty() {
-        log_line("未登录，无法自动暂停");
-        return;
+    // Leave time for all receiving windows to get the result. No account query
+    // or interactive re-login is attempted during shutdown.
+    let remaining = deadline
+        .saturating_duration_since(Instant::now())
+        .saturating_sub(Duration::from_millis(250))
+        .min(Duration::from_secs(3));
+    if remaining.is_zero() {
+        return "关机处理时间已耗尽，暂停未确认".into();
     }
-    // 关机窗口期有限，直接调用幂等暂停接口，不再先花一次请求查询状态。
-    match api::pause(&token) {
-        Ok(m) => log_line(&format!("关机前自动暂停成功: {m}")),
-        Err(e) => log_line(&format!("关机前自动暂停失败: {e}")),
+    match pause(&token, remaining) {
+        Ok(_) => "关机暂停请求返回成功；最终计时状态请在官方小程序刷新核对".into(),
+        Err(error) if api::is_token_err(&error) => {
+            "登录状态失效，关机暂停未确认；下次启动请重新登录".into()
+        }
+        Err(_) => "关机暂停请求失败或超时，暂停未确认；下次启动仍按启动检查规则补查".into(),
     }
 }
 
-unsafe extern "system" fn wndproc(
-    hwnd: windows::Win32::Foundation::HWND,
-    msg: u32,
-    wparam: windows::Win32::Foundation::WPARAM,
-    lparam: windows::Win32::Foundation::LPARAM,
-) -> windows::Win32::Foundation::LRESULT {
-    use windows::Win32::Foundation::LRESULT;
-    use windows::Win32::UI::WindowsAndMessaging::DefWindowProcW;
-    const WM_QUERYENDSESSION: u32 = 0x0011;
-    const WM_ENDSESSION: u32 = 0x0016;
-    match msg {
-        // 允许关机（返回 TRUE）
-        WM_QUERYENDSESSION => LRESULT(1),
-        // 会话正在结束（wparam=TRUE）
-        WM_ENDSESSION if wparam.0 != 0 => {
-            on_session_ending();
-            LRESULT(0)
-        }
-        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if let Some(result) = HANDLER
+        .get()
+        .and_then(|handler| handler.handle(msg, wparam))
+    {
+        return result;
     }
+    windows::Win32::UI::WindowsAndMessaging::DefWindowProcW(hwnd, msg, wparam, lparam)
 }
 
 unsafe fn window_thread() {
-    use windows::core::PCWSTR;
+    use windows::core::w;
     use windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DispatchMessageW, GetMessageW, RegisterClassW, TranslateMessage, MSG,
         WINDOW_EX_STYLE, WNDCLASSW, WS_OVERLAPPED,
     };
-    let class: Vec<u16> = "LeigodGuardShutdown\0".encode_utf16().collect();
+    let class = w!("LeigodGuardShutdown");
     let wc = WNDCLASSW {
         lpfnWndProc: Some(wndproc),
-        lpszClassName: PCWSTR(class.as_ptr()),
+        lpszClassName: class,
         ..Default::default()
     };
     let _ = RegisterClassW(&wc);
-    // 普通顶层窗口（不能用 HWND_MESSAGE 消息窗口：收不到关机广播），永不显示
-    let hwnd = CreateWindowExW(
+    // A real top-level window: HWND_MESSAGE windows don't receive this broadcast.
+    if CreateWindowExW(
         WINDOW_EX_STYLE::default(),
-        PCWSTR(class.as_ptr()),
-        PCWSTR::null(),
+        class,
+        w!("LeigodGuard shutdown listener"),
         WS_OVERLAPPED,
         0,
         0,
@@ -107,26 +154,97 @@ unsafe fn window_thread() {
         None,
         None,
         None,
-    );
-    match hwnd {
-        Ok(h) if !h.is_invalid() => {
-            crate::ui::dbglog("[shutdown] hidden window created, listening");
-        }
-        _ => {
-            crate::ui::dbglog("[shutdown] 创建关机监听窗口失败");
-            return;
-        }
+    )
+    .is_err()
+    {
+        trace("独立关机监听窗口创建失败，将依赖主窗口监听");
+        return;
     }
+    trace("独立关机监听窗口已就绪");
     let mut msg = MSG::default();
     loop {
         let result = GetMessageW(&mut msg, None, 0, 0).0;
         if result <= 0 {
             if result == -1 {
-                crate::ui::dbglog("[shutdown] 消息循环发生错误，关机监听已停止");
+                trace("独立关机监听消息循环发生错误");
             }
             break;
         }
         let _ = TranslateMessage(&msg);
         let _ = DispatchMessageW(&msg);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn opt_out_and_missing_login_never_send_a_pause() {
+        let mut config = Config::default();
+        config.strategy.pause_on_shutdown = false;
+        let config = Mutex::new(config);
+        let shared = Mutex::new(Shared::default());
+        let forbidden =
+            |_: &str, _: Duration| -> Result<String, api::ApiError> { panic!("must not send") };
+        assert!(pause_before_deadline(
+            &shared,
+            &config,
+            Instant::now() + Duration::from_secs(1),
+            forbidden
+        )
+        .contains("已关闭"));
+        config.lock().unwrap().strategy.pause_on_shutdown = true;
+        assert!(pause_before_deadline(
+            &shared,
+            &config,
+            Instant::now() + Duration::from_secs(1),
+            forbidden
+        )
+        .contains("未登录"));
+    }
+
+    #[test]
+    fn locked_ui_config_and_expired_budget_cannot_hang_or_send() {
+        let config = Mutex::new(Config::default());
+        let shared = Mutex::new(Shared::default());
+        let held = config.lock().unwrap();
+        let start = Instant::now();
+        let result = pause_before_deadline(
+            &shared,
+            &config,
+            start + Duration::from_millis(30),
+            |_, _| panic!("must not send"),
+        );
+        assert!(start.elapsed() < Duration::from_secs(1));
+        assert!(result.contains("无法及时读取关机策略"));
+        drop(held);
+        shared.lock().unwrap().set_token(Some("fixture".into()));
+        let result = pause_before_deadline(&shared, &config, Instant::now(), |_, _| {
+            panic!("must not send")
+        });
+        assert!(result.contains("时间已耗尽"));
+    }
+
+    #[test]
+    fn pause_uses_short_budget_and_redacts_failure_details() {
+        let config = Mutex::new(Config::default());
+        let shared = Mutex::new(Shared::default());
+        shared
+            .lock()
+            .unwrap()
+            .set_token(Some("private-test-token".into()));
+        let result = pause_before_deadline(
+            &shared,
+            &config,
+            Instant::now() + Duration::from_secs(4),
+            |token, budget| {
+                assert_eq!(token, "private-test-token");
+                assert!(budget <= Duration::from_secs(3));
+                Err(api::ApiError("upstream echoed private-test-token".into()))
+            },
+        );
+        assert!(result.contains("暂停未确认"));
+        assert!(!result.contains("private-test-token"));
     }
 }

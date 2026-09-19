@@ -12,6 +12,7 @@ mod instance;
 mod leigod_api;
 mod monitor;
 mod osd;
+mod session_end;
 mod shared;
 mod shutdown;
 mod ui;
@@ -153,6 +154,7 @@ fn main() {
         "雷神守护 - LeigodGuard",
         options,
         Box::new(move |cc| {
+            shutdown::install_main_window(cc)?;
             if minimized {
                 // Install before tray creation or any background UI callbacks.
                 // Failure must not turn an unattended launch into a visible one.

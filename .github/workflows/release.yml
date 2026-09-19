@@ -83,6 +83,8 @@ jobs:
         run: cargo test --locked --offline --target $env:RUST_TARGET
       - name: Verify silent and manual startup with actual eframe
         run: ./scripts/test-silent-start.ps1 -Target $env:RUST_TARGET
+      - name: Verify normal session end on isolated eframe windows
+        run: ./scripts/test-session-end.ps1 -Target $env:RUST_TARGET
       - name: Render native UI with the DirectX software adapter
         env:
           LEIGOD_UI_PREVIEW_DIR: target/ui-preview

@@ -118,9 +118,19 @@ fn sign(params: &mut Map<String, Value>) {
 }
 
 fn client() -> Result<reqwest::blocking::Client, ApiError> {
+    client_with_timeout(
+        std::time::Duration::from_secs(12),
+        std::time::Duration::from_secs(5),
+    )
+}
+
+fn client_with_timeout(
+    timeout: std::time::Duration,
+    connect_timeout: std::time::Duration,
+) -> Result<reqwest::blocking::Client, ApiError> {
     reqwest::blocking::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(5))
-        .timeout(std::time::Duration::from_secs(12))
+        .connect_timeout(connect_timeout)
+        .timeout(timeout)
         // 登录请求体和 query 中含有凭据，禁止重定向到其他地址。
         .redirect(reqwest::redirect::Policy::none())
         .https_only(true)
@@ -169,7 +179,15 @@ fn post(path: &str, body: &Map<String, Value>) -> Result<Value, ApiError> {
 /// account_token 与元信息放 **query string**，body 为 {}，**不签名**。
 /// 暂停/恢复/查询均如此；签名只用于登录类接口。
 fn post_authed(path: &str, token: &str) -> Result<Value, ApiError> {
-    let resp = authed_request(&client()?, path, token)
+    post_authed_with_client(&client()?, path, token)
+}
+
+fn post_authed_with_client(
+    client: &reqwest::blocking::Client,
+    path: &str,
+    token: &str,
+) -> Result<Value, ApiError> {
+    let resp = authed_request(client, path, token)
         .send()
         .map_err(|e| network_error("网络请求失败", e))?;
     let server_time = resp
@@ -267,7 +285,22 @@ pub fn password_md5(plain: &str) -> String {
 /// 400803「账号已经停止加速」说明已是目标状态，按成功处理（幂等）
 pub fn pause(token: &str) -> Result<String, ApiError> {
     let v = post_authed(PAUSE_PATH, token)?;
-    match check_ok(&v) {
+    pause_response(&v)
+}
+
+/// Shutdown has a smaller overall deadline than normal interactive requests.
+/// The caller runs this off the UI thread and bounds its own wait as well.
+pub fn pause_for_shutdown(token: &str, timeout: std::time::Duration) -> Result<String, ApiError> {
+    if timeout.is_zero() {
+        return Err(ApiError("关机暂停时间已耗尽".into()));
+    }
+    let client = client_with_timeout(timeout, timeout.min(std::time::Duration::from_secs(1)))?;
+    let v = post_authed_with_client(&client, PAUSE_PATH, token)?;
+    pause_response(&v)
+}
+
+fn pause_response(v: &Value) -> Result<String, ApiError> {
+    match check_ok(v) {
         Ok(()) => Ok(v
             .get("msg")
             .and_then(|m| m.as_str())
