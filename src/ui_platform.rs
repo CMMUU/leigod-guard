@@ -508,6 +508,24 @@ mod tests {
         assert!(panel.logout_retry.is_none());
     }
     #[test]
+    fn lost_or_late_worker_result_cannot_restore_a_timed_out_login() {
+        let store = MemoryStore::default();
+        let (sender, receiver) = mpsc::channel();
+        let mut panel = Panel {
+            pending: Some(Pending {
+                kind: Kind::Login,
+                started: Instant::now() - Duration::from_secs(30),
+                receiver,
+            }),
+            ..Panel::default()
+        };
+        panel.tick(&store, &egui::Context::default(), false);
+        assert!(panel.pending.is_none());
+        assert!(sender.send(Ok(Completed::Identity(session()))).is_err());
+        assert!(panel.session.is_none());
+        assert!(!panel.verified);
+    }
+    #[test]
     fn restoring_without_saved_session_performs_no_request() {
         let mut panel = Panel::default();
         panel.restore(&MemoryStore::default(), &egui::Context::default());

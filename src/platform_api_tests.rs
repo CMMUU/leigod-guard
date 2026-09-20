@@ -177,3 +177,19 @@ fn input_bounds_and_revoked_logout_are_handled_without_echoing_passwords() {
     assert_eq!(api.logout(&session), Ok(()));
     thread.join().unwrap();
 }
+
+#[test]
+fn transport_timeout_returns_network_error_without_waiting_for_the_server() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let thread = std::thread::spawn(move || {
+        let (_socket, _) = listener.accept().unwrap();
+        std::thread::sleep(Duration::from_millis(250));
+    });
+    let api = Api::build(&origin, Duration::from_millis(50)).unwrap();
+    assert_eq!(
+        api.login("demo", "some-password").err(),
+        Some(Error::Network)
+    );
+    thread.join().unwrap();
+}

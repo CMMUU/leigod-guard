@@ -72,6 +72,17 @@
 
 Leigod Guard is an independent, open-source Windows companion for the Leigod game accelerator. It checks configured game processes, requests a pause after the applicable grace period, and displays the latest queried account balance. Installer and portable packages are available on Gitee and GitHub, with in-app updates. It does not start or stop the official client's acceleration.
 
+## 平台账号登录（0.13.0 候选版）
+
+左侧新增「平台账号」，使用与上海后台相同的平台账号和密码登录。平台账号由管理员创建，与「账户」页的雷神加速器账号分开；无需平台账号也能继续使用本地守护。
+
+- 勾选「记住登录状态」后，会话由当前 Windows 用户的 DPAPI 加密保存，最多 24 小时；不保存平台密码。
+- 启动时验证已保存的会话；停留平台页且窗口在前台时每分钟复核。断网显示“登录状态待确认”，不会当作已验证登录；过期、撤销或停用需重新登录。
+- 「退出平台账号」先清除本地会话，再向服务器撤销；网络失败会明确提示撤销尚未确认并提供重试。
+- 当前只接入账号登录，尚未注册本机设备、发送心跳或执行远程暂停。平台登录不表示雷神登录有效，也不表示设备已受到远程保护。
+
+此功能在候选构建中提供，尚未发布为正式更新。详情见[隐私说明](docs/PRIVACY.md)。
+
 ## 自动暂停规则
 
 **先开启「启用自动暂停（总开关）」，添加至少一个游戏，并确保名单中的每个进程名都有效。** 工具只检查「游戏名单」中的进程，默认每 **3 秒**检查一次；未加入名单的游戏不会被识别。成功暂停还需要有效的雷神登录状态、网络连接和服务响应。
