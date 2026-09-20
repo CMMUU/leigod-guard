@@ -805,6 +805,8 @@ fn render_apple_preview() {
         ("home", Page::Games, [1180.0, 780.0], 1.0),
         ("home-narrow", Page::Games, [680.0, 460.0], 1.0),
         ("home-hidpi", Page::Games, [1180.0, 780.0], 1.5),
+        ("platform-login", Page::Platform, [1180.0, 780.0], 1.0),
+        ("platform-login-narrow", Page::Platform, [680.0, 460.0], 1.0),
         ("account", Page::Account, [1180.0, 780.0], 1.0),
         ("account-narrow", Page::Account, [680.0, 460.0], 1.0),
         ("strategy", Page::Strategy, [1180.0, 780.0], 1.0),
@@ -890,6 +892,37 @@ fn render_apple_preview() {
             );
         }
     }
+    for (name, verified) in [("platform-signed-in", true), ("platform-offline", false)] {
+        let (ctx, mut app) = fixture();
+        app.page = Page::Platform;
+        app.platform.session = Some(crate::platform_api::Session {
+            origin: crate::platform_api::ORIGIN_URL.into(),
+            token: "a".repeat(64),
+            expires_at: chrono::Utc::now().timestamp() + 3600,
+            user: crate::platform_api::User {
+                id: "fixture".into(),
+                username: "demo-user".into(),
+                display_name: "演示用户".into(),
+                role: "user".into(),
+                csrf: "b".repeat(64),
+            },
+        });
+        app.platform.verified = verified;
+        app.platform.error = !verified;
+        app.platform.message = if verified {
+            "平台登录有效。"
+        } else {
+            "无法连接平台，登录状态暂未确认。本地守护仍可使用。"
+        }
+        .into();
+        gpu.save(
+            &ctx,
+            &mut app,
+            [1180.0, 780.0],
+            1.0,
+            &output.join(format!("{name}.png")),
+        );
+    }
     let (ctx, mut app) = fixture();
     app.show_add_game = true;
     gpu.save(
@@ -899,4 +932,27 @@ fn render_apple_preview() {
         1.0,
         &output.join("add-game.png"),
     );
+}
+
+#[test]
+fn platform_form_emits_actions_without_touching_accelerator_credentials() {
+    let (ctx, mut app) = fixture();
+    app.shared
+        .lock()
+        .unwrap()
+        .set_token(Some("leigod-test-token".into()));
+    click(&ctx, &mut app, "平台账号");
+    assert!(app.page == Page::Platform);
+    click(&ctx, &mut app, "登录平台");
+    assert_eq!(app.platform.action, Some(crate::ui_platform::Action::Login));
+    assert_eq!(
+        app.shared.lock().unwrap().token.as_deref(),
+        Some("leigod-test-token")
+    );
+    assert!(app.shared.lock().unwrap().manual_cmd.is_none());
+    for size in [[680.0, 460.0], [940.0, 660.0], [1180.0, 780.0]] {
+        let _ = frame(&ctx, &mut app, size, vec![]);
+        let output = frame(&ctx, &mut app, size, vec![]);
+        text_rect(&output.shapes, "平台账号");
+    }
 }

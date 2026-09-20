@@ -27,6 +27,7 @@ enum Page {
     Games,
     Plans,
     Account,
+    Platform,
     Strategy,
     Logs,
     Updates,
@@ -87,6 +88,8 @@ pub struct App {
     show_proc_picker: bool,
     proc_filter: String,
     proc_list: Vec<String>,
+
+    platform: crate::ui_platform::Panel,
 
     // 账户表单
     acc_user: String,
@@ -630,6 +633,10 @@ impl App {
             update_preparing,
         );
         app.tray_retry = tray_retry;
+        app.platform.restore(
+            &crate::platform_store::DiskStore::current_user(),
+            &cc.egui_ctx,
+        );
         let check_on_startup = app
             .config
             .lock()
@@ -687,6 +694,7 @@ impl App {
             show_proc_picker: false,
             proc_filter: String::new(),
             proc_list: Vec::new(),
+            platform: crate::ui_platform::Panel::default(),
             acc_user,
             acc_pwd: if has_saved_pwd {
                 PWD_PLACEHOLDER.to_string()
@@ -1049,6 +1057,7 @@ impl App {
                         for (page, icon, label) in [
                             (Page::Games, Icon::Home, "首页与游戏"),
                             (Page::Account, Icon::Account, "账户"),
+                            (Page::Platform, Icon::Account, "平台账号"),
                             (Page::Strategy, Icon::Shield, "策略"),
                             (Page::Logs, Icon::Logs, "日志"),
                         ] {
@@ -1119,6 +1128,13 @@ impl App {
                                 theme::card().show(ui, |ui| {
                                     ui.set_min_width(ui.available_width());
                                     self.page_account(ui);
+                                });
+                            }
+                            Page::Platform => {
+                                page_header(ui, "平台账号", "登录雷神守护平台，管理你的平台身份。");
+                                theme::card().show(ui, |ui| {
+                                    ui.set_min_width(ui.available_width());
+                                    self.platform.render(ui);
                                 });
                             }
                             Page::Strategy => {
@@ -1242,7 +1258,13 @@ impl eframe::App for App {
         if self.auto_account_refresh_due(Instant::now(), active) {
             self.refresh_account_info();
         }
+        let platform_store = crate::platform_store::DiskStore::current_user();
+        self.platform
+            .tick(&platform_store, ctx, active && self.page == Page::Platform);
         self.render_shell(ctx);
+        if let Some(action) = self.platform.action.take() {
+            self.platform.dispatch(action, &platform_store, ctx);
+        }
         if std::mem::take(&mut self.hide_requested) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
             hide_window_native();

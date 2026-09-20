@@ -311,7 +311,13 @@ pub fn icon(ui: &Ui, kind: Icon, rect: Rect, color: Color32) {
 }
 
 pub fn navigation(ui: &mut Ui, kind: Icon, label: &str, selected: bool) -> Response {
-    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::click());
+    let height = if ui.ctx().screen_rect().height() < 620.0 {
+        40.0
+    } else {
+        46.0
+    };
+    let (rect, response) =
+        ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click());
     response.widget_info(|| {
         egui::WidgetInfo::selected(
             egui::WidgetType::SelectableLabel,
