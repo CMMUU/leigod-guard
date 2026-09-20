@@ -1,0 +1,8 @@
+[Unit]
+Description=Renew Leigod Guard IP certificate
+After=network-online.target
+[Service]
+Type=oneshot
+ExecStart=/opt/leigod-guard/acme/acme.sh --cron --home /opt/leigod-guard/acme
+TimeoutStartSec=300
+UMask=0077

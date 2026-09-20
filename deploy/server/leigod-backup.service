@@ -1,0 +1,10 @@
+[Unit]
+Description=Back up Leigod Guard database
+After=docker.service
+[Service]
+Type=oneshot
+ExecStart=/opt/leigod-guard/bin/backup.sh
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=300
+UMask=0077

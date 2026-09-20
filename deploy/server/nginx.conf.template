@@ -1,0 +1,34 @@
+# Dedicated IP HTTPS virtual host; preserve existing HTTP and named HTTPS sites.
+server {
+    listen 443 ssl default_server;
+    server_name SERVER_IP;
+    ssl_certificate /www/sites/leigod-guard/ssl/fullchain.pem;
+    ssl_certificate_key /www/sites/leigod-guard/ssl/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:LeigodSSL:5m;
+    ssl_session_timeout 10m;
+    ssl_session_tickets off;
+    client_max_body_size 8k;
+    client_body_timeout 10s;
+    keepalive_timeout 40s;
+    gzip on;
+    gzip_min_length 1024;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+    add_header X-Frame-Options DENY always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy no-referrer always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" always;
+    access_log /www/sites/leigod-guard/log/access.log;
+    error_log /www/sites/leigod-guard/log/error.log warn;
+    location / {
+        proxy_pass http://127.0.0.1:3088;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_connect_timeout 3s;
+        proxy_read_timeout 20s;
+    }
+}
