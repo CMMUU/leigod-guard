@@ -2389,7 +2389,7 @@ dependencies = [
 
 [[package]]
 name = "leigod-guard"
-version = "0.12.3"
+version = "0.13.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
