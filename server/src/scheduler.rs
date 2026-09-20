@@ -26,6 +26,12 @@ async fn tick(s: &AppState) -> ApiResult<()> {
     sqlx::query("DELETE FROM pairing_codes WHERE expires_at<now()")
         .execute(&mut *tx)
         .await?;
+    sqlx::query("DELETE FROM email_challenges WHERE expires_at<now()")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM email_rate_limits WHERE expires_at<now()")
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("DELETE FROM metrics WHERE bucket<now()-interval '7 days'")
         .execute(&mut *tx)
         .await?;

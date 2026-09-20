@@ -74,7 +74,7 @@ fn login_validate_logout_use_fixed_origin_cookie_and_csrf() {
         ok(&user),
         ok("{\"ok\":true}"),
     ]);
-    let session = api.login(" demo ", "password-fixture-123").unwrap();
+    let session = api.login(" demo ", "password-fixture-123", false).unwrap();
     assert_eq!(session.user.username, "demo");
     let restored = api.validate(&session).unwrap();
     assert_eq!(restored.expires_at, session.expires_at); // validation cannot extend server TTL
@@ -104,7 +104,10 @@ fn authentication_network_and_service_errors_stay_distinct() {
             String::new(),
             "{\"error\":\"untrusted echoed secret\"}".into(),
         )]);
-        assert_eq!(api.login("demo", "some-password").err(), Some(expected));
+        assert_eq!(
+            api.login("demo", "some-password", false).err(),
+            Some(expected)
+        );
         thread.join().unwrap();
         assert!(!expected.message().contains("secret"));
     }
@@ -117,7 +120,7 @@ fn redirects_are_not_followed_with_credentials() {
         String::new(),
     )]);
     assert_eq!(
-        api.login("demo", "some-password").err(),
+        api.login("demo", "some-password", false).err(),
         Some(Error::Protocol)
     );
     thread.join().unwrap();
@@ -128,16 +131,22 @@ fn malformed_cookie_identity_and_oversized_body_are_rejected() {
     for header in [
         cookie().replace("Secure; ", ""),
         cookie().replace("Path=/;", "Path=/; Domain=example.com;"),
-        cookie().replace("Max-Age=86400", "Max-Age=999999"),
+        cookie().replace("Max-Age=86400", "Max-Age=2592001"),
         cookie().replace(&"a".repeat(64), "bad"),
     ] {
         let (api, _, thread) = mock(vec![(200, header, "{\"ok\":true}".into())]);
-        assert_eq!(api.login("demo", "password").err(), Some(Error::Protocol));
+        assert_eq!(
+            api.login("demo", "password", false).err(),
+            Some(Error::Protocol)
+        );
         thread.join().unwrap();
     }
     for body in ["{}".to_owned(), "x".repeat(MAX_RESPONSE as usize + 1)] {
         let (api, _, thread) = mock(vec![(200, cookie(), "{\"ok\":true}".into()), ok(&body)]);
-        assert_eq!(api.login("demo", "password").err(), Some(Error::Protocol));
+        assert_eq!(
+            api.login("demo", "password", false).err(),
+            Some(Error::Protocol)
+        );
         thread.join().unwrap();
     }
 }
@@ -188,8 +197,56 @@ fn transport_timeout_returns_network_error_without_waiting_for_the_server() {
     });
     let api = Api::build(&origin, Duration::from_millis(50)).unwrap();
     assert_eq!(
-        api.login("demo", "some-password").err(),
+        api.login("demo", "some-password", false).err(),
         Some(Error::Network)
     );
     thread.join().unwrap();
+}
+
+#[test]
+fn email_login_thirty_day_cookie_and_device_headers() {
+    let id = "12345678-1234-1234-1234-123456789abc";
+    let mut identity = fixture_user();
+    identity.id = id.into();
+    let user = serde_json::to_string(&identity).unwrap();
+    let binding=serde_json::json!({"device_id":id,"device_token":"d".repeat(64),"owner_id":id,"owner":"user@example.com","sequence":-1}).to_string();
+    let (api, requests, thread) = mock(vec![
+        ok(&serde_json::json!({"request_id":id,"expires_in":600,"retry_after":60}).to_string()),
+        (
+            200,
+            cookie().replace("Max-Age=86400", "Max-Age=2592000"),
+            "{\"ok\":true}".into(),
+        ),
+        ok(&user),
+        ok(&binding),
+        ok("{\"ok\":true,\"remote_execution\":false}"),
+    ]);
+    let challenge = api.send_code(" USER@example.com ").unwrap();
+    let session = api
+        .login_code("user@example.com", &challenge.request_id, "123456", true)
+        .unwrap();
+    assert!(session.expires_at - chrono::Utc::now().timestamp() > 2591900);
+    let device = api
+        .register_device(&session, &"e".repeat(64), "Test device", false)
+        .unwrap();
+    api.heartbeat(
+        &device,
+        &Heartbeat {
+            sequence: 0,
+            game_running: None,
+            prepare_seconds: 0,
+            version: "0.14.0".into(),
+            account_action: "clear".into(),
+            leigod_account: None,
+        },
+    )
+    .unwrap();
+    thread.join().unwrap();
+    let requests = requests.lock().unwrap();
+    assert!(requests[0].contains("user@example.com"));
+    assert!(requests[1].contains("\"remember\":true"));
+    assert!(requests[3].contains("x-csrf-token:"));
+    assert!(requests[4].contains(&format!("authorization: Bearer {}", "d".repeat(64))));
+    assert!(!requests[4].contains("cookie:"));
+    assert!(!requests[4].contains(&"e".repeat(64)));
 }
