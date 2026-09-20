@@ -1,0 +1,1 @@
+{"private":true,"scripts":{"vendor":"node vendor.mjs"},"dependencies":{"@tabler/core":"1.5.1","echarts":"6.1.0"}}

@@ -1,0 +1,75 @@
+name: Server CI
+on:
+  push:
+    paths: ['server/**', 'deploy/server/**', '.github/workflows/server.yml']
+  pull_request:
+    paths: ['server/**', 'deploy/server/**', '.github/workflows/server.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_PASSWORD: disposable-ci-password
+          POSTGRES_DB: guard_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    defaults:
+      run:
+        working-directory: server
+    env:
+      DATABASE_URL: postgres://postgres:disposable-ci-password@127.0.0.1:5432/guard_test
+      PUBLIC_ORIGIN: http://127.0.0.1:3089
+      PORT: '3089'
+      ADMIN_USERNAME: qa-admin
+      ADMIN_PASSWORD: disposable-ci-admin-password
+      TEST_ADMIN_USERNAME: qa-admin
+      TEST_ADMIN_PASSWORD: disposable-ci-admin-password
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          persist-credentials: false
+      - name: Install musl target
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy --target x86_64-unknown-linux-musl
+          rustup default stable
+          sudo apt-get update -qq
+          sudo apt-get install -y musl-tools
+      - name: Check and test
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked
+          cargo build --locked
+          ./target/debug/leigod-guard-server create-admin
+          ./target/debug/leigod-guard-server > /tmp/guard-test.log 2>&1 &
+          trap 'kill $!' EXIT
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3089/api/health > /dev/null; then break; fi
+            sleep 1
+          done
+          python3 tests/integration.py
+      - name: Build portable Linux binary
+        run: cargo build --locked --release --target x86_64-unknown-linux-musl
+      - name: Package
+        run: |
+          mkdir bundle
+          cp target/x86_64-unknown-linux-musl/release/leigod-guard-server bundle/
+          cp -r static bundle/
+          tar -C bundle -czf server-linux-x64.tar.gz .
+          sha256sum server-linux-x64.tar.gz > server-linux-x64.tar.gz.sha256
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: server-linux-x64
+          path: |
+            server/server-linux-x64.tar.gz
+            server/server-linux-x64.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
