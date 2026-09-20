@@ -11,12 +11,12 @@
 - `CHANGELOG.md` 中相应版本的实际变化与限制。
 - Git 标签、Release 标题、安装程序版本以及 EXE / ZIP 文件名。
 
-`v0.13.0` 的发布资产为：
+`v0.14.0` 的发布资产为：
 
 | 资产 | 用途 |
 | --- | --- |
-| `leigod-guard-v0.13.0-windows-x64-setup.exe` | 推荐下载；Windows x64 安装程序 |
-| `leigod-guard-v0.13.0-windows-x64.zip` | 绿色免安装程序包 |
+| `leigod-guard-v0.14.0-windows-x64-setup.exe` | 推荐下载；Windows x64 安装程序 |
+| `leigod-guard-v0.14.0-windows-x64.zip` | 绿色免安装程序包 |
 | `SHA256SUMS.txt` | 发布文件的 SHA-256 校验值 |
 | GitHub 自动提供的 `Source code` | 对应标签的源码归档，不是可运行程序 |
 
