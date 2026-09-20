@@ -12,6 +12,8 @@ struct Saved {
     installation_key: String,
     binding: Option<DeviceBinding>,
     active: bool,
+    #[serde(default)]
+    paused: bool,
     reserved_until: i64,
 }
 impl Saved {
@@ -23,6 +25,7 @@ impl Saved {
             installation_key: bytes.iter().map(|b| format!("{b:02x}")).collect(),
             binding: None,
             active: false,
+            paused: false,
             reserved_until: 0,
         })
     }
@@ -198,7 +201,7 @@ fn run(
     let mut sequence = saved.reserved_until;
     let mut next = Instant::now();
     let mut blocked = false;
-    let mut stopped = false;
+    let mut last_session: Option<Session> = None;
     publish(
         &view,
         &ctx,
@@ -217,16 +220,22 @@ fn run(
         } else {
             Duration::from_secs(60)
         };
-        let command = match receiver.recv_timeout(wait) {
+        let mut command = match receiver.recv_timeout(wait) {
             Ok(c) => Some(c),
             Err(mpsc::RecvTimeoutError::Timeout) => None,
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         };
+        if command.is_none() && !saved.active && !saved.paused && !blocked {
+            command = last_session
+                .clone()
+                .map(|session| Command::Session(session, false));
+        }
         if let Some(command) = command {
             match command {
                 Command::Stop => {
+                    last_session = None;
                     saved.active = false;
-                    stopped = true;
+                    saved.paused = true;
                     let message = store.save(&saved).err().unwrap_or_else(|| {
                         "已停止本机上报；平台中的设备记录保留，可在网页撤销或解除。".into()
                     });
@@ -234,8 +243,13 @@ fn run(
                     continue;
                 }
                 Command::Session(session, fresh_login) => {
+                    if !session.valid_for(ORIGIN_URL, chrono::Utc::now().timestamp()) {
+                        last_session = None;
+                        continue;
+                    }
+                    last_session = Some(session.clone());
                     if fresh_login {
-                        stopped = false;
+                        saved.paused = false;
                     }
                     if saved
                         .binding
@@ -253,7 +267,7 @@ fn run(
                         );
                         continue;
                     }
-                    if saved.active || blocked || stopped {
+                    if saved.active || blocked || saved.paused {
                         continue;
                     }
                     publish(&view, &ctx, &saved, "正在自动绑定本机…", true);
@@ -269,7 +283,7 @@ fn run(
                     );
                 }
                 Command::Bind(session) => {
-                    stopped = false;
+                    saved.paused = false;
                     publish(&view, &ctx, &saved, "正在重新绑定本机…", true);
                     apply_binding(
                         &api,
@@ -283,7 +297,7 @@ fn run(
                     );
                 }
                 Command::Pair(code, session) => {
-                    stopped = false;
+                    saved.paused = false;
                     publish(&view, &ctx, &saved, "正在手动配对设备…", true);
                     apply_binding(
                         &api,
@@ -491,10 +505,12 @@ mod tests {
         store.save(&s).unwrap();
         let original = s.installation_key.clone();
         s.reserved_until = 256;
+        s.paused = true;
         store.save(&s).unwrap();
         let read = store.load().unwrap();
         assert_eq!(read.installation_key, original);
         assert_eq!(read.reserved_until, 256);
+        assert!(read.paused);
         assert!(!std::fs::read_to_string(&store.0)
             .unwrap()
             .contains(&original));

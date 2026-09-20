@@ -273,6 +273,12 @@ pub async fn pair_device(
     {
         return Err(ApiError(StatusCode::BAD_REQUEST, "配对参数无效"));
     }
+    // Authenticate before reserving a pool connection for the transaction.
+    let current = if auth::cookie_token(&s, &h).is_some() {
+        Some(auth::user(&s, &h, true).await?)
+    } else {
+        None
+    };
     let mut tx = s.db.begin().await?;
     let hash = auth::digest(&p.code);
     let uid: Uuid = sqlx::query_scalar(
@@ -290,8 +296,7 @@ pub async fn pair_device(
         .bind(uid)
         .fetch_one(&mut *tx)
         .await?;
-    if auth::cookie_token(&s, &h).is_some() {
-        let current = auth::user(&s, &h, true).await?;
+    if let Some(current) = current {
         if current.id != uid {
             return Err(ApiError(StatusCode::CONFLICT, "配对码不属于当前平台账号"));
         }

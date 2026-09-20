@@ -742,4 +742,47 @@ mod tests {
         assert!(panel.pending.is_none());
         assert!(panel.session.is_none());
     }
+    #[test]
+    fn email_challenge_cannot_be_used_after_changing_address() {
+        let store = MemoryStore::default();
+        let mut panel = Panel {
+            username: "second@example.com".into(),
+            code: "123456".into(),
+            challenge: Some((
+                "first@example.com".into(),
+                CodeChallenge {
+                    request_id: "12345678-1234-1234-1234-123456789abc".into(),
+                    expires_in: 600,
+                    retry_after: 60,
+                },
+            )),
+            ..Panel::default()
+        };
+        panel.dispatch(Action::Login, &store, &egui::Context::default());
+        assert!(panel.pending.is_none());
+        assert!(panel.error);
+        assert!(panel.session.is_none());
+    }
+    #[test]
+    fn email_delivery_sets_resend_window_without_creating_identity() {
+        let mut panel = Panel::default();
+        let now = Instant::now();
+        panel.complete(
+            Kind::SendCode,
+            Ok(Completed::Code(
+                "test@example.com".into(),
+                CodeChallenge {
+                    request_id: "12345678-1234-1234-1234-123456789abc".into(),
+                    expires_in: 600,
+                    retry_after: 60,
+                },
+            )),
+            &MemoryStore::default(),
+            now,
+        );
+        assert_eq!(panel.next_code, now + Duration::from_secs(60));
+        assert!(panel.challenge.is_some());
+        assert!(panel.session.is_none());
+        assert!(!panel.verified);
+    }
 }
