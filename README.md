@@ -10,6 +10,8 @@
 
 [项目网站](https://leigod.cmmuu.com) · [前往 Gitee 下载（国内优先）](https://gitee.com/cmmuu/leigod-guard/releases) · [前往 GitHub 下载](https://github.com/CMMUU/leigod-guard/releases/latest)
 
+**v0.13.0 成品直达：** [Windows 安装版 EXE](https://github.com/CMMUU/leigod-guard/releases/download/v0.13.0/leigod-guard-v0.13.0-windows-x64-setup.exe) · [绿色免安装 ZIP](https://github.com/CMMUU/leigod-guard/releases/download/v0.13.0/leigod-guard-v0.13.0-windows-x64.zip) · [SHA-256 校验](https://github.com/CMMUU/leigod-guard/releases/download/v0.13.0/SHA256SUMS.txt)。国内用户可使用上方 Gitee 发布页或应用内更新。
+
 两处发布页均提供**安装版 EXE、绿色免安装 ZIP 和校验文件**。一般用户选择安装版；希望解压即用的用户选择绿色版。已有用户可在「关于与更新」中检查新版，点击「下载并自动更新」完成升级。
 
 也可在[官网直接下载最新可用版本](https://leigod.cmmuu.com/#download)：点击「下载安装版」或「下载绿色版」，自动比较完整正式版，同版本优先 Gitee；支持指定单一来源和同版本备用下载。下载信息最多缓存 5 分钟，文件交给浏览器下载，安装需手动打开安装包。
@@ -72,7 +74,7 @@
 
 Leigod Guard is an independent, open-source Windows companion for the Leigod game accelerator. It checks configured game processes, requests a pause after the applicable grace period, and displays the latest queried account balance. Installer and portable packages are available on Gitee and GitHub, with in-app updates. It does not start or stop the official client's acceleration.
 
-## 平台账号登录（0.13.0 候选版）
+## 平台账号登录（0.13.0）
 
 左侧新增「平台账号」，使用与上海后台相同的平台账号和密码登录。平台账号由管理员创建，与「账户」页的雷神加速器账号分开；无需平台账号也能继续使用本地守护。
 
@@ -81,7 +83,7 @@ Leigod Guard is an independent, open-source Windows companion for the Leigod gam
 - 「退出平台账号」先清除本地会话，再向服务器撤销；网络失败会明确提示撤销尚未确认并提供重试。
 - 当前只接入账号登录，尚未注册本机设备、发送心跳或执行远程暂停。平台登录不表示雷神登录有效，也不表示设备已受到远程保护。
 
-此功能在候选构建中提供，尚未发布为正式更新。详情见[隐私说明](docs/PRIVACY.md)。
+从 0.13.0 起提供平台登录。账号与会话存储、请求范围详见[隐私说明](docs/PRIVACY.md)。
 
 ## 自动暂停规则
 
