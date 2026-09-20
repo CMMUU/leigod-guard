@@ -10,6 +10,8 @@ pub async fn health(State(s): State<AppState>) -> ApiResult<Json<Value>> {
 pub struct Login {
     username: String,
     password: String,
+    #[serde(default)]
+    remember: bool,
 }
 pub async fn login(
     State(s): State<AppState>,
@@ -47,8 +49,6 @@ pub async fn login(
         return Err(ApiError(StatusCode::UNAUTHORIZED, "账号或密码不正确"));
     }
     let id: Uuid = row.unwrap().get("id");
-    let token = auth::secret();
-    let csrf = auth::secret();
     let mut tx = s.db.begin().await?;
     // Serialize session creation with user disable/password changes.
     let enabled: bool = sqlx::query_scalar(
@@ -61,15 +61,13 @@ pub async fn login(
     if !enabled {
         return Err(ApiError(StatusCode::UNAUTHORIZED, "账号或密码不正确"));
     }
-    sqlx::query("DELETE FROM sessions WHERE user_id=$1 AND (expires_at<now() OR token_hash IN (SELECT token_hash FROM sessions WHERE user_id=$1 ORDER BY last_seen DESC OFFSET 9))").bind(id).execute(&mut *tx).await?;
-    sqlx::query("INSERT INTO sessions(token_hash,user_id,csrf,expires_at) VALUES($1,$2,$3,now()+interval '24 hours')")
-        .bind(auth::digest(&token)).bind(id).bind(csrf).execute(&mut *tx).await?;
+    let (token, seconds) = auth::issue_session(&mut tx, id, input.remember).await?;
     audit(&mut tx, id, None, "login", "登录平台").await?;
     tx.commit().await?;
     Ok((
         [(
             axum::http::header::SET_COOKIE,
-            auth::session_cookie(&s, &token, 86400),
+            auth::session_cookie(&s, &token, seconds),
         )],
         Json(json!({"ok":true})),
     )
@@ -189,14 +187,17 @@ struct Device {
     name: String,
     version: String,
     last_seen: Option<DateTime<Utc>>,
-    game_running: bool,
+    game_running: Option<bool>,
     prepare_until: Option<DateTime<Utc>>,
     revoked: bool,
     status: String,
     username: String,
+    leigod_account_key: Option<String>,
+    leigod_account_label: Option<String>,
+    account_updated_at: Option<DateTime<Utc>>,
 }
 async fn device_list(s: &AppState, owner: Option<Uuid>) -> ApiResult<Json<Value>> {
-    let rows=sqlx::query_as::<_,Device>("SELECT d.id,d.user_id,d.name,d.version,d.last_seen,d.game_running,d.prepare_until,d.revoked,u.username,CASE WHEN d.revoked THEN 'revoked' WHEN d.last_seen IS NULL THEN 'unknown' WHEN d.last_seen>now()-interval '45 seconds' THEN 'online' WHEN d.last_seen>now()-interval '120 seconds' THEN 'waiting' ELSE 'offline' END AS status FROM devices d JOIN users u ON u.id=d.user_id WHERE ($1::uuid IS NULL OR d.user_id=$1) ORDER BY d.revoked,d.created_at DESC LIMIT 500").bind(owner).fetch_all(&s.db).await?;
+    let rows=sqlx::query_as::<_,Device>("SELECT d.id,d.user_id,d.name,d.version,d.last_seen,d.game_running,d.prepare_until,d.revoked,COALESCE(u.email,u.username) AS username,d.leigod_account_key,d.leigod_account_label,d.account_updated_at,CASE WHEN d.revoked THEN 'revoked' WHEN d.last_seen IS NULL THEN 'unknown' WHEN d.last_seen>now()-interval '45 seconds' THEN 'online' WHEN d.last_seen>now()-interval '120 seconds' THEN 'waiting' ELSE 'offline' END AS status FROM devices d JOIN users u ON u.id=d.user_id WHERE ($1::uuid IS NULL OR d.user_id=$1) ORDER BY d.revoked,d.created_at DESC LIMIT 500").bind(owner).fetch_all(&s.db).await?;
     Ok(Json(json!({"devices":rows,"limit":500})))
 }
 pub async fn devices(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Json<Value>> {
@@ -259,6 +260,8 @@ pub struct Pair {
     code: String,
     name: String,
     version: String,
+    #[serde(default)]
+    installation_key: Option<String>,
 }
 pub async fn pair_device(
     State(s): State<AppState>,
@@ -271,61 +274,73 @@ pub async fn pair_device(
         return Err(ApiError(StatusCode::BAD_REQUEST, "配对参数无效"));
     }
     let mut tx = s.db.begin().await?;
+    let hash = auth::digest(&p.code);
     let uid: Uuid = sqlx::query_scalar(
-        "DELETE FROM pairing_codes WHERE code_hash=$1 AND expires_at>now() RETURNING user_id",
+        "SELECT user_id FROM pairing_codes WHERE code_hash=$1 AND expires_at>now()",
     )
-    .bind(auth::digest(&p.code))
+    .bind(&hash)
     .fetch_optional(&mut *tx)
     .await?
     .ok_or(ApiError(
         StatusCode::BAD_REQUEST,
         "配对码无效、已使用或已过期",
     ))?;
-    let enabled: bool = sqlx::query_scalar("SELECT NOT disabled FROM users WHERE id=$1 FOR UPDATE")
+    // Lock the owner first, matching pairing creation and administrator disable.
+    sqlx::query("SELECT id FROM users WHERE id=$1 FOR UPDATE")
         .bind(uid)
         .fetch_one(&mut *tx)
         .await?;
-    let count: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM devices WHERE user_id=$1 AND NOT revoked")
-            .bind(uid)
-            .fetch_one(&mut *tx)
-            .await?;
-    if !enabled || count >= 50 {
+    if auth::cookie_token(&s, &h).is_some() {
+        let current = auth::user(&s, &h, true).await?;
+        if current.id != uid {
+            return Err(ApiError(StatusCode::CONFLICT, "配对码不属于当前平台账号"));
+        }
+    }
+    let used = sqlx::query(
+        "DELETE FROM pairing_codes WHERE code_hash=$1 AND user_id=$2 AND expires_at>now()",
+    )
+    .bind(hash)
+    .bind(uid)
+    .execute(&mut *tx)
+    .await?;
+    if used.rows_affected() != 1 {
         return Err(ApiError(
-            StatusCode::FORBIDDEN,
-            "账号停用或已达到设备数量限制",
+            StatusCode::BAD_REQUEST,
+            "配对码无效、已使用或已过期",
         ));
     }
-    let id = Uuid::new_v4();
-    let token = auth::secret();
-    sqlx::query("INSERT INTO devices(id,user_id,name,token_hash,version) VALUES($1,$2,$3,$4,$5)")
-        .bind(id)
-        .bind(uid)
-        .bind(p.name.trim())
-        .bind(auth::digest(&token))
-        .bind(p.version)
-        .execute(&mut *tx)
-        .await?;
-    audit(
+    let response = devices::bind(
         &mut tx,
         uid,
-        Some(id),
-        "device_paired",
-        "设备配对成功，等待首次心跳",
+        p.installation_key.as_deref(),
+        &p.name,
+        &p.version,
+        true,
     )
     .await?;
     tx.commit().await?;
-    Ok(Json(
-        json!({"device_id":id,"device_token":token,"heartbeat_seconds":15,"mode":"observe"}),
-    ))
+    Ok(Json(response))
 }
+
 #[derive(Deserialize)]
 pub struct Heartbeat {
     sequence: i64,
-    game_running: bool,
+    game_running: Option<bool>,
     #[serde(default)]
     prepare_seconds: u32,
     version: String,
+    #[serde(default = "keep_account")]
+    account_action: String,
+    #[serde(default)]
+    leigod_account: Option<LeigodLink>,
+}
+fn keep_account() -> String {
+    "keep".into()
+}
+#[derive(Deserialize)]
+pub struct LeigodLink {
+    key: String,
+    label: String,
 }
 pub async fn heartbeat(
     State(s): State<AppState>,
@@ -342,8 +357,19 @@ pub async fn heartbeat(
     if p.sequence < 0 || p.sequence == i64::MAX || p.prepare_seconds > 600 || p.version.len() > 32 {
         return Err(ApiError(StatusCode::BAD_REQUEST, "心跳参数无效"));
     }
+    if !matches!(p.account_action.as_str(), "keep" | "clear" | "link")
+        || (p.account_action == "link"
+            && p.leigod_account.as_ref().is_none_or(|a| {
+                !devices::valid_key(&a.key)
+                    || a.label.is_empty()
+                    || a.label.len() > 100
+                    || a.label.chars().any(char::is_control)
+            }))
+    {
+        return Err(ApiError(StatusCode::BAD_REQUEST, "雷神账号关联参数无效"));
+    }
     let mut tx = s.db.begin().await?;
-    let row=sqlx::query("SELECT d.id,d.user_id,d.sequence,d.last_seen,d.observed_offline FROM devices d JOIN users u ON u.id=d.user_id WHERE d.token_hash=$1 AND NOT d.revoked AND NOT u.disabled FOR UPDATE OF d")
+    let row=sqlx::query("SELECT d.id,d.user_id,d.sequence,d.last_seen,d.observed_offline,d.leigod_account_key FROM devices d JOIN users u ON u.id=d.user_id WHERE d.token_hash=$1 AND NOT d.revoked AND NOT u.disabled FOR UPDATE OF d")
         .bind(auth::digest(token)).fetch_optional(&mut *tx).await?.ok_or(ApiError(StatusCode::UNAUTHORIZED,"设备已撤销或账号已停用"))?;
     if p.sequence <= row.get::<i64, _>("sequence") {
         return Err(ApiError(StatusCode::CONFLICT, "心跳序号已使用；必须递增"));
@@ -352,6 +378,38 @@ pub async fn heartbeat(
     let uid: Uuid = row.get("user_id");
     sqlx::query("UPDATE devices SET last_seen=now(),sequence=$2,game_running=$3,prepare_until=now()+make_interval(secs=>$4),version=$5,observed_offline=false WHERE id=$1")
         .bind(id).bind(p.sequence).bind(p.game_running).bind(p.prepare_seconds as f64).bind(p.version).execute(&mut *tx).await?;
+    if p.account_action != "keep" {
+        let key = if p.account_action == "link" {
+            p.leigod_account.as_ref().map(|a| a.key.as_str())
+        } else {
+            None
+        };
+        let label = if p.account_action == "link" {
+            p.leigod_account.as_ref().map(|a| a.label.as_str())
+        } else {
+            None
+        };
+        if row
+            .get::<Option<String>, _>("leigod_account_key")
+            .as_deref()
+            != key
+        {
+            sqlx::query("UPDATE devices SET leigod_account_key=$2,leigod_account_label=$3,account_updated_at=now() WHERE id=$1")
+                .bind(id).bind(key).bind(label).execute(&mut *tx).await?;
+            audit(
+                &mut tx,
+                uid,
+                Some(id),
+                "account_link_changed",
+                if key.is_some() {
+                    "设备已关联本机雷神账号标识"
+                } else {
+                    "设备已解除雷神账号关联"
+                },
+            )
+            .await?;
+        }
+    }
     if row.get::<Option<DateTime<Utc>>, _>("last_seen").is_none()
         || row.get::<bool, _>("observed_offline")
     {
@@ -370,7 +428,7 @@ pub async fn heartbeat(
     ))
 }
 async fn event_list(s: &AppState, owner: Option<Uuid>) -> ApiResult<Json<Value>> {
-    let rows:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('id',e.id,'kind',e.kind,'detail',e.detail,'created_at',e.created_at,'username',u.username,'device_name',d.name) FROM events e LEFT JOIN users u ON u.id=e.user_id LEFT JOIN devices d ON d.id=e.device_id WHERE ($1::uuid IS NULL OR e.user_id=$1) ORDER BY e.created_at DESC,e.id DESC LIMIT 100").bind(owner).fetch_all(&s.db).await?;
+    let rows:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('id',e.id,'kind',e.kind,'detail',e.detail,'created_at',e.created_at,'username',COALESCE(u.email,u.username),'device_name',d.name) FROM events e LEFT JOIN users u ON u.id=e.user_id LEFT JOIN devices d ON d.id=e.device_id WHERE ($1::uuid IS NULL OR e.user_id=$1) ORDER BY e.created_at DESC,e.id DESC LIMIT 100").bind(owner).fetch_all(&s.db).await?;
     Ok(Json(json!({"events":rows,"limit":100})))
 }
 pub async fn events(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Json<Value>> {
@@ -385,7 +443,7 @@ pub async fn dashboard(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Jso
     let u = auth::user(&s, &h, false).await?;
     let stats:Value=sqlx::query_scalar("SELECT jsonb_build_object('devices',count(*),'online',count(*) FILTER(WHERE last_seen>now()-interval '45 seconds'),'waiting',count(*) FILTER(WHERE last_seen<=now()-interval '45 seconds' AND last_seen>now()-interval '120 seconds')) FROM devices WHERE user_id=$1 AND NOT revoked").bind(u.id).fetch_one(&s.db).await?;
     Ok(Json(
-        json!({"stats":stats,"mode":"observe","remote_execution":false,"updated_at":Utc::now(),"client_integration":"v0.12.3 尚未支持设备配对与心跳"}),
+        json!({"stats":stats,"mode":"observe","remote_execution":false,"updated_at":Utc::now(),"client_integration":"v0.14.0 支持自动绑定、手动配对和设备心跳"}),
     ))
 }
 pub async fn overview(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Json<Value>> {
@@ -398,7 +456,7 @@ pub async fn overview(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Json
 }
 pub async fn users(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Json<Value>> {
     auth::admin(&s, &h, false).await?;
-    let rows:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('id',u.id,'username',u.username,'display_name',u.display_name,'role',u.role,'disabled',u.disabled,'created_at',u.created_at,'devices',(SELECT count(*) FROM devices d WHERE d.user_id=u.id AND NOT d.revoked)) FROM users u ORDER BY u.created_at DESC LIMIT 500").fetch_all(&s.db).await?;
+    let rows:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('id',u.id,'username',COALESCE(u.email,u.username),'display_name',u.display_name,'role',u.role,'disabled',u.disabled,'created_at',u.created_at,'devices',(SELECT count(*) FROM devices d WHERE d.user_id=u.id AND NOT d.revoked)) FROM users u ORDER BY u.created_at DESC LIMIT 500").fetch_all(&s.db).await?;
     Ok(Json(json!({"users":rows,"limit":500})))
 }
 #[derive(Deserialize)]

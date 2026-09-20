@@ -633,6 +633,11 @@ impl App {
             update_preparing,
         );
         app.tray_retry = tray_retry;
+        app.platform.start_device_agent(
+            app.shared.clone(),
+            app.config.clone(),
+            cc.egui_ctx.clone(),
+        );
         app.platform.restore(
             &crate::platform_store::DiskStore::current_user(),
             &cc.egui_ctx,

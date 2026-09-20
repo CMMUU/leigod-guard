@@ -1,6 +1,6 @@
 //! Native platform account panel. Rendering emits actions; only the live update
 //! loop executes them. Offscreen fixtures never read credentials or use the network.
-use crate::platform_api::{Api, Error, Session, ORIGIN_URL};
+use crate::platform_api::{Api, CodeChallenge, Error, Session, ORIGIN_URL};
 use crate::platform_store::Store;
 use crate::ui_theme as theme;
 use std::sync::mpsc::{self, Receiver};
@@ -9,16 +9,22 @@ use std::time::{Duration, Instant};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Action {
     Login,
+    SendCode,
+    Bind,
+    Pair,
+    StopDevice,
     Refresh,
     Logout,
 }
 #[derive(Clone, Copy)]
 enum Kind {
+    SendCode,
     Login,
     Validate,
     Logout,
 }
 enum Completed {
+    Code(String, CodeChallenge),
     Identity(Session),
     Logout,
 }
@@ -31,6 +37,12 @@ struct Pending {
 pub(crate) struct Panel {
     pub(crate) username: String,
     pub(crate) password: String,
+    pub(crate) email_mode: bool,
+    code: String,
+    challenge: Option<(String, CodeChallenge)>,
+    next_code: Instant,
+    pair_code: String,
+    agent: Option<crate::platform_device::Agent>,
     pub(crate) remember: bool,
     pub(crate) message: String,
     pub(crate) error: bool,
@@ -47,6 +59,12 @@ impl Default for Panel {
         Self {
             username: String::new(),
             password: String::new(),
+            email_mode: true,
+            code: String::new(),
+            challenge: None,
+            next_code: Instant::now(),
+            pair_code: String::new(),
+            agent: None,
             remember: false,
             message: "尚未登录平台；本地守护可正常使用。".into(),
             error: false,
@@ -61,6 +79,15 @@ impl Default for Panel {
     }
 }
 impl Panel {
+    pub(crate) fn start_device_agent(
+        &mut self,
+        shared: std::sync::Arc<std::sync::Mutex<crate::shared::Shared>>,
+        config: std::sync::Arc<std::sync::Mutex<crate::config::Config>>,
+        ctx: egui::Context,
+    ) {
+        self.agent = Some(crate::platform_device::Agent::start(shared, config, ctx));
+    }
+
     pub(crate) fn restore(&mut self, store: &impl Store, ctx: &egui::Context) {
         match store.load() {
             Ok(Some(session)) => {
@@ -121,8 +148,59 @@ impl Panel {
         }
         self.error = false;
         match action {
+            Action::SendCode => {
+                if Instant::now() < self.next_code {
+                    return;
+                }
+                let email = self.username.trim().to_ascii_lowercase();
+                if !Api::valid_email(&email) {
+                    self.message = "请输入有效邮箱。".into();
+                    self.error = true;
+                    return;
+                }
+                self.message = "正在发送验证码…".into();
+                self.start(Kind::SendCode, ctx, move || {
+                    Api::new()?
+                        .send_code(&email)
+                        .map(|c| Completed::Code(email, c))
+                });
+            }
+            Action::Bind => {
+                if self.verified {
+                    if let (Some(agent), Some(session)) = (&self.agent, &self.session) {
+                        agent.bind(session.clone());
+                    }
+                }
+            }
+            Action::Pair => {
+                let code = self.pair_code.trim().to_owned();
+                if code.len() != 32 || !code.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    self.error = true;
+                    self.message = "请粘贴网页生成的完整配对码。".into();
+                    return;
+                }
+                if let Some(agent) = &self.agent {
+                    agent.pair(code, self.session.clone().filter(|_| self.verified));
+                    self.pair_code.clear();
+                }
+            }
+            Action::StopDevice => {
+                if let Some(agent) = &self.agent {
+                    agent.stop();
+                }
+            }
             Action::Login => {
-                if !Api::valid_input(&self.username, &self.password) {
+                let valid = if self.email_mode {
+                    Api::valid_email(&self.username)
+                        && self.code.len() == 6
+                        && self.code.bytes().all(|b| b.is_ascii_digit())
+                        && self.challenge.as_ref().is_some_and(|(email, _)| {
+                            email == &self.username.trim().to_ascii_lowercase()
+                        })
+                } else {
+                    Api::valid_input(&self.username, &self.password)
+                };
+                if !valid {
                     self.message = Error::InvalidInput.message().into();
                     self.error = true;
                     return;
@@ -139,10 +217,22 @@ impl Panel {
                 let username = self.username.trim().to_owned();
                 let password = std::mem::take(&mut self.password);
                 self.message = "正在登录上海平台…".into();
+                let email_mode = self.email_mode;
+                let request_id = self
+                    .challenge
+                    .as_ref()
+                    .map(|(_, c)| c.request_id.clone())
+                    .unwrap_or_default();
+                let code = std::mem::take(&mut self.code);
+                let remember = self.remember;
                 self.start(Kind::Login, ctx, move || {
-                    Api::new()?
-                        .login(&username, &password)
-                        .map(Completed::Identity)
+                    let api = Api::new()?;
+                    if email_mode {
+                        api.login_code(&username, &request_id, &code, remember)
+                    } else {
+                        api.login(&username, &password, remember)
+                    }
+                    .map(Completed::Identity)
                 });
             }
             Action::Refresh => {
@@ -156,6 +246,11 @@ impl Panel {
                 });
             }
             Action::Logout => {
+                if let Some(agent) = &self.agent {
+                    agent.stop();
+                }
+                self.code.clear();
+                self.challenge = None;
                 let clearing = store.clear();
                 self.cleanup_failed = clearing.is_err();
                 self.password.clear();
@@ -182,6 +277,12 @@ impl Panel {
     ) {
         self.next_check = now + Duration::from_secs(60);
         match result {
+            Ok(Completed::Code(email, challenge)) => {
+                self.next_code = now + Duration::from_secs(challenge.retry_after.into());
+                self.challenge = Some((email, challenge));
+                self.message = "验证码已发送，10 分钟内有效，请检查收件箱和垃圾邮件。".into();
+                self.error = false;
+            }
             Ok(Completed::Identity(session)) => {
                 self.username = session.user.username.clone();
                 self.message = "平台登录有效。".into();
@@ -196,6 +297,9 @@ impl Panel {
                         };
                         self.error = true;
                     }
+                }
+                if let Some(agent) = &self.agent {
+                    agent.session(session.clone(), matches!(kind, Kind::Login));
                 }
                 self.session = Some(session);
                 self.verified = true;
@@ -217,7 +321,7 @@ impl Panel {
                     self.message = if self.cleanup_failed {
                         "尚未确认退出：本机文件清除和服务器会话撤销均未完成，请重试退出。"
                     } else {
-                        "本机已退出，服务器撤销暂未确认。可重试退出；原会话最多 24 小时后过期。"
+                        "本机已退出，服务器撤销暂未确认。可重试退出；原会话最多 30 天后过期。"
                     }
                     .into();
                 } else if error.invalidates_session() {
@@ -270,7 +374,7 @@ impl Panel {
         let busy = self.pending.is_some();
         ui.label(theme::title("守护平台账号", 20.0));
         ui.label(
-            egui::RichText::new("使用上海后台的平台账号登录；雷神加速器账号在“账户”页管理。")
+            egui::RichText::new("邮箱验证码登录后自动绑定本机；首次登录自动创建普通用户账号。")
                 .color(theme::MUTED),
         );
         ui.add_space(16.0);
@@ -315,25 +419,68 @@ impl Panel {
             });
         } else {
             ui.add_enabled_ui(!busy, |ui| {
-                ui.label("平台账号");
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.email_mode, true, "邮箱验证码");
+                    ui.selectable_value(&mut self.email_mode, false, "账号密码");
+                });
+                ui.add_space(8.0);
+                ui.label(if self.email_mode {
+                    "邮箱"
+                } else {
+                    "平台账号"
+                });
                 ui.add(
                     egui::TextEdit::singleline(&mut self.username)
                         .id_salt("platform-user")
-                        .hint_text("管理员分配的平台账号")
+                        .hint_text(if self.email_mode {
+                            "用于接收验证码的邮箱"
+                        } else {
+                            "已有账号或管理员账号"
+                        })
                         .desired_width(ui.available_width().min(400.0))
-                        .char_limit(100),
+                        .char_limit(254),
                 );
                 ui.add_space(8.0);
-                ui.label("平台密码");
-                let password = ui.add(
-                    egui::TextEdit::singleline(&mut self.password)
-                        .id_salt("platform-password")
-                        .password(true)
-                        .desired_width(ui.available_width().min(400.0))
-                        .char_limit(128),
-                );
+                let credential = if self.email_mode {
+                    let remaining = self
+                        .next_code
+                        .saturating_duration_since(Instant::now())
+                        .as_secs();
+                    if ui
+                        .add_enabled(
+                            remaining == 0,
+                            egui::Button::new(if remaining == 0 {
+                                "发送验证码".into()
+                            } else {
+                                format!("{} 秒后重发", remaining + 1)
+                            }),
+                        )
+                        .clicked()
+                    {
+                        self.action = Some(Action::SendCode);
+                    }
+                    if remaining > 0 {
+                        ui.ctx().request_repaint_after(Duration::from_secs(1));
+                    }
+                    ui.label("6 位验证码");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.code)
+                            .id_salt("platform-code")
+                            .char_limit(6)
+                            .desired_width(180.0),
+                    )
+                } else {
+                    ui.label("平台密码");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.password)
+                            .id_salt("platform-password")
+                            .password(true)
+                            .desired_width(ui.available_width().min(400.0))
+                            .char_limit(128),
+                    )
+                };
                 ui.add_space(8.0);
-                ui.checkbox(&mut self.remember, "记住登录状态（最多 24 小时）");
+                ui.checkbox(&mut self.remember, "记住登录状态（30 天）");
                 ui.label(
                     egui::RichText::new("仅在当前 Windows 用户下加密保存会话，不保存平台密码。")
                         .size(12.0)
@@ -341,7 +488,7 @@ impl Panel {
                 );
                 ui.add_space(12.0);
                 if ui.button("登录平台").clicked()
-                    || (password.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                    || (credential.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
                 {
                     self.action = Some(Action::Login);
                 }
@@ -363,15 +510,78 @@ impl Panel {
         }));
         ui.add_space(18.0);
         ui.separator();
+        ui.label(theme::title("本机设备", 17.0));
+        let view = self
+            .agent
+            .as_ref()
+            .and_then(|a| a.view.lock().ok().map(|v| v.clone()))
+            .unwrap_or_default();
+        if !view.owner.is_empty() {
+            ui.label(format!("所属账号：{}", view.owner));
+        }
+        if !view.device_id.is_empty() {
+            ui.label(format!("设备 ID：{}", view.device_id));
+        }
+        if !view.account.is_empty() {
+            ui.label(format!("已关联：{}", view.account));
+        }
+        ui.label(if view.message.is_empty() {
+            "登录平台后自动绑定，也可从网页获取配对码。"
+        } else {
+            &view.message
+        });
+        ui.add_enabled_ui(!busy && !view.busy, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .add_enabled(self.verified, egui::Button::new("重新绑定本机"))
+                    .clicked()
+                {
+                    self.action = Some(Action::Bind);
+                }
+                if ui
+                    .add_enabled(view.active, egui::Button::new("停止本机上报"))
+                    .clicked()
+                {
+                    self.action = Some(Action::StopDevice);
+                }
+            });
+            ui.add_space(8.0);
+            ui.label("手动添加：在网页“配对设备”生成配对码，然后粘贴到这里。");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.pair_code)
+                    .id_salt("platform-pair")
+                    .hint_text("一次性配对码")
+                    .char_limit(32)
+                    .desired_width(ui.available_width().min(400.0)),
+            );
+            if ui.button("配对本机").clicked() {
+                self.action = Some(Action::Pair);
+            }
+        });
+        ui.label(
+            egui::RichText::new(
+                "设备授权独立保存；退出平台账号会停止本机上报。可在网页撤销或解除设备绑定。",
+            )
+            .size(12.0)
+            .color(theme::MUTED),
+        );
+        ui.add_space(18.0);
+        ui.separator();
         ui.add_space(10.0);
         ui.horizontal_wrapped(|ui| {
             ui.label("上海节点");
             ui.hyperlink_to("打开后台", ORIGIN_URL);
         });
-        ui.label(egui::RichText::new("账号由管理员创建；忘记密码请联系管理员。平台登录可选，不影响本地游戏检测与自动暂停。").size(13.0).color(theme::MUTED));
+        ui.label(
+            egui::RichText::new(
+                "普通用户使用邮箱验证码注册／登录；管理员仍可使用账号密码。平台登录可选。",
+            )
+            .size(13.0)
+            .color(theme::MUTED),
+        );
         ui.add_space(6.0);
         ui.label(
-            egui::RichText::new("当前仅接入账号登录，尚未上报设备心跳，也未启用远程暂停。")
+            egui::RichText::new("设备绑定后上报在线和游戏运行状态，并关联当前雷神账号的脱敏标识。自动暂停仍由本机执行。")
                 .size(13.0)
                 .color(theme::MUTED),
         );

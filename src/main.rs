@@ -13,6 +13,7 @@ mod leigod_api;
 mod monitor;
 mod osd;
 mod platform_api;
+mod platform_device;
 mod platform_store;
 mod session_end;
 mod shared;

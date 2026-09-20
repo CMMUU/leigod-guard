@@ -28,6 +28,10 @@ jobs:
       DATABASE_URL: postgres://postgres:disposable-ci-password@127.0.0.1:5432/guard_test
       PUBLIC_ORIGIN: http://127.0.0.1:3089
       PORT: '3089'
+      RESEND_API_KEY: fixture-mail-key
+      EMAIL_FROM: 'Guard <guard@example.invalid>'
+      EMAIL_CODE_SECRET: disposable-ci-fixture-pepper-32-characters
+      EMAIL_TEST_ENDPOINT: http://127.0.0.1:3090/emails
       ADMIN_USERNAME: qa-admin
       ADMIN_PASSWORD: disposable-ci-admin-password
       TEST_ADMIN_USERNAME: qa-admin
@@ -41,7 +45,7 @@ jobs:
           rustup toolchain install stable --profile minimal --component rustfmt --component clippy --target x86_64-unknown-linux-musl
           rustup default stable
           sudo apt-get update -qq
-          sudo apt-get install -y musl-tools
+          sudo apt-get install -y musl-tools postgresql-client
       - name: Check and test
         run: |
           cargo fmt --check
@@ -49,13 +53,17 @@ jobs:
           cargo test --locked
           cargo build --locked
           ./target/debug/leigod-guard-server create-admin
+          python3 tests/mail_mock.py > /tmp/guard-mail.log 2>&1 &
+          MAIL_PID=$!
           ./target/debug/leigod-guard-server > /tmp/guard-test.log 2>&1 &
-          trap 'kill $!' EXIT
+          SERVER_PID=$!
+          trap 'kill "$SERVER_PID" "$MAIL_PID"' EXIT
           for attempt in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:3089/api/health > /dev/null; then break; fi
             sleep 1
           done
           python3 tests/integration.py
+          python3 tests/email_integration.py
       - name: Build portable Linux binary
         run: cargo build --locked --release --target x86_64-unknown-linux-musl
       - name: Package

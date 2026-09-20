@@ -46,7 +46,7 @@ pub fn cookie_token(s: &AppState, h: &HeaderMap) -> Option<String> {
 }
 pub async fn user(s: &AppState, h: &HeaderMap, write: bool) -> ApiResult<SessionUser> {
     let token = cookie_token(s, h).ok_or(ApiError(StatusCode::UNAUTHORIZED, "请先登录"))?;
-    let u=sqlx::query_as::<_,SessionUser>("SELECT u.id,u.username,u.display_name,u.role,s.csrf FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>now() AND NOT u.disabled")
+    let u=sqlx::query_as::<_,SessionUser>("SELECT u.id,COALESCE(u.email,u.username) AS username,u.display_name,u.role,s.csrf,(u.password_hash<>'!') AS password_enabled FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>now() AND NOT u.disabled")
         .bind(digest(&token)).fetch_optional(&s.db).await?.ok_or(ApiError(StatusCode::UNAUTHORIZED,"会话已过期，请重新登录"))?;
     if write {
         same_origin(s, h)?;
@@ -109,6 +109,19 @@ pub fn session_cookie(s: &AppState, value: &str, seconds: u32) -> String {
         seconds,
         if s.secure { "; Secure" } else { "" }
     )
+}
+
+pub async fn issue_session(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    id: Uuid,
+    remember: bool,
+) -> ApiResult<(String, u32)> {
+    let token = secret();
+    let seconds = if remember { 30 * 86400 } else { 86400 };
+    sqlx::query("DELETE FROM sessions WHERE user_id=$1 AND (expires_at<now() OR token_hash IN (SELECT token_hash FROM sessions WHERE user_id=$1 ORDER BY last_seen DESC OFFSET 9))").bind(id).execute(&mut **tx).await?;
+    sqlx::query("INSERT INTO sessions(token_hash,user_id,csrf,expires_at) VALUES($1,$2,$3,now()+make_interval(secs=>$4))")
+        .bind(digest(&token)).bind(id).bind(secret()).bind(seconds as f64).execute(&mut **tx).await?;
+    Ok((token, seconds))
 }
 
 #[cfg(test)]

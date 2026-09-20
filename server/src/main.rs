@@ -1,4 +1,6 @@
 mod auth;
+mod devices;
+mod email;
 mod routes;
 mod scheduler;
 use axum::{
@@ -29,6 +31,7 @@ pub struct AppState {
     limits: Arc<Mutex<HashMap<String, (u32, Instant)>>>,
     hashes: Arc<Semaphore>,
     dummy_hash: String,
+    mailer: Option<email::Mailer>,
 }
 #[derive(Serialize, sqlx::FromRow)]
 pub struct SessionUser {
@@ -37,6 +40,7 @@ pub struct SessionUser {
     display_name: String,
     role: String,
     csrf: String,
+    password_enabled: bool,
 }
 pub struct ApiError(StatusCode, &'static str);
 type ApiResult<T> = Result<T, ApiError>;
@@ -99,7 +103,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !secure && !origin.starts_with("http://127.0.0.1:") {
         return Err("HTTPS origin required".into());
     }
+    let mailer = email::Mailer::from_env(&origin)?;
     let state = AppState {
+        mailer,
         db,
         origin,
         secure,
@@ -115,12 +121,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api = Router::new()
         .route("/health", get(routes::health))
         .route("/login", post(routes::login))
+        .route("/email/code", post(email::send_code))
+        .route("/email/login", post(email::verify_code))
+        .route("/devices/register", post(devices::register))
         .route("/logout", post(routes::logout))
         .route("/me", get(routes::me))
         .route("/password", post(routes::password))
         .route("/dashboard", get(routes::dashboard))
         .route("/devices", get(routes::devices))
         .route("/devices/{id}/revoke", post(routes::revoke))
+        .route("/devices/{id}/unbind", post(devices::forget))
         .route("/pairings", post(routes::pairing))
         .route("/device/pair", post(routes::pair_device))
         .route("/device/heartbeat", post(routes::heartbeat))

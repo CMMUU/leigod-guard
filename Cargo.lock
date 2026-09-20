@@ -2389,13 +2389,14 @@ dependencies = [
 
 [[package]]
 name = "leigod-guard"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
  "dirs 5.0.1",
  "eframe",
  "egui",
+ "getrandom 0.2.17",
  "image",
  "md-5",
  "pollster",
