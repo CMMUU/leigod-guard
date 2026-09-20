@@ -1,0 +1,34 @@
+[Unit]
+Description=Leigod Guard observation backend
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+WorkingDirectory=/opt/leigod-guard/current
+EnvironmentFile=/opt/leigod-guard/secrets/server.env
+ExecStart=/opt/leigod-guard/current/leigod-guard-server
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+KillSignal=SIGINT
+MemoryHigh=256M
+MemoryMax=384M
+CPUQuota=150%
+TasksMax=128
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=leigod-guard
+
+[Install]
+WantedBy=multi-user.target

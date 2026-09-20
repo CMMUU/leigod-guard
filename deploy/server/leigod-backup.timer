@@ -1,0 +1,8 @@
+[Unit]
+Description=Daily Leigod Guard database backup
+[Timer]
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=600
+Persistent=true
+[Install]
+WantedBy=timers.target
