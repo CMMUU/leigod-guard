@@ -49,7 +49,7 @@ class Device:
   return r
  def off(self):
   s=self.client.call('/device/remote/disable',{'revision':self.rev},token=self.token);self.rev=s['revision'];return s
- def stale(self):sql(f"UPDATE remote_grants SET last_seen=now()-interval '125 seconds',prepare_until=now()-interval '1 second' WHERE device_id='{self.id}';")
+ def stale(self,prepare=-1):sql(f"UPDATE remote_grants SET last_seen=now()-interval '125 seconds',prepare_until=now()+interval '{prepare} seconds' WHERE device_id='{self.id}';")
  def jobs(self):return json.loads(sql(f"SELECT coalesce(json_agg(json_build_object('state',j.state,'result',j.result,'attempts',j.attempts)),'[]') FROM remote_jobs j JOIN remote_grants g ON g.account_id=j.account_id WHERE g.device_id='{self.id}';"))
  def terminal(self,state):return any(j['state']==state for j in self.jobs())
  def account(self):return sql(f"SELECT account_id FROM remote_grants WHERE device_id='{self.id}';")
@@ -67,7 +67,7 @@ check('encrypted credentials; tenant read isolation and API secret redaction')
 d.beat();oldrev=d.rev;d.beat(revision=oldrev-1,status=409);d.run=2;d.beat();d.beat(run=1,status=409)
 check('replayed grant versions and previous client runs rejected')
 # Same account on second device: one online device (even unknown game state) protects all.
-e=Device();e.beat();e.authorize(t);e.beat();d.stale();time.sleep(6);assert not d.jobs();e.stale();sql(f"UPDATE remote_grants SET prepare_until=now()+interval '90 seconds' WHERE device_id='{e.id}';");time.sleep(6);assert not d.jobs()
+e=Device();e.beat();e.authorize(t);e.beat();d.stale();time.sleep(6);assert not d.jobs();e.stale(90);time.sleep(6);assert not d.jobs()
 check('account aggregation blocks pause for fresh peers or preparation windows')
 e.stale();ready();wait(lambda:d.terminal('confirmed'));assert stats(t)['pause_calls']==1
 time.sleep(6);assert stats(t)['pause_calls']==1 and len(d.jobs())==1
@@ -114,7 +114,8 @@ muser=Client();mname='mass-'+nonce;mp=secrets.token_hex(20);admin.call('/admin/u
 mass=[]
 for n in range(5):
  q=Device(muser);q.beat();tq=f'mass-{nonce}-{n}';mock(tq,account=tq);q.authorize(tq);q.beat();mass.append((q,tq))
-for q,_ in mass:q.stale()
+ids=','.join("'"+q.id+"'" for q,_ in mass)
+sql(f"UPDATE remote_grants SET last_seen=now()-interval '125 seconds',prepare_until=now()-interval '1 second' WHERE device_id IN ({ids});")
 ready();wait(lambda:admin.call('/remote')['service']['state']=='blocked');assert all(stats(tq)['pause_calls']==0 for _,tq in mass)
 admin.call('/admin/remote/acknowledge',{});assert sql("SELECT count(*) FROM remote_grants WHERE enabled AND armed_at IS NOT NULL;")=='0'
 for q,_ in mass:q.off()

@@ -135,6 +135,15 @@ pub(crate) struct Agent {
     pub view: Arc<Mutex<View>>,
 }
 impl Agent {
+    #[cfg(test)]
+    pub(crate) fn fixture(view: View) -> Self {
+        let (sender, _) = mpsc::channel();
+        Self {
+            sender,
+            view: Arc::new(Mutex::new(view)),
+        }
+    }
+
     pub fn start(
         shared: Arc<Mutex<crate::shared::Shared>>,
         config: Arc<Mutex<crate::config::Config>>,

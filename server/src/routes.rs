@@ -468,7 +468,7 @@ pub async fn dashboard(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Jso
     let u = auth::user(&s, &h, false).await?;
     let stats:Value=sqlx::query_scalar("SELECT jsonb_build_object('devices',count(*),'online',count(*) FILTER(WHERE last_seen>now()-interval '45 seconds'),'waiting',count(*) FILTER(WHERE last_seen<=now()-interval '45 seconds' AND last_seen>now()-interval '120 seconds')) FROM devices WHERE user_id=$1 AND NOT revoked").bind(u.id).fetch_one(&s.db).await?;
     Ok(Json(
-        json!({"stats":stats,"mode":"observe","remote_execution":false,"updated_at":Utc::now(),"client_integration":"v0.14.0 支持自动绑定、手动配对和设备心跳"}),
+        json!({"stats":stats,"mode":if s.provider.is_some(){"remote"}else{"observe"},"remote_execution":s.provider.is_some(),"updated_at":Utc::now(),"client_integration":"v0.15.0 支持单独授权服务器失联保护"}),
     ))
 }
 pub async fn overview(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Json<Value>> {
@@ -476,7 +476,7 @@ pub async fn overview(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Json
     let stats:Value=sqlx::query_scalar("SELECT jsonb_build_object('users',(SELECT count(*) FROM users WHERE NOT disabled),'disabled_users',(SELECT count(*) FROM users WHERE disabled),'web_users',(SELECT count(DISTINCT s.user_id) FROM sessions s JOIN users u ON u.id=s.user_id WHERE NOT u.disabled AND s.expires_at>now() AND s.last_seen>now()-interval '5 minutes'),'online_users',(SELECT count(DISTINCT user_id) FROM devices WHERE NOT revoked AND last_seen>now()-interval '45 seconds'),'online_devices',(SELECT count(*) FROM devices WHERE NOT revoked AND last_seen>now()-interval '45 seconds'),'devices',(SELECT count(*) FROM devices WHERE NOT revoked),'scheduler_at',(SELECT updated_at FROM service_state WHERE key='scheduler'))").fetch_one(&s.db).await?;
     let metrics:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('time',bucket,'devices',online_devices,'users',online_users,'web_users',web_users) FROM metrics WHERE bucket>now()-interval '24 hours' ORDER BY bucket").fetch_all(&s.db).await?;
     Ok(Json(
-        json!({"stats":stats,"metrics":metrics,"mode":"observe","updated_at":Utc::now()}),
+        json!({"stats":stats,"metrics":metrics,"mode":if s.provider.is_some(){"remote"}else{"observe"},"updated_at":Utc::now()}),
     ))
 }
 pub async fn users(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Json<Value>> {

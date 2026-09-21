@@ -83,6 +83,37 @@ impl Default for Panel {
     }
 }
 impl Panel {
+    #[cfg(test)]
+    pub(crate) fn remote_fixture(&mut self, enabled: bool, pending: bool) {
+        self.agent = Some(crate::platform_device::Agent::fixture(
+            crate::platform_device::View {
+                owner: "演示平台用户".into(),
+                device_id: "12345678-1234-1234-1234-123456789abc".into(),
+                account: "雷神账号 · ***1234".into(),
+                active: true,
+                pending_disable: pending,
+                remote: crate::platform_api::RemoteStatus {
+                    available: true,
+                    enabled,
+                    revision: 1,
+                    protection: if enabled { "armed" } else { "off" }.into(),
+                    credential: if enabled { "valid" } else { "none" }.into(),
+                    last_result: "none".into(),
+                    ..Default::default()
+                },
+                remote_message: if pending {
+                    "服务器关闭未确认，可能仍会超时暂停；正在重试。"
+                } else if enabled {
+                    "服务器已确认远程保护生效"
+                } else {
+                    "远程保护已关闭"
+                }
+                .into(),
+                ..Default::default()
+            },
+        ));
+    }
+
     pub(crate) fn start_device_agent(
         &mut self,
         shared: std::sync::Arc<std::sync::Mutex<crate::shared::Shared>>,

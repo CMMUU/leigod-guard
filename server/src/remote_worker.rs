@@ -65,9 +65,10 @@ async fn tick(s: &AppState, healthy: bool) -> ApiResult<()> {
     remote::lock(&mut tx).await?;
     // An interrupted scheduler or public ingress failure gets a full reconnect window.
     sqlx::query("UPDATE remote_service SET warmup_until=CASE WHEN NOT $1 OR NOT ingress_ok OR last_tick<now()-interval '20 seconds' THEN now()+interval '120 seconds' ELSE warmup_until END,ingress_ok=$1,last_tick=now(),reason=CASE WHEN blocked THEN reason WHEN NOT $1 THEN 'ingress_unavailable' WHEN NOT ingress_ok THEN 'reconnect' WHEN warmup_until<=now() THEN 'ready' ELSE reason END WHERE singleton").bind(healthy).execute(&mut *tx).await?;
-    // Five or more protected accounts lost in the same 30-second band, >=60% of
-    // armed accounts, is an incident requiring explicit admin acknowledgement.
-    let mass:bool=sqlx::query_scalar("WITH seen AS(SELECT a.id,max(g.last_seen) AS seen FROM remote_accounts a JOIN remote_grants g ON g.account_id=a.id AND g.enabled WHERE a.credential_state='valid' GROUP BY a.id HAVING bool_and(g.armed_at IS NOT NULL)), recent AS(SELECT count(*) FILTER(WHERE seen<now()-interval '120 seconds' AND seen>now()-interval '150 seconds') AS lost,count(*) AS total FROM seen) SELECT lost>=5 AND lost*5>=total*3 FROM recent").fetch_one(&mut *tx).await?;
+    // Detect a cohort before the normal 120-second deadline. A 30-second band
+    // of >=5 accounts already missing for 90s (>=60% of armed accounts) is an
+    // incident. Historical cohorts also remain blocked across a server restart.
+    let mass:bool=sqlx::query_scalar("WITH seen AS(SELECT a.id,max(g.last_seen) AS seen FROM remote_accounts a JOIN remote_grants g ON g.account_id=a.id AND g.enabled WHERE a.credential_state='valid' GROUP BY a.id HAVING bool_and(g.armed_at IS NOT NULL)), cohorts AS(SELECT count(*) OVER(ORDER BY seen RANGE BETWEEN interval '30 seconds' PRECEDING AND CURRENT ROW) AS lost FROM seen WHERE seen<now()-interval '90 seconds') SELECT coalesce(max(lost),0)>=5 AND coalesce(max(lost),0)*5>=(SELECT count(*)*3 FROM seen) FROM cohorts").fetch_one(&mut *tx).await?;
     if mass {
         sqlx::query(
             "UPDATE remote_service SET blocked=true,reason='mass_disconnect' WHERE singleton",

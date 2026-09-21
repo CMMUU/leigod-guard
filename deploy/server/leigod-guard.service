@@ -1,5 +1,5 @@
 [Unit]
-Description=Leigod Guard observation backend
+Description=Leigod Guard backend
 After=network-online.target docker.service
 Wants=network-online.target
 
@@ -8,6 +8,8 @@ Type=simple
 DynamicUser=yes
 WorkingDirectory=/opt/leigod-guard/current
 EnvironmentFile=/opt/leigod-guard/secrets/server.env
+LoadCredential=remote-key:/opt/leigod-guard/secrets/remote.key
+Environment=REMOTE_KEY_FILE=%d/remote-key
 ExecStart=/opt/leigod-guard/current/leigod-guard-server
 Restart=on-failure
 RestartSec=5

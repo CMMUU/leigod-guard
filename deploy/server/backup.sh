@@ -13,3 +13,8 @@ docker exec -i postgresql pg_restore --list < "$backup_file.tmp" > /dev/null
 mv "$backup_file.tmp" "$backup_file"
 find "$backup_dir" -maxdepth 1 -type f -name 'guard-*.dump' -mtime +7 -delete
 printf 'Leigod Guard backup verified and saved.\n'
+# Installing backup-recipient.txt opts this deployment into encrypted offsite backup.
+if [ -f /opt/leigod-guard/secrets/backup-recipient.txt ]; then
+ python3 /opt/leigod-guard/bin/backup-offsite.py "$backup_file"
+ find "$backup_dir" -maxdepth 1 -type f -name 'guard-*.tar.age' -mtime +7 -delete
+fi
