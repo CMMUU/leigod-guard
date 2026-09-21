@@ -12,7 +12,7 @@
 
 **自建后台：** 服务端源码位于 [server/](server/)，支持 [Docker Compose 或 Linux 可执行文件部署](docs/SERVER_DEPLOYMENT.md)。说明包含 PostgreSQL、管理员初始化、邮件、HTTPS、远程保护及客户端连接地址配置。
 
-**v0.15.1 成品直达：** [Windows 安装版 EXE](https://github.com/CMMUU/leigod-guard/releases/download/v0.15.1/leigod-guard-v0.15.1-windows-x64-setup.exe) · [绿色免安装 ZIP](https://github.com/CMMUU/leigod-guard/releases/download/v0.15.1/leigod-guard-v0.15.1-windows-x64.zip) · [SHA-256 校验](https://github.com/CMMUU/leigod-guard/releases/download/v0.15.1/SHA256SUMS.txt)。国内用户可使用上方 Gitee 发布页或应用内更新。
+**v0.15.2 成品直达：** [Windows 安装版 EXE](https://github.com/CMMUU/leigod-guard/releases/download/v0.15.2/leigod-guard-v0.15.2-windows-x64-setup.exe) · [绿色免安装 ZIP](https://github.com/CMMUU/leigod-guard/releases/download/v0.15.2/leigod-guard-v0.15.2-windows-x64.zip) · [SHA-256 校验](https://github.com/CMMUU/leigod-guard/releases/download/v0.15.2/SHA256SUMS.txt)。国内用户可使用上方 Gitee 发布页或应用内更新。
 
 两处发布页均提供**安装版 EXE、绿色免安装 ZIP 和校验文件**。一般用户选择安装版；希望解压即用的用户选择绿色版。已有用户可在「关于与更新」中检查新版，点击「下载并自动更新」完成升级。
 
@@ -80,7 +80,9 @@ Leigod Guard is an independent, open-source Windows companion for the Leigod gam
 
 在客户端「平台账号」或 [上海网页平台](https://111.229.216.86) 使用邮箱验证码登录。首次验证成功自动创建普通用户；管理员和已有密码账号仍可使用账号密码。无需平台账号也能使用本地守护。
 
-- 勾选「记住登录状态」后有效期为 **30 天**；不勾选为 24 小时。客户端仅用当前 Windows 用户的 DPAPI 加密保存会话，不保存平台密码或验证码。
+- 邮箱输入默认留空，仅回填曾成功登录的邮箱或旧版有效会话中的邮箱。邮箱验证码与账号密码使用独立输入框，切换时各自保留输入，不互相覆盖；发送验证码或登录失败不会记为登录历史。
+- 在「账号密码」下点击「保存账号和密码」，才会用当前 Windows 用户的 DPAPI 加密保存并在下次打开时回填；不会因此自动登录。退出平台后仍保留，可点击「清除已保存的账号」删除密码及登录记录，该按钮不退出当前会话、不影响设备保护。验证码始终不保存。
+- 勾选「记住登录状态」后有效期为 **30 天**；不勾选为 24 小时。会话保存与保存账号密码相互独立，均使用当前 Windows 用户的 DPAPI 加密。
 - 客户端登录后自动绑定本机，约每 15 秒上报在线、是否检测到游戏、准备游戏保护时间及版本。未授权远程保护时，雷神账号只关联摘要和脱敏尾号。远程保护需单独同意上传登录 token；不上传密码、游戏名单或完整进程列表。
 - 手动添加：网页「设备 → 配对设备」生成一次性配对码，在客户端「平台账号」的本机设备区域粘贴。配对码 10 分钟有效；已登录客户端只能兑换当前平台账号的码。
 - 设备授权独立加密保存在 `platform-device.dat`；托盘运行和重启后可继续上报。退出平台账号或「停止本机上报」会请求关闭本机远程保护并停止上报；断网时显示关闭未确认并持久化重试。网页可撤销设备；重新授权需手动绑定。更换设备所属账号，先在原账号网页撤销并解除绑定。
