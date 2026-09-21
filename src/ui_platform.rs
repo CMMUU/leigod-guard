@@ -1,7 +1,7 @@
 //! Native platform account panel. Rendering emits actions; only the live update
 //! loop executes them. Offscreen fixtures never read credentials or use the network.
 use crate::platform_api::{Api, CodeChallenge, Error, Session, ORIGIN_URL};
-use crate::platform_store::Store;
+use crate::platform_store::{LoginData, Store};
 use crate::ui_theme as theme;
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
@@ -10,6 +10,8 @@ use std::time::{Duration, Instant};
 pub(crate) enum Action {
     Login,
     SendCode,
+    SaveLogin,
+    ClearLogin,
     Bind,
     Pair,
     StopDevice,
@@ -21,7 +23,7 @@ pub(crate) enum Action {
 #[derive(Clone, Copy)]
 enum Kind {
     SendCode,
-    Login,
+    Login { email: bool },
     Validate,
     Logout,
 }
@@ -37,9 +39,11 @@ struct Pending {
 }
 
 pub(crate) struct Panel {
+    pub(crate) email: String,
     pub(crate) username: String,
     pub(crate) password: String,
     pub(crate) email_mode: bool,
+    login_data: LoginData,
     code: String,
     challenge: Option<(String, CodeChallenge)>,
     next_code: Instant,
@@ -60,9 +64,11 @@ pub(crate) struct Panel {
 impl Default for Panel {
     fn default() -> Self {
         Self {
+            email: String::new(),
             username: String::new(),
             password: String::new(),
             email_mode: true,
+            login_data: LoginData::default(),
             code: String::new(),
             challenge: None,
             next_code: Instant::now(),
@@ -129,9 +135,40 @@ impl Panel {
         }
     }
     pub(crate) fn restore(&mut self, store: &impl Store, ctx: &egui::Context) {
+        match store.load_login() {
+            Ok(login) => {
+                self.email = login.email.clone().unwrap_or_default();
+                self.username = login.username.clone().unwrap_or_default();
+                self.password = login.password.clone().unwrap_or_default();
+                self.login_data = login;
+            }
+            Err(message) => {
+                self.message = message;
+                self.error = true;
+            }
+        }
         match store.load() {
             Ok(Some(session)) => {
-                self.username = session.user.username.clone();
+                // Migrate old session-only installs without putting an admin name
+                // into the email form or replacing explicitly saved credentials.
+                if Api::valid_email(&session.user.username) {
+                    if self.email.is_empty() {
+                        self.email = session.user.username.clone();
+                    }
+                } else if self.username.is_empty() {
+                    self.username = session.user.username.clone();
+                }
+                if self.login_data == LoginData::default() {
+                    let mut login = self.login_data.clone();
+                    if Api::valid_email(&session.user.username) {
+                        login.email = Some(session.user.username.clone());
+                    } else {
+                        login.username = Some(session.user.username.clone());
+                    }
+                    if store.save_login(&login).is_ok() {
+                        self.login_data = login;
+                    }
+                }
                 self.remember = true;
                 self.session = Some(session);
                 self.dispatch(Action::Refresh, store, ctx);
@@ -163,7 +200,7 @@ impl Panel {
                 // If the application discarded a late login, revoke it best-effort.
                 if let Err(mpsc::SendError(Ok(Completed::Identity(session)))) = sender.send(result)
                 {
-                    if matches!(kind, Kind::Login) {
+                    if matches!(kind, Kind::Login { .. }) {
                         if let Ok(api) = Api::new() {
                             let _ = api.logout(&session);
                         }
@@ -188,11 +225,48 @@ impl Panel {
         }
         self.error = false;
         match action {
+            Action::SaveLogin => {
+                if !Api::valid_input(&self.username, &self.password) {
+                    self.message = "请输入有效的平台账号和密码后保存。".into();
+                    self.error = true;
+                    return;
+                }
+                let mut login = self.login_data.clone();
+                login.username = Some(self.username.trim().to_owned());
+                login.password = Some(self.password.clone());
+                match store.save_login(&login) {
+                    Ok(()) => {
+                        self.login_data = login;
+                        self.message =
+                            "账号和密码已加密保存，下次打开将回填；不会自动登录。".into();
+                    }
+                    Err(message) => {
+                        self.message = message;
+                        self.error = true;
+                    }
+                }
+            }
+            Action::ClearLogin => match store.clear_login() {
+                Ok(()) => {
+                    self.login_data = LoginData::default();
+                    self.email.clear();
+                    self.username.clear();
+                    self.password.clear();
+                    self.code.clear();
+                    self.challenge = None;
+                    self.message =
+                        "已清除本机保存的账号、密码和邮箱记录。当前登录状态不变。".into();
+                }
+                Err(message) => {
+                    self.message = message;
+                    self.error = true;
+                }
+            },
             Action::SendCode => {
                 if Instant::now() < self.next_code {
                     return;
                 }
-                let email = self.username.trim().to_ascii_lowercase();
+                let email = self.email.trim().to_ascii_lowercase();
                 if !Api::valid_email(&email) {
                     self.message = "请输入有效邮箱。".into();
                     self.error = true;
@@ -242,11 +316,11 @@ impl Panel {
             }
             Action::Login => {
                 let valid = if self.email_mode {
-                    Api::valid_email(&self.username)
+                    Api::valid_email(&self.email)
                         && self.code.len() == 6
                         && self.code.bytes().all(|b| b.is_ascii_digit())
                         && self.challenge.as_ref().is_some_and(|(email, _)| {
-                            email == &self.username.trim().to_ascii_lowercase()
+                            email == &self.email.trim().to_ascii_lowercase()
                         })
                 } else {
                     Api::valid_input(&self.username, &self.password)
@@ -265,8 +339,16 @@ impl Panel {
                 }
                 self.cleanup_failed = false;
                 self.logout_retry = None;
-                let username = self.username.trim().to_owned();
-                let password = std::mem::take(&mut self.password);
+                let username = if self.email_mode {
+                    self.email.trim().to_ascii_lowercase()
+                } else {
+                    self.username.trim().to_owned()
+                };
+                let password = if self.email_mode {
+                    String::new()
+                } else {
+                    std::mem::take(&mut self.password)
+                };
                 self.message = "正在登录上海平台…".into();
                 let email_mode = self.email_mode;
                 let request_id = self
@@ -274,9 +356,13 @@ impl Panel {
                     .as_ref()
                     .map(|(_, c)| c.request_id.clone())
                     .unwrap_or_default();
-                let code = std::mem::take(&mut self.code);
+                let code = if email_mode {
+                    std::mem::take(&mut self.code)
+                } else {
+                    String::new()
+                };
                 let remember = self.remember;
-                self.start(Kind::Login, ctx, move || {
+                self.start(Kind::Login { email: email_mode }, ctx, move || {
                     let api = Api::new()?;
                     if email_mode {
                         api.login_code(&username, &request_id, &code, remember)
@@ -304,7 +390,10 @@ impl Panel {
                 self.challenge = None;
                 let clearing = store.clear();
                 self.cleanup_failed = clearing.is_err();
-                self.password.clear();
+                self.password = self.login_data.password.clone().unwrap_or_default();
+                if self.login_data.password.is_some() {
+                    self.username = self.login_data.username.clone().unwrap_or_default();
+                }
                 self.verified = false;
                 self.logout_retry = self.session.take().or(self.logout_retry.take());
                 if let Some(session) = self.logout_retry.clone() {
@@ -335,9 +424,34 @@ impl Panel {
                 self.error = false;
             }
             Ok(Completed::Identity(session)) => {
-                self.username = session.user.username.clone();
                 self.message = "平台登录有效。".into();
                 self.error = false;
+                // Remember successful identifiers only. Passwords are stored solely
+                // by SaveLogin; never attach an older password to a new account.
+                let mut login = self.login_data.clone();
+                match kind {
+                    Kind::Login { email: true } => {
+                        self.email = session.user.username.clone();
+                        login.email = Some(self.email.clone());
+                    }
+                    Kind::Login { email: false } => {
+                        self.username = session.user.username.clone();
+                        if login.username.as_ref() != Some(&self.username) {
+                            login.password = None;
+                        }
+                        login.username = Some(self.username.clone());
+                    }
+                    _ => {}
+                }
+                if login != self.login_data {
+                    match store.save_login(&login) {
+                        Ok(()) => self.login_data = login,
+                        Err(message) => {
+                            self.message = message;
+                            self.error = true;
+                        }
+                    }
+                }
                 if self.remember {
                     if let Err(message) = store.save(&session) {
                         self.cleanup_failed = store.clear().is_err();
@@ -350,7 +464,7 @@ impl Panel {
                     }
                 }
                 if let Some(agent) = &self.agent {
-                    agent.session(session.clone(), matches!(kind, Kind::Login));
+                    agent.session(session.clone(), matches!(kind, Kind::Login { .. }));
                 }
                 self.session = Some(session);
                 self.verified = true;
@@ -467,6 +581,12 @@ impl Panel {
                 {
                     self.action = Some(Action::Logout);
                 }
+                if ui
+                    .add_enabled(!busy, egui::Button::new("清除已保存的账号"))
+                    .clicked()
+                {
+                    self.action = Some(Action::ClearLogin);
+                }
             });
         } else {
             ui.add_enabled_ui(!busy, |ui| {
@@ -480,14 +600,15 @@ impl Panel {
                 } else {
                     "平台账号"
                 });
+                let (identifier, id, hint) = if self.email_mode {
+                    (&mut self.email, "platform-email", "用于接收验证码的邮箱")
+                } else {
+                    (&mut self.username, "platform-user", "已有账号或管理员账号")
+                };
                 ui.add(
-                    egui::TextEdit::singleline(&mut self.username)
-                        .id_salt("platform-user")
-                        .hint_text(if self.email_mode {
-                            "用于接收验证码的邮箱"
-                        } else {
-                            "已有账号或管理员账号"
-                        })
+                    egui::TextEdit::singleline(identifier)
+                        .id_salt(id)
+                        .hint_text(hint)
                         .desired_width(ui.available_width().min(400.0))
                         .char_limit(254),
                 );
@@ -531,9 +652,26 @@ impl Panel {
                     )
                 };
                 ui.add_space(8.0);
+                ui.horizontal_wrapped(|ui| {
+                    if !self.email_mode && ui.button("保存账号和密码").clicked() {
+                        self.action = Some(Action::SaveLogin);
+                    }
+                    if ui.button("清除已保存的账号").clicked() {
+                        self.action = Some(Action::ClearLogin);
+                    }
+                });
+                if !self.email_mode {
+                    ui.label(
+                        egui::RichText::new(
+                            "点击保存才会加密保留账号和密码；退出登录后仍保留，可随时清除。",
+                        )
+                        .size(12.0)
+                        .color(theme::MUTED),
+                    );
+                }
                 ui.checkbox(&mut self.remember, "记住登录状态（30 天）");
                 ui.label(
-                    egui::RichText::new("仅在当前 Windows 用户下加密保存会话，不保存平台密码。")
+                    egui::RichText::new("登录状态单独加密保存；邮箱验证码不会保存。")
                         .size(12.0)
                         .color(theme::MUTED),
                 );
@@ -699,10 +837,30 @@ mod tests {
     #[derive(Default)]
     struct MemoryStore {
         session: RefCell<Option<Session>>,
+        login: RefCell<LoginData>,
         fail_write: bool,
         fail_clear: bool,
     }
     impl Store for MemoryStore {
+        fn load_login(&self) -> Result<LoginData, String> {
+            Ok(self.login.borrow().clone())
+        }
+        fn save_login(&self, login: &LoginData) -> Result<(), String> {
+            if self.fail_write {
+                Err("账号保存失败".into())
+            } else {
+                *self.login.borrow_mut() = login.clone();
+                Ok(())
+            }
+        }
+        fn clear_login(&self) -> Result<(), String> {
+            if self.fail_clear {
+                Err("账号清除失败".into())
+            } else {
+                *self.login.borrow_mut() = LoginData::default();
+                Ok(())
+            }
+        }
         fn load(&self) -> Result<Option<Session>, String> {
             Ok(self.session.borrow().clone())
         }
@@ -742,7 +900,7 @@ mod tests {
         let store = MemoryStore::default();
         let mut panel = Panel::default();
         panel.complete(
-            Kind::Login,
+            Kind::Login { email: false },
             Ok(Completed::Identity(session())),
             &store,
             Instant::now(),
@@ -751,7 +909,7 @@ mod tests {
         assert!(store.session.borrow().is_none());
         panel.remember = true;
         panel.complete(
-            Kind::Login,
+            Kind::Login { email: false },
             Ok(Completed::Identity(session())),
             &store,
             Instant::now(),
@@ -768,7 +926,7 @@ mod tests {
             ..Panel::default()
         };
         panel.complete(
-            Kind::Login,
+            Kind::Login { email: false },
             Ok(Completed::Identity(session())),
             &store,
             Instant::now(),
@@ -797,7 +955,7 @@ mod tests {
             ..Panel::default()
         };
         panel.complete(
-            Kind::Login,
+            Kind::Login { email: false },
             Ok(Completed::Identity(session())),
             &store,
             Instant::now(),
@@ -827,7 +985,7 @@ mod tests {
         let (sender, receiver) = mpsc::channel();
         let mut panel = Panel {
             pending: Some(Pending {
-                kind: Kind::Login,
+                kind: Kind::Login { email: false },
                 started: Instant::now() - Duration::from_secs(30),
                 receiver,
             }),
@@ -837,6 +995,9 @@ mod tests {
         assert!(panel.pending.is_none());
         assert!(sender.send(Ok(Completed::Identity(session()))).is_err());
         assert!(panel.session.is_none());
+        assert!(panel.email.is_empty());
+        assert!(panel.username.is_empty());
+        assert!(panel.password.is_empty());
         assert!(!panel.verified);
     }
     #[test]
@@ -850,7 +1011,7 @@ mod tests {
     fn email_challenge_cannot_be_used_after_changing_address() {
         let store = MemoryStore::default();
         let mut panel = Panel {
-            username: "second@example.com".into(),
+            email: "second@example.com".into(),
             code: "123456".into(),
             challenge: Some((
                 "first@example.com".into(),
@@ -888,5 +1049,135 @@ mod tests {
         assert!(panel.challenge.is_some());
         assert!(panel.session.is_none());
         assert!(!panel.verified);
+    }
+
+    #[test]
+    fn credentials_require_explicit_save_and_restore_independently_from_session() {
+        let store = MemoryStore::default();
+        let ctx = egui::Context::default();
+        let mut panel = Panel::default();
+        panel.restore(&store, &ctx);
+        assert!(panel.email.is_empty() && panel.username.is_empty() && panel.password.is_empty());
+        panel.email = "unsent@example.com".into();
+        panel.username = " saved-admin ".into();
+        panel.password = "explicit-secret-fixture".into();
+        assert!(store.login.borrow().password.is_none());
+        panel.dispatch(Action::SaveLogin, &store, &ctx);
+        assert!(!panel.error);
+        assert!(panel.pending.is_none());
+        let mut restored = Panel::default();
+        restored.restore(&store, &ctx);
+        assert!(restored.email.is_empty());
+        assert_eq!(restored.username, "saved-admin");
+        assert_eq!(restored.password, "explicit-secret-fixture");
+        assert!(restored.session.is_none() && restored.pending.is_none());
+        assert!(!restored.remember);
+        restored.username = "unsaved-other-account".into();
+        restored.dispatch(Action::Logout, &store, &ctx);
+        assert_eq!(restored.username, "saved-admin");
+        assert_eq!(restored.password, "explicit-secret-fixture");
+        assert!(store.login.borrow().password.is_some());
+    }
+
+    #[test]
+    fn successful_email_history_survives_session_expiry_without_overwriting_password_form() {
+        let store = MemoryStore::default();
+        let ctx = egui::Context::default();
+        let mut panel = Panel::default();
+        panel.username = "saved-admin".into();
+        panel.password = "explicit-secret-fixture".into();
+        panel.dispatch(Action::SaveLogin, &store, &ctx);
+        panel.email = "failed@example.com".into();
+        panel.complete(
+            Kind::Login { email: true },
+            Err(Error::Network),
+            &store,
+            Instant::now(),
+        );
+        assert!(store.login.borrow().email.is_none());
+        let mut email_session = session();
+        email_session.user.username = "logged-in@example.com".into();
+        panel.complete(
+            Kind::Login { email: true },
+            Ok(Completed::Identity(email_session)),
+            &store,
+            Instant::now(),
+        );
+        assert_eq!(panel.username, "saved-admin");
+        assert_eq!(panel.password, "explicit-secret-fixture");
+        panel.complete(
+            Kind::Validate,
+            Err(Error::Unauthorized),
+            &store,
+            Instant::now(),
+        );
+        let mut restored = Panel::default();
+        restored.restore(&store, &ctx);
+        assert_eq!(restored.email, "logged-in@example.com");
+        assert_eq!(restored.username, "saved-admin");
+        assert_eq!(restored.password, "explicit-secret-fixture");
+        assert!(restored.session.is_none() && restored.pending.is_none());
+        assert!(restored.code.is_empty() && restored.challenge.is_none());
+    }
+
+    #[test]
+    fn switching_password_accounts_never_reuses_the_old_saved_password() {
+        let store = MemoryStore::default();
+        let mut panel = Panel::default();
+        panel.username = "previous-user".into();
+        panel.password = "old-secret-fixture".into();
+        panel.dispatch(Action::SaveLogin, &store, &egui::Context::default());
+        panel.complete(
+            Kind::Login { email: false },
+            Ok(Completed::Identity(session())),
+            &store,
+            Instant::now(),
+        );
+        assert_eq!(store.login.borrow().username.as_deref(), Some("test-user"));
+        assert!(store.login.borrow().password.is_none());
+    }
+
+    #[test]
+    fn clear_saved_login_preserves_current_session_and_is_not_undone_by_validation() {
+        let store = MemoryStore::default();
+        let mut panel = Panel {
+            remember: true,
+            ..Panel::default()
+        };
+        panel.complete(
+            Kind::Login { email: false },
+            Ok(Completed::Identity(session())),
+            &store,
+            Instant::now(),
+        );
+        panel.dispatch(Action::ClearLogin, &store, &egui::Context::default());
+        assert!(panel.verified && panel.session.is_some());
+        assert!(store.session.borrow().is_some());
+        assert!(panel.email.is_empty() && panel.username.is_empty() && panel.password.is_empty());
+        panel.complete(
+            Kind::Validate,
+            Ok(Completed::Identity(session())),
+            &store,
+            Instant::now(),
+        );
+        assert!(store.login.borrow().username.is_none());
+    }
+
+    #[test]
+    fn failed_credential_save_or_clear_does_not_claim_success() {
+        let store = MemoryStore {
+            fail_write: true,
+            fail_clear: true,
+            ..MemoryStore::default()
+        };
+        let mut panel = Panel::default();
+        panel.username = "saved-admin".into();
+        panel.password = "secret-fixture".into();
+        panel.dispatch(Action::SaveLogin, &store, &egui::Context::default());
+        assert!(panel.error && panel.login_data.password.is_none());
+        assert!(panel.message.contains("失败"));
+        panel.dispatch(Action::ClearLogin, &store, &egui::Context::default());
+        assert!(panel.error);
+        assert_eq!(panel.password, "secret-fixture");
     }
 }

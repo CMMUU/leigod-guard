@@ -786,6 +786,20 @@ fn render_apple_preview() {
     let gpu = Offscreen::new();
     for (suffix, size) in [("", [1180.0, 780.0]), ("-narrow", [680.0, 460.0])] {
         let (ctx, mut app) = fixture();
+        app.page = Page::Platform;
+        app.platform.email_mode = false;
+        app.platform.username = "demo-admin".into();
+        app.platform.password = "masked-demo-only".into();
+        gpu.save(
+            &ctx,
+            &mut app,
+            size,
+            1.0,
+            &output.join(format!("platform-password{suffix}.png")),
+        );
+    }
+    for (suffix, size) in [("", [1180.0, 780.0]), ("-narrow", [680.0, 460.0])] {
+        let (ctx, mut app) = fixture();
         {
             let mut shared = app.shared.lock().unwrap();
             shared.startup_pause_status = StartupPauseStatus::default();
@@ -970,6 +984,47 @@ fn platform_form_emits_actions_without_touching_accelerator_credentials() {
         let output = frame(&ctx, &mut app, size, vec![]);
         text_rect(&output.shapes, "平台账号");
     }
+}
+
+#[test]
+fn platform_login_tabs_keep_separate_inputs_and_save_only_by_explicit_action() {
+    let (ctx, mut app) = fixture();
+    click(&ctx, &mut app, "平台账号");
+    assert!(app.platform.email.is_empty() && app.platform.username.is_empty());
+    click(&ctx, &mut app, "用于接收验证码的邮箱");
+    frame(
+        &ctx,
+        &mut app,
+        [1180.0, 780.0],
+        vec![Event::Text("mail@example.com".into())],
+    );
+    click(&ctx, &mut app, "账号密码");
+    assert!(app.platform.username.is_empty());
+    click(&ctx, &mut app, "已有账号或管理员账号");
+    frame(
+        &ctx,
+        &mut app,
+        [1180.0, 780.0],
+        vec![Event::Text("demo-admin".into())],
+    );
+    app.platform.password = "masked-demo-only".into();
+    click(&ctx, &mut app, "邮箱验证码");
+    assert_eq!(app.platform.email, "mail@example.com");
+    click(&ctx, &mut app, "账号密码");
+    assert_eq!(app.platform.username, "demo-admin");
+    assert_eq!(app.platform.password, "masked-demo-only");
+    assert!(app.platform.action.is_none());
+    click(&ctx, &mut app, "保存账号和密码");
+    assert_eq!(
+        app.platform.action,
+        Some(crate::ui_platform::Action::SaveLogin)
+    );
+    click(&ctx, &mut app, "清除已保存的账号");
+    assert_eq!(
+        app.platform.action,
+        Some(crate::ui_platform::Action::ClearLogin)
+    );
+    assert!(app.shared.lock().unwrap().manual_cmd.is_none());
 }
 
 #[test]
