@@ -223,6 +223,7 @@ mod tests {
         store.save(&session).unwrap();
         assert!(store.load().is_err());
         assert!(store.load_login().unwrap() == updated);
+        session.expires_at = chrono::Utc::now().timestamp() + 3600;
         session.token = "c".repeat(64);
         store.save(&session).unwrap();
         assert_eq!(store.load().unwrap().unwrap().token, session.token);
