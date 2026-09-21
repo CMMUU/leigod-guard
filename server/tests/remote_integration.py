@@ -113,13 +113,13 @@ c.call('/devices/'+l.id+'/revoke',{});assert sql(f"SELECT enabled FROM remote_gr
 admin.call('/admin/users/'+cuid+'/status',{'disabled':True});assert sql(f"SELECT count(*) FROM remote_grants g JOIN devices d ON d.id=g.device_id WHERE d.user_id='{cuid}' AND g.enabled;")=='0'
 check('device/user revocation cancels durable grants atomically')
 # A crashed worker retains its lease; another worker recovers only after expiry.
-o=Device(b);o.beat();to='lease-'+nonce;mock(to,account='lease-account',paused=True);o.authorize(to);o.beat();o.stale();aid=o.account()
+o=Device(b);o.beat();to='lease-'+nonce;mock(to,account='lease-account',paused=True);o.authorize(to);o.beat();sql("UPDATE remote_service SET warmup_until=now()+interval '120 seconds';");o.stale();aid=o.account()
 sql(f"INSERT INTO remote_jobs(id,account_id,epoch,credential_version,state,attempts,lease_id,lease_until) SELECT gen_random_uuid(),id,epoch,credential_version,'running',1,gen_random_uuid(),now()+interval '60 seconds' FROM remote_accounts WHERE id='{aid}';")
 ready();time.sleep(6);assert stats(to)['info_calls']==1
 sql(f"UPDATE remote_jobs SET lease_until=now()-interval '1 second' WHERE account_id='{aid}';")
 wait(lambda:o.terminal('confirmed'));assert stats(to)['pause_calls']==0 and o.jobs()[0]['attempts']==2;o.off()
 check('live leases prevent double claim; expired lease recovers by querying first')
-p=Device(b);p.beat();tp='expiry-'+nonce;mock(tp,account='expiry-account');p.authorize(tp);p.beat();p.stale();aid=p.account()
+p=Device(b);p.beat();tp='expiry-'+nonce;mock(tp,account='expiry-account');p.authorize(tp);p.beat();sql("UPDATE remote_service SET warmup_until=now()+interval '120 seconds';");p.stale();aid=p.account()
 sql(f"INSERT INTO remote_jobs(id,account_id,epoch,credential_version,expires_at) SELECT gen_random_uuid(),id,epoch,credential_version,now()-interval '1 second' FROM remote_accounts WHERE id='{aid}';")
 ready();wait(lambda:p.terminal('unconfirmed'));assert stats(tp)['pause_calls']==0;p.off()
 check('expired durable task is terminal without sending a pause')
@@ -140,7 +140,7 @@ n=Device(b);n.beat();tn='warmup-'+nonce;mock(tn,account='warmup-account');n.auth
 check('restart/ingress reconnect observation window suppresses old offline tasks')
 if os.environ.get('TEST_SERVER_PID'):
  import atexit,signal,pathlib
- r=Device(b);r.beat();tr='restart-'+nonce;mock(tr,account='restart-account');r.authorize(tr);r.beat();r.stale();aid=r.account()
+ r=Device(b);r.beat();tr='restart-'+nonce;mock(tr,account='restart-account');r.authorize(tr);r.beat();sql("UPDATE remote_service SET warmup_until=now()+interval '120 seconds';");r.stale();aid=r.account()
  sql("UPDATE remote_service SET warmup_until=now()+interval '120 seconds';")
  sql(f"INSERT INTO remote_jobs(id,account_id,epoch,credential_version) SELECT gen_random_uuid(),id,epoch,credential_version FROM remote_accounts WHERE id='{aid}' ON CONFLICT DO NOTHING;")
  oldid=sql(f"SELECT id FROM remote_jobs WHERE account_id='{aid}';")
@@ -154,7 +154,7 @@ if os.environ.get('TEST_SERVER_PID'):
   try:return admin.call('/health')['remote_execution']
   except urllib.error.URLError:return False
  wait(up)
- assert admin.call('/remote')['service']['state']=='warming';time.sleep(6);assert stats(tr)['pause_calls']==0
+ wait(lambda:admin.call('/remote')['service']['state']=='warming');time.sleep(6);assert stats(tr)['pause_calls']==0
  assert sql(f"SELECT id FROM remote_jobs WHERE account_id='{aid}';")==oldid
  ready();wait(lambda:r.terminal('confirmed'));assert stats(tr)['pause_calls']==1 and len(r.jobs())==1;r.off()
  check('real backend process restart preserves queued task and enforces reconnect observation')
