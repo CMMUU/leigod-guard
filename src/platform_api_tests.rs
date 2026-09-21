@@ -291,3 +291,85 @@ fn remote_consent_uses_body_and_device_bearer_with_versioned_revocation() {
         assert!(!r.contains("cookie:"));
     }
 }
+
+#[test]
+fn remote_errors_explain_known_reasons_without_echoing_response_secrets() {
+    let id = "12345678-1234-1234-1234-123456789abc";
+    let binding = DeviceBinding {
+        device_id: id.into(),
+        device_token: "d".repeat(64),
+        owner_id: id.into(),
+        owner: "fixture".into(),
+        sequence: 0,
+    };
+    for (status, message, expected) in [
+        (
+            400,
+            "雷神登录已失效，请在客户端重新登录",
+            Error::LeigodCredential,
+        ),
+        (
+            400,
+            "无法验证雷神账号唯一身份，未开启保护",
+            Error::LeigodIdentity,
+        ),
+        (
+            409,
+            "该雷神账号已属于其他平台账号",
+            Error::RemoteAccountOwned,
+        ),
+        (
+            409,
+            "客户端运行代次已变化，请重新连接",
+            Error::RemoteStateChanged,
+        ),
+        (409, "远程授权已变化，请重新确认", Error::RemoteStateChanged),
+        (
+            409,
+            "雷神账号已切换，请关闭旧保护后重新开启",
+            Error::RemoteStateChanged,
+        ),
+        (
+            409,
+            "远程授权已变化，请刷新后重试",
+            Error::RemoteStateChanged,
+        ),
+        (400, "untrusted echoed secret", Error::InvalidInput),
+        (409, "untrusted echoed secret", Error::Conflict),
+        (
+            401,
+            "无法验证雷神账号唯一身份，未开启保护",
+            Error::Unauthorized,
+        ),
+    ] {
+        let body =
+            serde_json::json!({"error":message,"token":"untrusted echoed secret"}).to_string();
+        let (api, _, thread) = mock(vec![(status, String::new(), body)]);
+        assert_eq!(
+            api.remote_authorize(&binding, "fixture-provider-token", 0, 1, false)
+                .err(),
+            Some(expected)
+        );
+        assert!(!expected.message().contains("secret"));
+        assert_eq!(expected.is_conflict(), status == 409);
+        thread.join().unwrap();
+    }
+    for (status, body, expected) in [
+        (400, "not json".into(), Error::InvalidInput),
+        (
+            400,
+            "x".repeat(MAX_RESPONSE as usize + 1),
+            Error::InvalidInput,
+        ),
+        (409, "not json".into(), Error::Conflict),
+        (409, "x".repeat(MAX_RESPONSE as usize + 1), Error::Conflict),
+    ] {
+        let (api, _, thread) = mock(vec![(status, String::new(), body)]);
+        assert_eq!(
+            api.remote_authorize(&binding, "fixture-provider-token", 0, 1, false)
+                .err(),
+            Some(expected)
+        );
+        thread.join().unwrap();
+    }
+}

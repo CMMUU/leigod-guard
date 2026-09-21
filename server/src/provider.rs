@@ -151,9 +151,45 @@ fn parse_info(v: &Value) -> Result<Info, Failure> {
     if number(&v["code"]) != Some(0) {
         return Err(Failure::Unavailable);
     }
-    // Only a provider-returned immutable ID can establish canonical ownership.
-    let id = v
-        .pointer("/data/user_id")
+    // Current user-info returns nn_number (the official NN account identifier),
+    // but no user_id/id; user_name can be a masked phone number. Never derive
+    // ownership from display names, phones, or a client-supplied account label.
+    // Keep the legacy ID namespace for provider responses without nn_number.
+    let (namespace, id) = if let Some(nn) = v.pointer("/data/nn_number") {
+        let id = match nn {
+            Value::String(s)
+                if !s.is_empty() && s.len() <= 20 && s.bytes().all(|b| b.is_ascii_digit()) =>
+            {
+                s.parse::<u64>().ok()
+            }
+            _ => nn.as_u64(),
+        }
+        .filter(|id| *id > 0)
+        .ok_or(Failure::InvalidAccount)?;
+        ("nn", id.to_string())
+    } else {
+        ("id", legacy_id(v).ok_or(Failure::InvalidAccount)?)
+    };
+    let tail: String = id
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
+    Ok(Info {
+        key: crate::auth::digest(&format!("leigod:{namespace}:{id}")),
+        label: format!("雷神账号 · ***{tail}"),
+        paused: match number(&v["data"]["pause_status_id"]) {
+            Some(1) => Some(true),
+            Some(0) => Some(false),
+            _ => None,
+        },
+    })
+}
+fn legacy_id(v: &Value) -> Option<String> {
+    v.pointer("/data/user_id")
         .or_else(|| v.pointer("/data/id"))
         .and_then(|v| {
             v.as_str()
@@ -167,28 +203,57 @@ fn parse_info(v: &Value) -> Result<Info, Failure> {
                     .chars()
                     .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
         })
-        .ok_or(Failure::InvalidAccount)?;
-    let tail: String = id
-        .chars()
-        .rev()
-        .take(4)
-        .collect::<String>()
-        .chars()
-        .rev()
-        .collect();
-    Ok(Info {
-        key: crate::auth::digest(&format!("leigod:id:{id}")),
-        label: format!("雷神账号 · ***{tail}"),
-        paused: match number(&v["data"]["pause_status_id"]) {
-            Some(1) => Some(true),
-            Some(0) => Some(false),
-            _ => None,
-        },
-    })
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn current_provider_shape_uses_nn_number_not_masked_phone() {
+        let mut v = serde_json::json!({"code":0,"data":{
+            "user_name":"138****0000","master_account":1,
+            "nn_number":123456789,"pause_status_id":1
+        }});
+        let info = parse_info(&v).unwrap();
+        assert_eq!(info.key, crate::auth::digest("leigod:nn:123456789"));
+        assert_eq!(info.label, "雷神账号 · ***6789");
+        assert_eq!(info.paused, Some(true));
+        // String/number representations and optional legacy fields must not split
+        // one provider account into separate ownership or heartbeat groups.
+        v["data"]["nn_number"] = Value::from("000123456789");
+        v["data"]["user_id"] = Value::from("another-id");
+        assert_eq!(parse_info(&v).unwrap().key, info.key);
+        v["data"]["user_name"] = Value::from("different display name");
+        assert_eq!(parse_info(&v).unwrap().key, info.key);
+        v["data"]["nn_number"] = Value::from(987654321);
+        assert_ne!(parse_info(&v).unwrap().key, info.key);
+        assert_ne!(crate::auth::digest("leigod:id:123456789"), info.key);
+    }
+    #[test]
+    fn invalid_nn_identity_cannot_fall_back_to_another_namespace() {
+        for id in [
+            serde_json::json!(0),
+            serde_json::json!(-1),
+            serde_json::json!(1.5),
+            Value::Null,
+            Value::Bool(true),
+            Value::from(""),
+            Value::from("0"),
+            Value::from("123****89"),
+            Value::from(" 123"),
+            Value::from("+123"),
+            Value::from("18446744073709551616"),
+            Value::from("0".repeat(21)),
+        ] {
+            let v = serde_json::json!({"code":0,"data":{"nn_number":id,"user_id":"fallback"}});
+            assert!(matches!(parse_info(&v), Err(Failure::InvalidAccount)));
+        }
+        assert!(matches!(
+            parse_info(&serde_json::json!({"code":0,"data":{
+                "user_name":"138****0000","mobile":"138****0000","nickname":"demo"
+            }})),
+            Err(Failure::InvalidAccount)
+        ));
+    }
     #[test]
     fn identity_requires_verified_id_and_known_pause_state() {
         let v = serde_json::json!({"code":0,"data":{"user_id":123456,"pause_status_id":"1"}});

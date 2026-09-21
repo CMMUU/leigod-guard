@@ -535,7 +535,7 @@ fn apply_binding(
         }
         Err(e) => {
             saved.active = false;
-            if e == Error::Conflict || e.invalidates_session() {
+            if e.is_conflict() || e.invalidates_session() {
                 *blocked = true;
             }
             let _ = store.save(saved);
@@ -709,7 +709,7 @@ fn sync_remote(
                                 saved.remote_revision = status.revision;
                                 saved.remote_token_digest = digest;
                             }
-                            Err(Error::Conflict) => {
+                            Err(e) if e.is_conflict() => {
                                 saved.remote_consent = false;
                                 saved.pending_disable = true;
                             }

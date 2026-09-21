@@ -1,10 +1,10 @@
 # 服务器失联保护运维与验证
 
-适用：客户端 0.15.0、后台 0.3.0。完整分析及最终验收存于 [项目文档仓库](https://github.com/CMMUU/project-docs/tree/main/leigod-guard)。历史规划见 [REMOTE_GUARD_PLAN.md](REMOTE_GUARD_PLAN.md)。
+适用：客户端 0.15.1、后台 0.3.1。完整分析及最终验收存于 [项目文档仓库](https://github.com/CMMUU/project-docs/tree/main/leigod-guard)。历史规划见 [REMOTE_GUARD_PLAN.md](REMOTE_GUARD_PLAN.md)。
 
 ## 授权与工作流程
 
-平台登录/设备配对不自动开启远程保护。在客户端勾选凭据上传授权并开启后，上海服务器向雷神查询唯一账号 ID；不能验证 ID、凭据失效、或该账号归属其他平台用户时拒绝授权。仅保存 AES-256-GCM 密文，随机 96 位 nonce，关联账号摘要作为认证附加数据。管理员接口不返回 token 或密文；不收集密码/密码哈希。请求体上限 8 KiB，token 上限 4096 字节，provider 响应上限 64 KiB。
+平台登录/设备配对不自动开启远程保护。在客户端勾选凭据上传授权并开启后，上海服务器向雷神查询账号标识（当前接口为 `nn_number`，兼容缺少该字段的历史 `user_id/id` 响应）；不能验证账号标识、凭据失效、或该账号归属其他平台用户时拒绝授权。仅保存 AES-256-GCM 密文，随机 96 位 nonce，关联账号摘要作为认证附加数据。管理员接口不返回 token 或密文；不收集密码/密码哈希。请求体上限 8 KiB，token 上限 4096 字节，provider 响应上限 64 KiB。
 
 ```mermaid
 flowchart TD

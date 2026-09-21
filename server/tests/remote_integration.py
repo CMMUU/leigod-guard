@@ -78,6 +78,18 @@ check('new heartbeat re-arms; already-paused provider avoids duplicate pause')
 # Stopping final grant deletes current cipher; other devices remain enabled.
 d.off();assert e.status()['enabled'];e.off();assert sql(f"SELECT credential IS NULL FROM remote_accounts WHERE id='{d.account()}';")=='t'
 check('device-scoped revoke preserves peers; final revoke deletes active credentials')
+# Actual provider shape: NN identity survives token rotation and numeric/string
+# encoding; masked usernames must neither establish ownership nor merge accounts.
+nn=Device(a);nn.beat();nt='nn-'+nonce;mock(nt,account=123456789,mode='nn');nn.authorize(nt);nn.beat()
+nn2=Device(a);nn2.beat();nt2='nn-string-'+nonce;mock(nt2,account='000123456789',mode='nn');nn2.authorize(nt2);nn2.beat()
+assert nn.account()==nn2.account()
+foreign=Device(b);foreign.beat();foreign.authorize(nt2,status=409)
+other=Device(b);other.beat();ot='nn-other-'+nonce;mock(ot,account=987654321,mode='nn');other.authorize(ot);other.beat();assert other.account()!=nn.account();other.off()
+bad='nn-invalid-'+nonce;mock(bad,account=0,mode='nn');foreign.authorize(bad,status=400);assert not foreign.status()['enabled']
+nn.stale();time.sleep(6);assert not nn.jobs()
+nn2.stale();ready();wait(lambda:nn.terminal('confirmed'));assert stats(nt2)['pause_calls']==1 and stats(nt)['pause_calls']==0
+nn.off();nn2.off()
+check('real NN response shape: canonical ownership, token rotation, peer heartbeats and confirmed pause')
 # Web disable cannot be undone by token refresh; disabling before in-flight auth commits advances revision.
 f=Device(c);f.beat();tf='race-'+nonce;mock(tf,account='race-account');f.status();rev=f.rev;mock(tf,info_delay=2)
 with concurrent.futures.ThreadPoolExecutor() as pool:
