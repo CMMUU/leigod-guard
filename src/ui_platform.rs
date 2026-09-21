@@ -588,6 +588,11 @@ impl Panel {
         } else {
             &view.remote_message
         });
+        if !view.remote_error.is_empty() {
+            ui.label(
+                egui::RichText::new(&view.remote_error).color(egui::Color32::from_rgb(179, 49, 59)),
+            );
+        }
         ui.label(format!(
             "凭据：{} · 最近结果：{}",
             match view.remote.credential.as_str() {

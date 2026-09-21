@@ -37,7 +37,7 @@ def wait(fn,seconds=25):
  raise AssertionError('timed out waiting for isolated worker')
 class Device:
  def __init__(self,client=a):
-  self.client=client;self.binding=client.call('/devices/register',{'installation_key':secrets.token_hex(32),'name':'QA remote','version':'qa-remote'});self.id=self.binding['device_id'];self.token=self.binding['device_token'];self.seq=0;self.run=1;self.rev=0
+  self.client=client;self.installation=secrets.token_hex(32);self.binding=client.call('/devices/register',{'installation_key':self.installation,'name':'QA remote','version':'qa-remote'});self.id=self.binding['device_id'];self.token=self.binding['device_token'];self.seq=0;self.run=1;self.rev=0
  def status(self):
   s=self.client.call('/device/remote',token=self.token);self.rev=s['revision'];return s
  def beat(self,prepare=0,status=200,run=None,revision=None,action='keep'):
@@ -105,9 +105,24 @@ check('API acceptance is not confirmation; finite retries and episode deduplicat
 k=Device(b);k.beat();tk='cipher-'+nonce;mock(tk,account='cipher-account');k.authorize(tk);k.beat();sql(f"UPDATE remote_accounts SET credential=set_byte(credential,15,get_byte(credential,15)#1) WHERE id='{k.account()}';");k.stale();ready();wait(lambda:k.terminal('reauthorize'));assert stats(tk)['pause_calls']==0;k.off()
 check('cipher tampering fails closed with reauthorization required')
 # Rebinding and user revocation trigger atomic cancellation and credential erasure.
-l=Device(c);l.beat();tl='revoke-'+nonce;mock(tl,account='revoke-account');l.authorize(tl);l.beat();c.call('/devices/'+l.id+'/revoke',{});assert sql(f"SELECT enabled FROM remote_grants WHERE device_id='{l.id}';")=='f'
+l=Device(c);l.beat();tl='revoke-'+nonce;mock(tl,account='revoke-account');l.authorize(tl);l.beat();l.run=99;l.beat();oldtoken=l.token
+rebound=c.call('/devices/register',{'installation_key':l.installation,'name':'Rebound QA','version':'qa','reactivate':True});l.token=rebound['device_token'];l.run=1;assert not l.status()['enabled'];l.beat()
+c.call('/device/heartbeat',{'sequence':1000,'run_generation':99,'version':'qa'},status=401,token=oldtoken)
+check('explicit rebind resets run fencing and revokes prior bearer and protection')
+c.call('/devices/'+l.id+'/revoke',{});assert sql(f"SELECT enabled FROM remote_grants WHERE device_id='{l.id}';")=='f'
 admin.call('/admin/users/'+cuid+'/status',{'disabled':True});assert sql(f"SELECT count(*) FROM remote_grants g JOIN devices d ON d.id=g.device_id WHERE d.user_id='{cuid}' AND g.enabled;")=='0'
 check('device/user revocation cancels durable grants atomically')
+# A crashed worker retains its lease; another worker recovers only after expiry.
+o=Device(b);o.beat();to='lease-'+nonce;mock(to,account='lease-account',paused=True);o.authorize(to);o.beat();o.stale();aid=o.account()
+sql(f"INSERT INTO remote_jobs(id,account_id,epoch,credential_version,state,attempts,lease_id,lease_until) SELECT gen_random_uuid(),id,epoch,credential_version,'running',1,gen_random_uuid(),now()+interval '60 seconds' FROM remote_accounts WHERE id='{aid}';")
+ready();time.sleep(6);assert stats(to)['info_calls']==1
+sql(f"UPDATE remote_jobs SET lease_until=now()-interval '1 second' WHERE account_id='{aid}';")
+wait(lambda:o.terminal('confirmed'));assert stats(to)['pause_calls']==0 and o.jobs()[0]['attempts']==2;o.off()
+check('live leases prevent double claim; expired lease recovers by querying first')
+p=Device(b);p.beat();tp='expiry-'+nonce;mock(tp,account='expiry-account');p.authorize(tp);p.beat();p.stale();aid=p.account()
+sql(f"INSERT INTO remote_jobs(id,account_id,epoch,credential_version,expires_at) SELECT gen_random_uuid(),id,epoch,credential_version,now()-interval '1 second' FROM remote_accounts WHERE id='{aid}';")
+ready();wait(lambda:p.terminal('unconfirmed'));assert stats(tp)['pause_calls']==0;p.off()
+check('expired durable task is terminal without sending a pause')
 # Five simultaneous account losses trip circuit breaker; acknowledgement requires new heartbeat.
 # Separate fresh user avoids intentional authorization rate limiter.
 muser=Client();mname='mass-'+nonce;mp=secrets.token_hex(20);admin.call('/admin/users',{'username':mname,'password':mp,'display_name':'Mass QA'});muser.login(mname,mp)
@@ -123,4 +138,24 @@ check('mass disconnect suppresses batch; explicit recovery requires new heartbea
 # Startup/ingress grace blocks otherwise eligible tasks.
 n=Device(b);n.beat();tn='warmup-'+nonce;mock(tn,account='warmup-account');n.authorize(tn);n.beat();n.stale();sql("UPDATE remote_service SET warmup_until=now()+interval '120 seconds',blocked=false,ingress_ok=true;");time.sleep(6);assert stats(tn)['pause_calls']==0;n.off()
 check('restart/ingress reconnect observation window suppresses old offline tasks')
+if os.environ.get('TEST_SERVER_PID'):
+ import atexit,signal,pathlib
+ r=Device(b);r.beat();tr='restart-'+nonce;mock(tr,account='restart-account');r.authorize(tr);r.beat();r.stale();aid=r.account()
+ sql("UPDATE remote_service SET warmup_until=now()+interval '120 seconds';")
+ sql(f"INSERT INTO remote_jobs(id,account_id,epoch,credential_version) SELECT gen_random_uuid(),id,epoch,credential_version FROM remote_accounts WHERE id='{aid}' ON CONFLICT DO NOTHING;")
+ oldid=sql(f"SELECT id FROM remote_jobs WHERE account_id='{aid}';")
+ os.kill(int(os.environ['TEST_SERVER_PID']),signal.SIGINT)
+ time.sleep(1)
+ binary=pathlib.Path(os.environ['TEST_SERVER_BINARY']).resolve();assert binary.name=='leigod-guard-server'
+ log=open(os.environ.get('TEST_RESTART_LOG','/tmp/guard-remote-restart.log'),'w')
+ restarted=subprocess.Popen([str(binary)],stdout=log,stderr=log,env=os.environ.copy())
+ atexit.register(lambda:restarted.terminate() if restarted.poll() is None else None)
+ def up():
+  try:return admin.call('/health')['remote_execution']
+  except urllib.error.URLError:return False
+ wait(up)
+ assert admin.call('/remote')['service']['state']=='warming';time.sleep(6);assert stats(tr)['pause_calls']==0
+ assert sql(f"SELECT id FROM remote_jobs WHERE account_id='{aid}';")==oldid
+ ready();wait(lambda:r.terminal('confirmed'));assert stats(tr)['pause_calls']==1 and len(r.jobs())==1;r.off()
+ check('real backend process restart preserves queued task and enforces reconnect observation')
 print(json.dumps({'passed':len(checks),'checks':checks},ensure_ascii=False))

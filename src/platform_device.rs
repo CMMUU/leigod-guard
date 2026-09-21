@@ -121,6 +121,7 @@ pub(crate) struct View {
     pub busy: bool,
     pub remote: RemoteStatus,
     pub remote_message: String,
+    pub remote_error: String,
     pub pending_disable: bool,
 }
 enum Command {
@@ -295,6 +296,9 @@ fn run(
         if let Some(command) = command {
             match command {
                 Command::Remote(enabled) => {
+                    if let Ok(mut v) = view.lock() {
+                        v.remote_error.clear();
+                    }
                     enable_requested = enabled;
                     if !enabled {
                         saved.remote_consent = false;
@@ -336,6 +340,9 @@ fn run(
                         .is_some_and(|b| b.owner_id != session.user.id)
                     {
                         saved.active = false;
+                        saved.remote_consent = false;
+                        saved.pending_disable = true;
+                        let _ = write_disable_marker();
                         let _ = store.save(&saved);
                         publish(
                             &view,
@@ -775,6 +782,14 @@ fn enable_remote(
         }
         Err(e) => {
             saved.remote_consent = false;
+            if let Ok(mut v) = view.lock() {
+                v.remote_error = match e {
+                    Error::InvalidInput | Error::Conflict => {
+                        "授权失败：请检查雷神登录、账号归属及设备状态，再重新开启。".into()
+                    }
+                    _ => format!("授权未完成：{}", e.message()),
+                };
+            }
             publish(view, ctx, saved, e.message(), false);
         }
     }
@@ -785,14 +800,19 @@ fn enable_remote(
     }
 }
 
+static REMOTE_MARKER_LOCK: Mutex<()> = Mutex::new(());
 fn disable_marker_path() -> PathBuf {
     crate::config::Config::path().with_file_name("platform-remote-disable.pending")
 }
 fn read_disable_marker() -> Option<String> {
+    let _guard = REMOTE_MARKER_LOCK.lock().ok()?;
     std::fs::read_to_string(disable_marker_path()).ok()
 }
 fn write_disable_marker() -> Result<(), String> {
     use std::io::Write;
+    let _guard = REMOTE_MARKER_LOCK
+        .lock()
+        .map_err(|_| "无法保存远程关闭请求")?;
     let path = disable_marker_path();
     let result = (|| -> std::io::Result<()> {
         if let Some(parent) = path.parent() {
@@ -811,7 +831,15 @@ fn write_disable_marker() -> Result<(), String> {
     result.map_err(|_| "无法保存远程关闭请求".into())
 }
 fn clear_disable_marker(expected: Option<&str>) {
-    if expected.is_some() && read_disable_marker().as_deref() == expected {
+    let Ok(_guard) = REMOTE_MARKER_LOCK.lock() else {
+        return;
+    };
+    if expected.is_some()
+        && std::fs::read_to_string(disable_marker_path())
+            .ok()
+            .as_deref()
+            == expected
+    {
         let _ = std::fs::remove_file(disable_marker_path());
     }
 }
