@@ -1,0 +1,10 @@
+**
+!Dockerfile
+!Cargo.toml
+!Cargo.lock
+!src/
+!src/**
+!migrations/
+!migrations/**
+!static/
+!static/**

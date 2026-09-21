@@ -1,0 +1,74 @@
+name: leigod-guard
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: guard
+      POSTGRES_DB: leigod_guard
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run init-config.py first}
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U guard -d leigod_guard']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: '3'}
+  app:
+    image: ${GUARD_IMAGE:-leigod-guard-server:local}
+    build:
+      context: ../../server
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - ${GUARD_ENV_FILE:-./server.env}
+    environment:
+      DATABASE_URL: postgres://guard:${POSTGRES_PASSWORD:?Run init-config.py first}@postgres:5432/leigod_guard
+      LISTEN_ADDRESS: 0.0.0.0
+      PORT: '3088'
+      STATIC_DIR: /app/static
+      REMOTE_KEY_FILE: /run/secrets/remote.key
+    ports:
+      - '127.0.0.1:${APP_PORT:-3088}:3088'
+    volumes:
+      - type: bind
+        source: ${GUARD_SECRET_FILE:-./secrets/remote.key}
+        target: /run/secrets/remote.key
+        read_only: true
+        bind:
+          create_host_path: false
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    stop_grace_period: 20s
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: '3'}
+  https:
+    image: caddy:2-alpine
+    profiles: [https]
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?Set your HTTPS domain in server.env}
+    ports: ['80:80', '443:443']
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: '3'}
+volumes:
+  postgres-data:
+  caddy-data:
+  caddy-config:
