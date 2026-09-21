@@ -117,7 +117,7 @@ async fn execute(s: &AppState, j: &Job) -> ApiResult<()> {
         return Ok(());
     };
     if !current(s, j).await? {
-        return finish(s, j, "cancelled", "conditions_changed").await;
+        return interrupted(s, j).await;
     }
     let token = match p.open(&j.key, &j.cipher) {
         Ok(t) => t,
@@ -138,7 +138,7 @@ async fn execute(s: &AppState, j: &Job) -> ApiResult<()> {
         _ => return retry(s, j, "status_unknown").await,
     }
     if !current(s, j).await? {
-        return finish(s, j, "cancelled", "conditions_changed").await;
+        return interrupted(s, j).await;
     }
     // There is no provider fencing/idempotency contract. Cancellation after this
     // dispatch is best effort, explicitly surfaced in the audit/status contract.
@@ -160,12 +160,36 @@ async fn execute(s: &AppState, j: &Job) -> ApiResult<()> {
         _ => retry(s, j, "pause_not_confirmed").await,
     }
 }
+// A transient ingress/observation hold must not permanently consume the
+// account's offline episode. Preserve it within the original finite deadline.
+async fn interrupted(s: &AppState, j: &Job) -> ApiResult<()> {
+    let mut tx = s.db.begin().await?;
+    remote::lock(&mut tx).await?;
+    let needed:bool=sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM remote_jobs j JOIN remote_accounts a ON a.id=j.account_id WHERE j.id=$1 AND j.lease_id=$2 AND j.state='running' AND j.epoch=a.epoch AND j.credential_version=a.credential_version AND j.expires_at>now()+interval '40 seconds' AND {ELIGIBLE})")).bind(j.id).bind(j.lease).fetch_one(&mut *tx).await?;
+    if needed && j.attempts < 3 {
+        sqlx::query("UPDATE remote_jobs SET state='queued',result='service_interrupted',next_attempt=now()+interval '15 seconds',lease_id=NULL,lease_until=NULL,updated_at=now() WHERE id=$1 AND lease_id=$2 AND state='running'").bind(j.id).bind(j.lease).execute(&mut *tx).await?;
+        tx.commit().await?;
+        return Ok(());
+    }
+    tx.commit().await?;
+    finish(
+        s,
+        j,
+        if needed { "unconfirmed" } else { "cancelled" },
+        if needed {
+            "service_interrupted"
+        } else {
+            "conditions_changed"
+        },
+    )
+    .await
+}
 async fn retry(s: &AppState, j: &Job, reason: &str) -> ApiResult<()> {
     if j.attempts >= 3 {
         return finish(s, j, "unconfirmed", reason).await;
     }
     if !current(s, j).await? {
-        return finish(s, j, "cancelled", "conditions_changed").await;
+        return interrupted(s, j).await;
     }
     let delay = if j.attempts == 1 { 15.0 } else { 45.0 };
     sqlx::query("UPDATE remote_jobs SET state='queued',result=$3,next_attempt=now()+make_interval(secs=>$4),lease_until=NULL,lease_id=NULL,updated_at=now() WHERE id=$1 AND lease_id=$2 AND state='running'").bind(j.id).bind(j.lease).bind(reason).bind(delay).execute(&s.db).await?;

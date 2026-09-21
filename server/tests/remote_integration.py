@@ -90,6 +90,12 @@ check('provider timeout after applying is resolved by query, not blind retry')
 # Fresh heartbeat arrives while preflight provider query is in-flight.
 h=Device(c);h.beat();th='recover-'+nonce;mock(th,account='recover-account');h.authorize(th);h.beat();mock(th,info_delay=3);initial=stats(th)['info_calls'];h.stale();ready();wait(lambda:stats(th)['info_calls']>initial);h.beat();time.sleep(4);assert stats(th)['pause_calls']==0;h.off()
 check('heartbeat recovery during preflight cancels unsent pause')
+# Ingress observation during a preflight preserves the finite queued episode.
+u=Device(b);u.beat();tu='interrupted-'+nonce;mock(tu,account='interrupted-account');u.authorize(tu);u.beat();mock(tu,info_delay=3);initial=stats(tu)['info_calls'];u.stale();ready();wait(lambda:stats(tu)['info_calls']>initial)
+sql("UPDATE remote_service SET warmup_until=now()+interval '120 seconds';")
+wait(lambda:any(j['state']=='queued' and j['result']=='service_interrupted' for j in u.jobs()));assert stats(tu)['pause_calls']==0
+mock(tu,info_delay=0);ready();sql(f"UPDATE remote_jobs SET next_attempt=now() WHERE account_id='{u.account()}';");wait(lambda:u.terminal('confirmed'));assert stats(tu)['pause_calls']==1;u.off()
+check('transient service observation defers the same task without losing its episode')
 # Expired credential terminal, no pause; rotation verifies and changes version.
 i=Device(b);i.beat();ti='expire-'+nonce;mock(ti,account='expired-account');i.authorize(ti);i.beat();mock(ti,mode='expired');i.stale();ready();wait(lambda:i.terminal('reauthorize'));assert i.status()['credential']=='reauthorize' and stats(ti)['pause_calls']==0;i.off()
 check('expired credential stops execution and requests client reauthorization')
