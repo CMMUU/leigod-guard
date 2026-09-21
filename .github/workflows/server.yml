@@ -1,9 +1,9 @@
 name: Server CI
 on:
   push:
-    paths: ['server/**', 'deploy/server/**', '.github/workflows/server.yml']
+    paths: ['server/**', 'deploy/server/**', 'docs/SERVER_DEPLOYMENT.md', '.github/workflows/server.yml']
   pull_request:
-    paths: ['server/**', 'deploy/server/**', '.github/workflows/server.yml']
+    paths: ['server/**', 'deploy/server/**', 'docs/SERVER_DEPLOYMENT.md', '.github/workflows/server.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -85,8 +85,23 @@ jobs:
           mkdir bundle
           cp target/x86_64-unknown-linux-musl/release/leigod-guard-server bundle/
           cp -r static bundle/
+          mkdir -p bundle/docs bundle/deploy
+          cp ../docs/SERVER_DEPLOYMENT.md ../docs/REMOTE_PROTECTION.md ../docs/REMOTE_GUARD_PLAN.md bundle/docs/
+          cp -r ../deploy/server bundle/deploy/
           tar -C bundle -czf server-linux-x64.tar.gz .
           sha256sum server-linux-x64.tar.gz > server-linux-x64.tar.gz.sha256
+      - name: Verify packaged executable and static assets
+        run: |
+          cd bundle
+          PORT=3092 PUBLIC_ORIGIN=http://127.0.0.1:3092 REMOTE_EXECUTION=false ./leigod-guard-server > /tmp/guard-package.log 2>&1 &
+          PACKAGE_PID=$!
+          trap 'kill "$PACKAGE_PID" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3092/api/health > /dev/null; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:3092/api/health
+          curl -fsS http://127.0.0.1:3092/ | grep -q '<html'
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: server-linux-x64
@@ -95,3 +110,14 @@ jobs:
             server/server-linux-x64.tar.gz.sha256
           if-no-files-found: error
           retention-days: 14
+  docker-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          persist-credentials: false
+      - name: Build documented Dockerfile
+        run: docker build -t leigod-guard-server:smoke server
+      - name: Verify documented Compose deployment and backup restore
+        run: sudo -E bash server/tests/self_host_smoke.sh

@@ -1,0 +1,8 @@
+{$PUBLIC_ORIGIN} {
+    reverse_proxy app:3088
+    header {
+        X-Frame-Options DENY
+        X-Content-Type-Options nosniff
+        Referrer-Policy no-referrer
+    }
+}

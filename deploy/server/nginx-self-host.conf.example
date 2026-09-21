@@ -1,0 +1,26 @@
+# Replace guard.example.com and both certificate paths before enabling.
+# For an IP origin, the certificate must contain that exact IP in its SAN.
+server {
+    listen 80;
+    server_name guard.example.com;
+    return 301 https://guard.example.com$request_uri;
+}
+server {
+    listen 443 ssl;
+    server_name guard.example.com;
+    ssl_certificate /etc/letsencrypt/live/guard.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/guard.example.com/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    client_max_body_size 8k;
+    add_header X-Frame-Options DENY always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy no-referrer always;
+    location / {
+        proxy_pass http://127.0.0.1:3088;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 4s;
+        proxy_read_timeout 35s;
+    }
+}

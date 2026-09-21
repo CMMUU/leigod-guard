@@ -171,8 +171,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(remote_worker::run(state.clone()));
     tokio::spawn(scheduler::run(state));
     let port = std::env::var("PORT").unwrap_or("3088".into());
-    let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{port}")).await?;
-    tracing::info!(%port,"guard server listening on loopback");
+    let address: std::net::IpAddr = std::env::var("LISTEN_ADDRESS")
+        .unwrap_or_else(|_| "127.0.0.1".into())
+        .parse()?;
+    let listener = tokio::net::TcpListener::bind((address, port.parse::<u16>()?)).await?;
+    tracing::info!(%address, %port, "guard server listening");
     axum::serve(listener, app)
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
