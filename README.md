@@ -10,7 +10,7 @@
 
 [项目网站](https://leigod.cmmuu.com) · [前往 Gitee 下载（国内优先）](https://gitee.com/cmmuu/leigod-guard/releases) · [前往 GitHub 下载](https://github.com/CMMUU/leigod-guard/releases/latest)
 
-**v0.15.0 成品直达：** [Windows 安装版 EXE](https://github.com/CMMUU/leigod-guard/releases/download/v0.15.0/leigod-guard-v0.15.0-windows-x64-setup.exe) · [绿色免安装 ZIP](https://github.com/CMMUU/leigod-guard/releases/download/v0.15.0/leigod-guard-v0.15.0-windows-x64.zip) · [SHA-256 校验](https://github.com/CMMUU/leigod-guard/releases/download/v0.15.0/SHA256SUMS.txt)。国内用户可使用上方 Gitee 发布页或应用内更新。
+**v0.15.1 成品直达：** [Windows 安装版 EXE](https://github.com/CMMUU/leigod-guard/releases/download/v0.15.1/leigod-guard-v0.15.1-windows-x64-setup.exe) · [绿色免安装 ZIP](https://github.com/CMMUU/leigod-guard/releases/download/v0.15.1/leigod-guard-v0.15.1-windows-x64.zip) · [SHA-256 校验](https://github.com/CMMUU/leigod-guard/releases/download/v0.15.1/SHA256SUMS.txt)。国内用户可使用上方 Gitee 发布页或应用内更新。
 
 两处发布页均提供**安装版 EXE、绿色免安装 ZIP 和校验文件**。一般用户选择安装版；希望解压即用的用户选择绿色版。已有用户可在「关于与更新」中检查新版，点击「下载并自动更新」完成升级。
 

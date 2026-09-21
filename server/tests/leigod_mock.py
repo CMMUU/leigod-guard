@@ -30,6 +30,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
    time.sleep(snapshot.get('info_delay',0))
    if mode=='unknown':self.send({'code':0,'data':{'user_id':snapshot['account'],'pause_status_id':2}})
    elif mode=='missing_id':self.send({'code':0,'data':{'pause_status_id':0}})
+   elif mode=='nn':self.send({'code':0,'data':{'nn_number':snapshot['account'],'user_name':'138****0000','master_account':1,'pause_status_id':1 if snapshot['paused'] else 0}})
    else:self.send({'code':0,'data':{'user_id':snapshot['account'],'pause_status_id':1 if snapshot['paused'] else 0}})
   elif parsed.path.endswith('/pause'):
    if mode=='timeout_apply':time.sleep(11)

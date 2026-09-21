@@ -20,6 +20,10 @@ pub enum Error {
     Protocol,
     InvalidInput,
     Conflict,
+    LeigodCredential,
+    LeigodIdentity,
+    RemoteAccountOwned,
+    RemoteStateChanged,
 }
 impl Error {
     pub fn message(self) -> &'static str {
@@ -32,6 +36,12 @@ impl Error {
             Self::Protocol => "平台返回了无法识别的登录信息，请稍后重试。",
             Self::InvalidInput => "请检查邮箱、验证码或账号信息后重试。",
             Self::Conflict => "设备绑定冲突或已撤销。请在原账号解除绑定，或手动重新绑定本机。",
+            Self::LeigodCredential => "雷神登录已失效，请重新登录雷神账号后开启保护。",
+            Self::LeigodIdentity => "服务器无法识别雷神账号身份，请检查后台版本或联系管理员。",
+            Self::RemoteAccountOwned => {
+                "该雷神账号已绑定其他平台账号，请使用原平台账号或联系管理员。"
+            }
+            Self::RemoteStateChanged => "设备或远程授权状态已变化，请刷新后重新开启保护。",
         }
     }
     pub fn invalidates_session(self) -> bool {
@@ -490,6 +500,32 @@ fn login_cookie(response: &Response) -> Result<(String, i64), Error> {
 }
 
 fn read_remote(response: Response) -> Result<RemoteStatus, Error> {
+    let http_status = response.status().as_u16();
+    if matches!(http_status, 400 | 409) {
+        let body: serde_json::Value = read_json(response)?;
+        // Only known server errors select local text. Never show arbitrary
+        // response bodies, which could contain echoed credentials.
+        return Err(match (http_status, body["error"].as_str()) {
+            (400, Some("雷神登录已失效，请在客户端重新登录")) => {
+                Error::LeigodCredential
+            }
+            (400, Some("无法验证雷神账号唯一身份，未开启保护")) => {
+                Error::LeigodIdentity
+            }
+            (409, Some("该雷神账号已属于其他平台账号")) => Error::RemoteAccountOwned,
+            (
+                409,
+                Some(
+                    "客户端运行代次已变化，请重新连接"
+                    | "远程授权已变化，请重新确认"
+                    | "雷神账号已切换，请关闭旧保护后重新开启"
+                    | "远程授权已变化，请刷新后重试",
+                ),
+            ) => Error::RemoteStateChanged,
+            (400, _) => Error::InvalidInput,
+            _ => Error::Conflict,
+        });
+    }
     let status: RemoteStatus = read_json(successful(response)?)?;
     if status.revision < 0
         || status.revision == i64::MAX
