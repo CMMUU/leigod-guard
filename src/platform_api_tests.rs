@@ -351,14 +351,24 @@ fn remote_errors_explain_known_reasons_without_echoing_response_secrets() {
             Some(expected)
         );
         assert!(!expected.message().contains("secret"));
+        assert_eq!(expected.is_conflict(), status == 409);
         thread.join().unwrap();
     }
-    for body in ["not json".into(), "x".repeat(MAX_RESPONSE as usize + 1)] {
-        let (api, _, thread) = mock(vec![(400, String::new(), body)]);
+    for (status, body, expected) in [
+        (400, "not json".into(), Error::InvalidInput),
+        (
+            400,
+            "x".repeat(MAX_RESPONSE as usize + 1),
+            Error::InvalidInput,
+        ),
+        (409, "not json".into(), Error::Conflict),
+        (409, "x".repeat(MAX_RESPONSE as usize + 1), Error::Conflict),
+    ] {
+        let (api, _, thread) = mock(vec![(status, String::new(), body)]);
         assert_eq!(
             api.remote_authorize(&binding, "fixture-provider-token", 0, 1, false)
                 .err(),
-            Some(Error::Protocol)
+            Some(expected)
         );
         thread.join().unwrap();
     }

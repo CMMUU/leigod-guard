@@ -47,6 +47,12 @@ impl Error {
     pub fn invalidates_session(self) -> bool {
         matches!(self, Self::Unauthorized | Self::Forbidden)
     }
+    pub fn is_conflict(self) -> bool {
+        matches!(
+            self,
+            Self::Conflict | Self::RemoteAccountOwned | Self::RemoteStateChanged
+        )
+    }
 }
 
 // Intentionally no Debug implementation: these objects contain session secrets.
@@ -202,7 +208,9 @@ impl Api {
     fn finish_login(&self, response: Response) -> Result<Session, Error> {
         let response = successful(response)?;
         let (token, seconds) = login_cookie(&response)?;
-        let body: serde_json::Value = read_json(response)?;
+        // The status still controls consent revocation if an error body is
+        // missing, malformed, oversized, or cannot be read completely.
+        let body: serde_json::Value = read_json(response).unwrap_or_default();
         if body.get("ok").and_then(|v| v.as_bool()) != Some(true) {
             return Err(Error::Protocol);
         }
