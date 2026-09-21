@@ -296,6 +296,16 @@ fn run(
         if let Some(command) = command {
             match command {
                 Command::Remote(enabled) => {
+                    if enabled && !saved.active {
+                        publish(
+                            &view,
+                            &ctx,
+                            &saved,
+                            "请先恢复本机设备连接，再开启远程保护。",
+                            false,
+                        );
+                        continue;
+                    }
                     if let Ok(mut v) = view.lock() {
                         v.remote_error.clear();
                     }
@@ -476,6 +486,7 @@ fn run(
             }
             Err(e) => {
                 if e.invalidates_session() {
+                    remote_invalid(&view);
                     saved.active = false;
                     blocked = true;
                     let _ = store.save(&saved);
@@ -608,8 +619,16 @@ fn account_link(username: &str, info: &serde_json::Value) -> Option<AccountLink>
     })
 }
 
-fn remote_view(view: &Arc<Mutex<View>>, ctx: &egui::Context, status: RemoteStatus) {
+fn remote_invalid(view: &Arc<Mutex<View>>) {
     if let Ok(mut v) = view.lock() {
+        v.remote = RemoteStatus::default();
+        v.pending_disable = false;
+        v.remote_message = "设备凭据已失效，远程保护状态请在网页核对。".into();
+    }
+}
+fn remote_view(view: &Arc<Mutex<View>>, ctx: &egui::Context, status: RemoteStatus, pending: bool) {
+    if let Ok(mut v) = view.lock() {
+        v.pending_disable = pending;
         v.remote_message = status.message().into();
         v.remote = status;
     }
@@ -707,7 +726,7 @@ fn sync_remote(
                     }
                 }
             }
-            remote_view(view, ctx, status);
+            remote_view(view, ctx, status, saved.pending_disable);
             if let Err(e) = store.save(saved) {
                 saved.remote_consent = false;
                 saved.pending_disable = true;
@@ -717,6 +736,7 @@ fn sync_remote(
             }
         }
         Err(e) if e.invalidates_session() => {
+            remote_invalid(view);
             saved.pending_disable = false;
             saved.remote_consent = false;
             saved.active = false;
@@ -778,7 +798,7 @@ fn enable_remote(
             saved.remote_consent = true;
             saved.pending_disable = false;
             saved.remote_token_digest = token_digest(&token);
-            remote_view(view, ctx, status);
+            remote_view(view, ctx, status, saved.pending_disable);
         }
         Err(e) => {
             saved.remote_consent = false;
@@ -846,6 +866,25 @@ fn clear_disable_marker(expected: Option<&str>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn invalid_device_never_keeps_a_stale_protected_view() {
+        let view = Arc::new(Mutex::new(View {
+            remote: RemoteStatus {
+                available: true,
+                enabled: true,
+                protection: "armed".into(),
+                ..Default::default()
+            },
+            remote_message: "服务器已确认远程保护生效".into(),
+            ..Default::default()
+        }));
+        remote_invalid(&view);
+        let v = view.lock().unwrap();
+        assert!(!v.remote.enabled);
+        assert!(!v.remote.available);
+        assert!(!v.remote_message.contains("保护生效"));
+    }
+
     #[test]
     fn account_payload_contains_only_a_digest_and_masked_label() {
         let link = account_link(
