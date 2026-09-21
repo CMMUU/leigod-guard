@@ -208,9 +208,7 @@ impl Api {
     fn finish_login(&self, response: Response) -> Result<Session, Error> {
         let response = successful(response)?;
         let (token, seconds) = login_cookie(&response)?;
-        // The status still controls consent revocation if an error body is
-        // missing, malformed, oversized, or cannot be read completely.
-        let body: serde_json::Value = read_json(response).unwrap_or_default();
+        let body: serde_json::Value = read_json(response)?;
         if body.get("ok").and_then(|v| v.as_bool()) != Some(true) {
             return Err(Error::Protocol);
         }
@@ -510,7 +508,9 @@ fn login_cookie(response: &Response) -> Result<(String, i64), Error> {
 fn read_remote(response: Response) -> Result<RemoteStatus, Error> {
     let http_status = response.status().as_u16();
     if matches!(http_status, 400 | 409) {
-        let body: serde_json::Value = read_json(response)?;
+        // The status still controls consent revocation if an error body is
+        // missing, malformed, oversized, or cannot be read completely.
+        let body: serde_json::Value = read_json(response).unwrap_or_default();
         // Only known server errors select local text. Never show arbitrary
         // response bodies, which could contain echoed credentials.
         return Err(match (http_status, body["error"].as_str()) {
