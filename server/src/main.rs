@@ -1,6 +1,9 @@
 mod auth;
 mod devices;
 mod email;
+mod provider;
+mod remote;
+mod remote_worker;
 mod routes;
 mod scheduler;
 use axum::{
@@ -32,6 +35,8 @@ pub struct AppState {
     hashes: Arc<Semaphore>,
     dummy_hash: String,
     mailer: Option<email::Mailer>,
+    provider: Option<provider::Provider>,
+    remote_slots: Arc<Semaphore>,
 }
 #[derive(Serialize, sqlx::FromRow)]
 pub struct SessionUser {
@@ -104,7 +109,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("HTTPS origin required".into());
     }
     let mailer = email::Mailer::from_env(&origin)?;
+    let provider = provider::Provider::from_env(&origin)?;
     let state = AppState {
+        provider,
+        remote_slots: Arc::new(Semaphore::new(2)),
         mailer,
         db,
         origin,
@@ -120,6 +128,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let api = Router::new()
         .route("/health", get(routes::health))
+        .route("/device/remote", get(remote::status))
+        .route("/device/remote/authorize", post(remote::authorize))
+        .route("/device/remote/disable", post(remote::disable))
+        .route("/devices/{id}/remote/disable", post(remote::web_disable))
+        .route("/remote", get(remote::listing))
+        .route("/admin/remote/acknowledge", post(remote::acknowledge))
         .route("/login", post(routes::login))
         .route("/email/code", post(email::send_code))
         .route("/email/login", post(email::verify_code))
@@ -154,10 +168,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             HeaderValue::from_static("nosniff"),
         ))
         .with_state(state.clone());
+    tokio::spawn(remote_worker::run(state.clone()));
     tokio::spawn(scheduler::run(state));
     let port = std::env::var("PORT").unwrap_or("3088".into());
     let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{port}")).await?;
-    tracing::info!(%port,"observation server listening on loopback; remote execution disabled");
+    tracing::info!(%port,"guard server listening on loopback");
     axum::serve(listener, app)
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;

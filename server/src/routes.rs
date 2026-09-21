@@ -3,7 +3,7 @@ use crate::*;
 pub async fn health(State(s): State<AppState>) -> ApiResult<Json<Value>> {
     sqlx::query("SELECT 1").execute(&s.db).await?;
     Ok(Json(
-        json!({"status":"ok","version":env!("CARGO_PKG_VERSION"),"mode":"observe","remote_execution":false}),
+        json!({"status":"ok","version":env!("CARGO_PKG_VERSION"),"mode":if s.provider.is_some(){"remote"}else{"observe"},"remote_execution":s.provider.is_some()}),
     ))
 }
 #[derive(Deserialize)]
@@ -329,6 +329,10 @@ pub async fn pair_device(
 
 #[derive(Deserialize)]
 pub struct Heartbeat {
+    #[serde(default)]
+    run_generation: i64,
+    #[serde(default)]
+    remote_revision: Option<i64>,
     sequence: i64,
     game_running: Option<bool>,
     #[serde(default)]
@@ -359,7 +363,12 @@ pub async fn heartbeat(
         .filter(|v| v.len() == 64)
         .ok_or(ApiError(StatusCode::UNAUTHORIZED, "设备凭据无效"))?;
     auth::throttle(&s, format!("heartbeat:{}", auth::digest(token)), 10, 30)?;
-    if p.sequence < 0 || p.sequence == i64::MAX || p.prepare_seconds > 600 || p.version.len() > 32 {
+    if p.sequence < 0
+        || p.sequence == i64::MAX
+        || p.run_generation < 0
+        || p.prepare_seconds > 600
+        || p.version.len() > 32
+    {
         return Err(ApiError(StatusCode::BAD_REQUEST, "心跳参数无效"));
     }
     if !matches!(p.account_action.as_str(), "keep" | "clear" | "link")
@@ -374,15 +383,26 @@ pub async fn heartbeat(
         return Err(ApiError(StatusCode::BAD_REQUEST, "雷神账号关联参数无效"));
     }
     let mut tx = s.db.begin().await?;
-    let row=sqlx::query("SELECT d.id,d.user_id,d.sequence,d.last_seen,d.observed_offline,d.leigod_account_key FROM devices d JOIN users u ON u.id=d.user_id WHERE d.token_hash=$1 AND NOT d.revoked AND NOT u.disabled FOR UPDATE OF d")
+    let row=sqlx::query("SELECT d.id,d.user_id,d.sequence,d.run_generation,d.last_seen,d.observed_offline,d.leigod_account_key FROM devices d JOIN users u ON u.id=d.user_id WHERE d.token_hash=$1 AND NOT d.revoked AND NOT u.disabled FOR UPDATE OF d")
         .bind(auth::digest(token)).fetch_optional(&mut *tx).await?.ok_or(ApiError(StatusCode::UNAUTHORIZED,"设备已撤销或账号已停用"))?;
-    if p.sequence <= row.get::<i64, _>("sequence") {
+    if p.sequence <= row.get::<i64, _>("sequence")
+        || p.run_generation < row.get::<i64, _>("run_generation")
+    {
         return Err(ApiError(StatusCode::CONFLICT, "心跳序号已使用；必须递增"));
     }
     let id: Uuid = row.get("id");
     let uid: Uuid = row.get("user_id");
-    sqlx::query("UPDATE devices SET last_seen=now(),sequence=$2,game_running=$3,prepare_until=now()+make_interval(secs=>$4),version=$5,observed_offline=false WHERE id=$1")
-        .bind(id).bind(p.sequence).bind(p.game_running).bind(p.prepare_seconds as f64).bind(p.version).execute(&mut *tx).await?;
+    sqlx::query("UPDATE devices SET last_seen=now(),sequence=$2,game_running=$3,prepare_until=now()+make_interval(secs=>$4),version=$5,run_generation=$6,observed_offline=false WHERE id=$1")
+        .bind(id).bind(p.sequence).bind(p.game_running).bind(p.prepare_seconds as f64).bind(p.version).bind(p.run_generation).execute(&mut *tx).await?;
+    remote::heartbeat(
+        &mut tx,
+        id,
+        p.run_generation,
+        p.remote_revision,
+        p.account_action == "clear",
+        p.prepare_seconds,
+    )
+    .await?;
     if p.account_action != "keep" {
         let key = if p.account_action == "link" {
             p.leigod_account.as_ref().map(|a| a.key.as_str())
