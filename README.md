@@ -10,7 +10,7 @@
 
 [项目网站](https://leigod.cmmuu.com) · [前往 Gitee 下载（国内优先）](https://gitee.com/cmmuu/leigod-guard/releases) · [前往 GitHub 下载](https://github.com/CMMUU/leigod-guard/releases/latest)
 
-**v0.14.0 成品直达：** [Windows 安装版 EXE](https://github.com/CMMUU/leigod-guard/releases/download/v0.14.0/leigod-guard-v0.14.0-windows-x64-setup.exe) · [绿色免安装 ZIP](https://github.com/CMMUU/leigod-guard/releases/download/v0.14.0/leigod-guard-v0.14.0-windows-x64.zip) · [SHA-256 校验](https://github.com/CMMUU/leigod-guard/releases/download/v0.14.0/SHA256SUMS.txt)。国内用户可使用上方 Gitee 发布页或应用内更新。
+**v0.15.0 成品直达：** [Windows 安装版 EXE](https://github.com/CMMUU/leigod-guard/releases/download/v0.15.0/leigod-guard-v0.15.0-windows-x64-setup.exe) · [绿色免安装 ZIP](https://github.com/CMMUU/leigod-guard/releases/download/v0.15.0/leigod-guard-v0.15.0-windows-x64.zip) · [SHA-256 校验](https://github.com/CMMUU/leigod-guard/releases/download/v0.15.0/SHA256SUMS.txt)。国内用户可使用上方 Gitee 发布页或应用内更新。
 
 两处发布页均提供**安装版 EXE、绿色免安装 ZIP 和校验文件**。一般用户选择安装版；希望解压即用的用户选择绿色版。已有用户可在「关于与更新」中检查新版，点击「下载并自动更新」完成升级。
 
@@ -282,7 +282,7 @@ Get-FileHash .\leigod-guard-v0.12.2-windows-x64-setup.exe -Algorithm SHA256
 
 **只关闭「启用自动暂停」总开关，就不会再暂停了吗？**
 
-该开关同时控制启动检查和正常游戏退出触发的自动暂停。关闭会清除原有的退出倒计时；启动时已经关闭则跳过该次启动检查，之后再开启不会补做。正常退出流程重新开启后需要再次观察到名单游戏运行。手动暂停和「关机/注销前自动暂停计时」是独立入口；不需要关机暂停时，还应关闭对应选项。
+该开关同时控制启动检查和正常游戏退出触发的自动暂停。关闭会清除原有的退出倒计时；启动时已经关闭则跳过该次启动检查，之后再开启不会补做。正常退出流程重新开启后需要再次观察到名单游戏运行。手动暂停和「关机/注销前自动暂停计时」是独立入口；不需要关机暂停时，还应关闭对应选项；已开启服务器失联保护时，还需在“平台账号”中单独关闭并等待服务器确认。
 
 **关机后一定能暂停吗？**
 
