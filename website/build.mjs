@@ -14,7 +14,8 @@ if (site.protocol !== 'https:' || site.username || site.password || site.search 
 }
 if (!/^[a-f0-9]{32}$/.test(config.indexNowKey)) throw new Error('Invalid IndexNow ownership key.');
 const revision = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim();
-const modified = execFileSync('git', ['log', '-1', '--format=%cI', '--', 'website', 'assets/app-icon.png', 'assets/ui-home.png', 'Cargo.toml', 'README.md'], { cwd: repo, encoding: 'utf8' }).trim();
+// Use the built revision's date: path history differs in shallow deployment clones.
+const modified = execFileSync('git', ['show', '-s', '--format=%cI', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim();
 if (!/^[a-f0-9]{40}$/.test(revision) || !Number.isFinite(Date.parse(modified))) throw new Error('Missing source revision/date.');
 const lastModified = new Date(modified).toISOString();
 const faq = JSON.parse(await readFile(path.join(source, 'faq.json'), 'utf8'));
