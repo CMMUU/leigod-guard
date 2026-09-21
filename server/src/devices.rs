@@ -88,7 +88,7 @@ pub async fn bind(
             }
             let id: Uuid = existing.get("id");
             sqlx::query(
-                "UPDATE devices SET name=$2,version=$3,revoked=false,token_hash=$4 WHERE id=$1",
+                "UPDATE devices SET name=$2,version=$3,revoked=false,token_hash=$4,run_generation=0 WHERE id=$1",
             )
             .bind(id)
             .bind(name.trim())

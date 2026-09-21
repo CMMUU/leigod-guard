@@ -3,7 +3,7 @@ use crate::*;
 pub async fn health(State(s): State<AppState>) -> ApiResult<Json<Value>> {
     sqlx::query("SELECT 1").execute(&s.db).await?;
     Ok(Json(
-        json!({"status":"ok","version":env!("CARGO_PKG_VERSION"),"mode":"observe","remote_execution":false}),
+        json!({"status":"ok","version":env!("CARGO_PKG_VERSION"),"mode":if s.provider.is_some(){"remote"}else{"observe"},"remote_execution":s.provider.is_some()}),
     ))
 }
 #[derive(Deserialize)]
@@ -329,6 +329,10 @@ pub async fn pair_device(
 
 #[derive(Deserialize)]
 pub struct Heartbeat {
+    #[serde(default)]
+    run_generation: i64,
+    #[serde(default)]
+    remote_revision: Option<i64>,
     sequence: i64,
     game_running: Option<bool>,
     #[serde(default)]
@@ -359,7 +363,12 @@ pub async fn heartbeat(
         .filter(|v| v.len() == 64)
         .ok_or(ApiError(StatusCode::UNAUTHORIZED, "设备凭据无效"))?;
     auth::throttle(&s, format!("heartbeat:{}", auth::digest(token)), 10, 30)?;
-    if p.sequence < 0 || p.sequence == i64::MAX || p.prepare_seconds > 600 || p.version.len() > 32 {
+    if p.sequence < 0
+        || p.sequence == i64::MAX
+        || p.run_generation < 0
+        || p.prepare_seconds > 600
+        || p.version.len() > 32
+    {
         return Err(ApiError(StatusCode::BAD_REQUEST, "心跳参数无效"));
     }
     if !matches!(p.account_action.as_str(), "keep" | "clear" | "link")
@@ -374,15 +383,26 @@ pub async fn heartbeat(
         return Err(ApiError(StatusCode::BAD_REQUEST, "雷神账号关联参数无效"));
     }
     let mut tx = s.db.begin().await?;
-    let row=sqlx::query("SELECT d.id,d.user_id,d.sequence,d.last_seen,d.observed_offline,d.leigod_account_key FROM devices d JOIN users u ON u.id=d.user_id WHERE d.token_hash=$1 AND NOT d.revoked AND NOT u.disabled FOR UPDATE OF d")
+    let row=sqlx::query("SELECT d.id,d.user_id,d.sequence,d.run_generation,d.last_seen,d.observed_offline,d.leigod_account_key FROM devices d JOIN users u ON u.id=d.user_id WHERE d.token_hash=$1 AND NOT d.revoked AND NOT u.disabled FOR UPDATE OF d")
         .bind(auth::digest(token)).fetch_optional(&mut *tx).await?.ok_or(ApiError(StatusCode::UNAUTHORIZED,"设备已撤销或账号已停用"))?;
-    if p.sequence <= row.get::<i64, _>("sequence") {
+    if p.sequence <= row.get::<i64, _>("sequence")
+        || p.run_generation < row.get::<i64, _>("run_generation")
+    {
         return Err(ApiError(StatusCode::CONFLICT, "心跳序号已使用；必须递增"));
     }
     let id: Uuid = row.get("id");
     let uid: Uuid = row.get("user_id");
-    sqlx::query("UPDATE devices SET last_seen=now(),sequence=$2,game_running=$3,prepare_until=now()+make_interval(secs=>$4),version=$5,observed_offline=false WHERE id=$1")
-        .bind(id).bind(p.sequence).bind(p.game_running).bind(p.prepare_seconds as f64).bind(p.version).execute(&mut *tx).await?;
+    sqlx::query("UPDATE devices SET last_seen=now(),sequence=$2,game_running=$3,prepare_until=now()+make_interval(secs=>$4),version=$5,run_generation=$6,observed_offline=false WHERE id=$1")
+        .bind(id).bind(p.sequence).bind(p.game_running).bind(p.prepare_seconds as f64).bind(p.version).bind(p.run_generation).execute(&mut *tx).await?;
+    remote::heartbeat(
+        &mut tx,
+        id,
+        p.run_generation,
+        p.remote_revision,
+        p.account_action == "clear",
+        p.prepare_seconds,
+    )
+    .await?;
     if p.account_action != "keep" {
         let key = if p.account_action == "link" {
             p.leigod_account.as_ref().map(|a| a.key.as_str())
@@ -448,7 +468,7 @@ pub async fn dashboard(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Jso
     let u = auth::user(&s, &h, false).await?;
     let stats:Value=sqlx::query_scalar("SELECT jsonb_build_object('devices',count(*),'online',count(*) FILTER(WHERE last_seen>now()-interval '45 seconds'),'waiting',count(*) FILTER(WHERE last_seen<=now()-interval '45 seconds' AND last_seen>now()-interval '120 seconds')) FROM devices WHERE user_id=$1 AND NOT revoked").bind(u.id).fetch_one(&s.db).await?;
     Ok(Json(
-        json!({"stats":stats,"mode":"observe","remote_execution":false,"updated_at":Utc::now(),"client_integration":"v0.14.0 支持自动绑定、手动配对和设备心跳"}),
+        json!({"stats":stats,"mode":if s.provider.is_some(){"remote"}else{"observe"},"remote_execution":s.provider.is_some(),"updated_at":Utc::now(),"client_integration":"v0.15.0 支持单独授权服务器失联保护"}),
     ))
 }
 pub async fn overview(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Json<Value>> {
@@ -456,7 +476,7 @@ pub async fn overview(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Json
     let stats:Value=sqlx::query_scalar("SELECT jsonb_build_object('users',(SELECT count(*) FROM users WHERE NOT disabled),'disabled_users',(SELECT count(*) FROM users WHERE disabled),'web_users',(SELECT count(DISTINCT s.user_id) FROM sessions s JOIN users u ON u.id=s.user_id WHERE NOT u.disabled AND s.expires_at>now() AND s.last_seen>now()-interval '5 minutes'),'online_users',(SELECT count(DISTINCT user_id) FROM devices WHERE NOT revoked AND last_seen>now()-interval '45 seconds'),'online_devices',(SELECT count(*) FROM devices WHERE NOT revoked AND last_seen>now()-interval '45 seconds'),'devices',(SELECT count(*) FROM devices WHERE NOT revoked),'scheduler_at',(SELECT updated_at FROM service_state WHERE key='scheduler'))").fetch_one(&s.db).await?;
     let metrics:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('time',bucket,'devices',online_devices,'users',online_users,'web_users',web_users) FROM metrics WHERE bucket>now()-interval '24 hours' ORDER BY bucket").fetch_all(&s.db).await?;
     Ok(Json(
-        json!({"stats":stats,"metrics":metrics,"mode":"observe","updated_at":Utc::now()}),
+        json!({"stats":stats,"metrics":metrics,"mode":if s.provider.is_some(){"remote"}else{"observe"},"updated_at":Utc::now()}),
     ))
 }
 pub async fn users(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Json<Value>> {

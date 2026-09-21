@@ -923,6 +923,21 @@ fn render_apple_preview() {
             &output.join(format!("{name}.png")),
         );
     }
+    for (name, enabled, pending) in [
+        ("platform-remote-enabled", true, false),
+        ("platform-remote-pending-close", true, true),
+    ] {
+        let (ctx, mut app) = fixture();
+        app.page = Page::Platform;
+        app.platform.remote_fixture(enabled, pending);
+        gpu.save(
+            &ctx,
+            &mut app,
+            [1180.0, 1000.0],
+            1.0,
+            &output.join(format!("{name}.png")),
+        );
+    }
     let (ctx, mut app) = fixture();
     app.show_add_game = true;
     gpu.save(
@@ -955,4 +970,25 @@ fn platform_form_emits_actions_without_touching_accelerator_credentials() {
         let output = frame(&ctx, &mut app, size, vec![]);
         text_rect(&output.shapes, "平台账号");
     }
+}
+
+#[test]
+fn remote_protection_disclosure_and_pending_close_render_without_network() {
+    let (ctx, mut app) = fixture();
+    app.page = Page::Platform;
+    app.platform.remote_fixture(true, true);
+    let _ = frame(&ctx, &mut app, [1180.0, 1200.0], vec![]);
+    let output = frame(&ctx, &mut app, [1180.0, 1200.0], vec![]);
+    text_rect(
+        &output.shapes,
+        "服务器关闭未确认，可能仍会超时暂停；正在重试。",
+    );
+    assert!(app.shared.lock().unwrap().manual_cmd.is_none());
+    app.platform.remote_fixture(false, false);
+    let _ = frame(&ctx, &mut app, [1180.0, 1200.0], vec![]);
+    let output = frame(&ctx, &mut app, [1180.0, 1200.0], vec![]);
+    text_rect(
+        &output.shapes,
+        "同意上海服务器加密保存当前雷神登录凭据并执行失联暂停",
+    );
 }

@@ -3,3 +3,5 @@
 .mobile-close,.nav-mask{display:none}@media(max-width:760px){.mobile-close{display:block;position:absolute;right:7px;top:4px;border:0;background:transparent;color:#667382;font-size:25px;padding:4px 10px}.sidebar.open+.nav-mask{display:block;position:fixed;inset:0;background:#14243755;z-index:10;border:0}}
 
 .login-tabs{display:flex;gap:8px;margin-top:20px}.login-card .login-tabs .btn{width:auto;flex:1;margin:0}.login-card #email-code{min-width:0}.login-card [data-action="send-email-code"]{width:auto;margin:0;flex-shrink:0}
+
+.remote-table{min-width:760px}.remote-table td,.remote-table th{white-space:nowrap}.remote-table td:first-child{min-width:180px}

@@ -1801,6 +1801,7 @@ impl App {
             };
             self.dirty = true;
         }
+        self.platform.revoke_remote();
         self.acc_user = user.to_string();
         self.remember_pwd = md5pwd.is_some();
         self.acc_pwd = if self.remember_pwd {
@@ -2220,6 +2221,7 @@ impl App {
         ui.add_space(4.0);
         ui.horizontal_wrapped(|ui| {
             if ui.button("退出登录").clicked() {
+                self.platform.revoke_remote();
                 self.cancel_account_query();
                 // 清空内存 token、本地加密凭据与界面状态
                 if let Ok(mut s) = self.shared.lock() {

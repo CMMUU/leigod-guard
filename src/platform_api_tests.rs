@@ -232,6 +232,8 @@ fn email_login_thirty_day_cookie_and_device_headers() {
     api.heartbeat(
         &device,
         &Heartbeat {
+            run_generation: 1,
+            remote_revision: None,
             sequence: 0,
             game_running: None,
             prepare_seconds: 0,
@@ -249,4 +251,43 @@ fn email_login_thirty_day_cookie_and_device_headers() {
     assert!(requests[4].contains(&format!("authorization: Bearer {}", "d".repeat(64))));
     assert!(!requests[4].contains("cookie:"));
     assert!(!requests[4].contains(&"e".repeat(64)));
+}
+
+#[test]
+fn remote_consent_uses_body_and_device_bearer_with_versioned_revocation() {
+    let id = "12345678-1234-1234-1234-123456789abc";
+    let binding = DeviceBinding {
+        device_id: id.into(),
+        device_token: "d".repeat(64),
+        owner_id: id.into(),
+        owner: "fixture".into(),
+        sequence: 0,
+    };
+    let status=serde_json::json!({"available":true,"enabled":true,"revision":7,"account_key":"e".repeat(64),"label":"masked","protection":"awaiting_heartbeat","credential":"valid","last_result":"none"}).to_string();
+    let off=serde_json::json!({"available":true,"enabled":false,"revision":8,"protection":"off","credential":"deleted","last_result":"none"}).to_string();
+    let (api, requests, thread) = mock(vec![ok(&status), ok(&status), ok(&off)]);
+    let authorized = api
+        .remote_authorize(&binding, "fixture-provider-token", 6, 22, false)
+        .unwrap();
+    assert_eq!(authorized.revision, 7);
+    assert_ne!(authorized.message(), "服务器已确认远程保护生效");
+    api.remote_status(&binding).unwrap();
+    assert!(!api.remote_disable(&binding, 7).unwrap().enabled);
+    thread.join().unwrap();
+    let r = requests.lock().unwrap();
+    assert!(r[0].starts_with("POST /api/device/remote/authorize HTTP"));
+    assert!(r[0].contains("\"account_token\":\"fixture-provider-token\""));
+    assert!(r[0].contains("\"run_generation\":22"));
+    assert!(!r[0]
+        .lines()
+        .next()
+        .unwrap()
+        .contains("fixture-provider-token"));
+    assert!(!r[1].contains("fixture-provider-token"));
+    assert!(!r[2].contains("fixture-provider-token"));
+    assert!(r[2].contains("\"revision\":7"));
+    for r in r.iter() {
+        assert!(r.contains("authorization: Bearer"));
+        assert!(!r.contains("cookie:"));
+    }
 }

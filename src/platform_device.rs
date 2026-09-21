@@ -1,5 +1,7 @@
-//! Device worker is independent of window visibility and never receives Leigod secrets.
-use crate::platform_api::{AccountLink, Api, DeviceBinding, Error, Heartbeat, Session, ORIGIN_URL};
+//! Device heartbeats and explicitly consented remote protection run independently of windows.
+use crate::platform_api::{
+    AccountLink, Api, DeviceBinding, Error, Heartbeat, RemoteStatus, Session, ORIGIN_URL,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
@@ -15,6 +17,14 @@ struct Saved {
     #[serde(default)]
     paused: bool,
     reserved_until: i64,
+    #[serde(default)]
+    remote_consent: bool,
+    #[serde(default)]
+    pending_disable: bool,
+    #[serde(default)]
+    remote_revision: i64,
+    #[serde(default)]
+    remote_token_digest: String,
 }
 impl Saved {
     fn fresh() -> Result<Self, String> {
@@ -27,12 +37,19 @@ impl Saved {
             active: false,
             paused: false,
             reserved_until: 0,
+            remote_consent: false,
+            pending_disable: false,
+            remote_revision: 0,
+            remote_token_digest: String::new(),
         })
     }
     fn valid(&self) -> bool {
         self.origin == ORIGIN_URL
             && self.installation_key.len() == 64
             && self.installation_key.bytes().all(|b| b.is_ascii_hexdigit())
+            && self.remote_revision >= 0
+            && self.remote_revision < i64::MAX
+            && self.remote_token_digest.len() <= 64
             && self.reserved_until >= 0
             && self.reserved_until < i64::MAX - 1024
             && self.binding.as_ref().is_none_or(DeviceBinding::valid)
@@ -102,18 +119,32 @@ pub(crate) struct View {
     pub account: String,
     pub active: bool,
     pub busy: bool,
+    pub remote: RemoteStatus,
+    pub remote_message: String,
+    pub remote_error: String,
+    pub pending_disable: bool,
 }
 enum Command {
     Session(Session, bool),
     Bind(Session),
     Pair(String, Option<Session>),
     Stop,
+    Remote(bool),
 }
 pub(crate) struct Agent {
     sender: mpsc::Sender<Command>,
     pub view: Arc<Mutex<View>>,
 }
 impl Agent {
+    #[cfg(test)]
+    pub(crate) fn fixture(view: View) -> Self {
+        let (sender, _) = mpsc::channel();
+        Self {
+            sender,
+            view: Arc::new(Mutex::new(view)),
+        }
+    }
+
     pub fn start(
         shared: Arc<Mutex<crate::shared::Shared>>,
         config: Arc<Mutex<crate::config::Config>>,
@@ -144,7 +175,26 @@ impl Agent {
     pub fn pair(&self, code: String, session: Option<Session>) {
         let _ = self.sender.send(Command::Pair(code, session));
     }
+    fn persist_disable(&self) {
+        let result = write_disable_marker();
+        if let Ok(mut view) = self.view.lock() {
+            view.pending_disable = true;
+            view.remote_message = if result.is_ok() {
+                "服务器关闭未确认，可能仍会超时暂停；正在重试。"
+            } else {
+                "无法保存关闭请求，请在网页关闭保护或撤销设备。"
+            }
+            .into();
+        }
+    }
+    pub fn remote(&self, enabled: bool) {
+        if !enabled {
+            self.persist_disable();
+        }
+        let _ = self.sender.send(Command::Remote(enabled));
+    }
     pub fn stop(&self) {
+        self.persist_disable();
         let _ = self.sender.send(Command::Stop);
     }
 }
@@ -153,6 +203,10 @@ fn publish(view: &Arc<Mutex<View>>, ctx: &egui::Context, saved: &Saved, message:
         v.message = message.into();
         v.active = saved.active;
         v.busy = busy;
+        v.pending_disable = saved.pending_disable;
+        if saved.pending_disable {
+            v.remote_message = "服务器关闭未确认，可能仍会超时暂停；正在重试。".into();
+        }
         v.owner = saved
             .binding
             .as_ref()
@@ -184,6 +238,16 @@ fn run(
             return;
         }
     };
+    if read_disable_marker().is_some() {
+        saved.pending_disable = true;
+        saved.remote_consent = false;
+    }
+    let mut sequence = saved.reserved_until;
+    let run_generation = sequence.saturating_add(1);
+    saved.reserved_until = run_generation.saturating_add(256);
+    let mut enable_requested = false;
+    let mut run_confirmed = false;
+    // Persist a new run generation before emitting any heartbeat. Older instances cannot report.
     // Persist the installation identity before the first registration request.
     if let Err(e) = store.save(&saved) {
         publish(&view, &ctx, &saved, &e, false);
@@ -198,7 +262,6 @@ fn run(
     };
     let name = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "Windows 设备".into());
     let name: String = name.chars().filter(|c| !c.is_control()).take(30).collect();
-    let mut sequence = saved.reserved_until;
     let mut next = Instant::now();
     let mut blocked = false;
     let mut last_session: Option<Session> = None;
@@ -214,7 +277,7 @@ fn run(
         false,
     );
     loop {
-        let wait = if saved.active {
+        let wait = if saved.active || saved.pending_disable {
             next.saturating_duration_since(Instant::now())
                 .min(Duration::from_secs(15))
         } else {
@@ -232,15 +295,45 @@ fn run(
         }
         if let Some(command) = command {
             match command {
+                Command::Remote(enabled) => {
+                    if enabled && !saved.active {
+                        publish(
+                            &view,
+                            &ctx,
+                            &saved,
+                            "请先恢复本机设备连接，再开启远程保护。",
+                            false,
+                        );
+                        continue;
+                    }
+                    if let Ok(mut v) = view.lock() {
+                        v.remote_error.clear();
+                    }
+                    enable_requested = enabled;
+                    if !enabled {
+                        saved.remote_consent = false;
+                        saved.pending_disable = true;
+                    }
+                    let message = store.save(&saved).err().unwrap_or_else(|| {
+                        if enabled {
+                            "正在请求远程保护授权…".into()
+                        } else {
+                            "正在关闭服务器远程保护…".into()
+                        }
+                    });
+                    publish(&view, &ctx, &saved, &message, enabled);
+                }
                 Command::Stop => {
+                    enable_requested = false;
+                    saved.remote_consent = false;
+                    saved.pending_disable = true;
                     last_session = None;
                     saved.active = false;
                     saved.paused = true;
                     let message = store.save(&saved).err().unwrap_or_else(|| {
-                        "已停止本机上报；平台中的设备记录保留，可在网页撤销或解除。".into()
+                        "已停止本机上报；正在确认关闭服务器保护，未确认前可能仍超时暂停。".into()
                     });
                     publish(&view, &ctx, &saved, &message, false);
-                    continue;
                 }
                 Command::Session(session, fresh_login) => {
                     if !session.valid_for(ORIGIN_URL, chrono::Utc::now().timestamp()) {
@@ -257,6 +350,9 @@ fn run(
                         .is_some_and(|b| b.owner_id != session.user.id)
                     {
                         saved.active = false;
+                        saved.remote_consent = false;
+                        saved.pending_disable = true;
+                        let _ = write_disable_marker();
                         let _ = store.save(&saved);
                         publish(
                             &view,
@@ -315,6 +411,26 @@ fn run(
             }
             next = Instant::now();
         }
+        if Instant::now() >= next && (saved.active || saved.pending_disable) {
+            if let Some(binding) = saved.binding.clone() {
+                sync_remote(
+                    &api,
+                    &store,
+                    &mut saved,
+                    &binding,
+                    &view,
+                    &ctx,
+                    &shared,
+                    if run_confirmed { run_generation } else { 0 },
+                );
+            } else {
+                saved.pending_disable = false;
+                let _ = store.save(&saved);
+            }
+            if !saved.active {
+                next = Instant::now() + Duration::from_secs(15);
+            }
+        }
         if !saved.active || Instant::now() < next {
             continue;
         }
@@ -333,10 +449,31 @@ fn run(
                 continue;
             }
         }
-        let payload = snapshot(&shared, &config, sequence);
+        let mut payload = snapshot(&shared, &config, sequence);
+        payload.run_generation = run_generation;
+        payload.remote_revision = Some(saved.remote_revision);
+        // During startup/re-login, missing local credentials do not silently revoke
+        // an existing consent. Explicit logout/switch dispatches Remote(false).
+        if saved.remote_consent && payload.account_action == "clear" {
+            payload.account_action = "keep".into();
+        }
         sequence += 1;
         match api.heartbeat(&binding, &payload) {
             Ok(()) => {
+                run_confirmed = true;
+                if enable_requested {
+                    enable_requested = false;
+                    enable_remote(
+                        &api,
+                        &store,
+                        &mut saved,
+                        &binding,
+                        &view,
+                        &ctx,
+                        &shared,
+                        run_generation,
+                    );
+                }
                 if let Ok(mut v) = view.lock() {
                     if payload.account_action == "clear" {
                         v.account.clear();
@@ -348,7 +485,8 @@ fn run(
                 publish(&view, &ctx, &saved, "设备在线，心跳已确认。", false);
             }
             Err(e) => {
-                if e.invalidates_session() || e == Error::Conflict {
+                if e.invalidates_session() {
+                    remote_invalid(&view);
                     saved.active = false;
                     blocked = true;
                     let _ = store.save(&saved);
@@ -358,7 +496,7 @@ fn run(
                     &ctx,
                     &saved,
                     if !saved.active {
-                        "设备授权失效或序号冲突，已停止上报。请手动重新绑定。"
+                        "设备授权失效，已停止上报。请手动重新绑定。"
                     } else {
                         "设备上报失败，将自动重试；本地守护继续运行。"
                     },
@@ -381,6 +519,8 @@ fn apply_binding(
 ) {
     match request(api, saved) {
         Ok(binding) => {
+            saved.remote_consent = false;
+            saved.remote_token_digest.clear();
             *sequence = saved.reserved_until.max(binding.sequence.saturating_add(1));
             saved.binding = Some(binding);
             saved.active = true;
@@ -409,6 +549,8 @@ fn snapshot(
     sequence: i64,
 ) -> Heartbeat {
     let mut value = Heartbeat {
+        run_generation: 0,
+        remote_revision: None,
         sequence,
         game_running: None,
         prepare_seconds: 0,
@@ -476,9 +618,273 @@ fn account_link(username: &str, info: &serde_json::Value) -> Option<AccountLink>
         label: format!("雷神账号 · ***{tail}"),
     })
 }
+
+fn remote_invalid(view: &Arc<Mutex<View>>) {
+    if let Ok(mut v) = view.lock() {
+        v.remote = RemoteStatus::default();
+        v.pending_disable = false;
+        v.remote_message = "设备凭据已失效，远程保护状态请在网页核对。".into();
+    }
+}
+fn remote_view(view: &Arc<Mutex<View>>, ctx: &egui::Context, status: RemoteStatus, pending: bool) {
+    if let Ok(mut v) = view.lock() {
+        v.pending_disable = pending;
+        v.remote_message = status.message().into();
+        v.remote = status;
+    }
+    ctx.request_repaint();
+}
+fn token(shared: &Arc<Mutex<crate::shared::Shared>>) -> Option<String> {
+    shared.lock().ok()?.token.clone()
+}
+fn token_digest(token: &str) -> String {
+    format!("{:x}", Sha256::digest(token.as_bytes()))
+}
+#[allow(clippy::too_many_arguments)]
+fn sync_remote(
+    api: &Api,
+    store: &Store,
+    saved: &mut Saved,
+    binding: &DeviceBinding,
+    view: &Arc<Mutex<View>>,
+    ctx: &egui::Context,
+    shared: &Arc<Mutex<crate::shared::Shared>>,
+    run: i64,
+) {
+    let marker = read_disable_marker();
+    if marker.is_some() {
+        saved.pending_disable = true;
+        saved.remote_consent = false;
+    }
+    match api.remote_status(binding) {
+        Ok(mut status) => {
+            saved.remote_revision = status.revision;
+            if saved.pending_disable || (!saved.remote_consent && status.enabled) {
+                saved.pending_disable = true;
+                if store.save(saved).is_err() {
+                    publish(
+                        view,
+                        ctx,
+                        saved,
+                        "关闭请求无法保存，请在网页撤销设备。",
+                        false,
+                    );
+                    return;
+                }
+                // This also advances the server revision when already off, cancelling
+                // any authorization request whose response was lost in transit.
+                match api.remote_disable(binding, status.revision) {
+                    Ok(s) => {
+                        status = s;
+                        saved.pending_disable = false;
+                        saved.remote_consent = false;
+                        saved.remote_revision = status.revision;
+                        saved.remote_token_digest.clear();
+                    }
+                    Err(e) if e.invalidates_session() => {
+                        saved.pending_disable = false;
+                        saved.remote_consent = false;
+                    }
+                    Err(_) => {
+                        publish(
+                            view,
+                            ctx,
+                            saved,
+                            "服务器关闭未确认，可能仍会超时暂停；正在重试。",
+                            false,
+                        );
+                        return;
+                    }
+                }
+            } else if saved.remote_consent {
+                if !status.enabled {
+                    saved.remote_consent = false;
+                    saved.remote_token_digest.clear();
+                } else if let Some(token) = token(shared) {
+                    let digest = token_digest(&token);
+                    if run > 0 && digest != saved.remote_token_digest {
+                        match api.remote_authorize(binding, &token, status.revision, run, true) {
+                            Ok(s) => {
+                                status = s;
+                                saved.remote_revision = status.revision;
+                                saved.remote_token_digest = digest;
+                            }
+                            Err(Error::Conflict) => {
+                                saved.remote_consent = false;
+                                saved.pending_disable = true;
+                            }
+                            Err(_) => {
+                                if let Ok(mut v) = view.lock() {
+                                    v.remote_message =
+                                        "雷神凭据同步失败，保护状态待确认；请检查登录。".into();
+                                }
+                                let _ = store.save(saved);
+                                ctx.request_repaint();
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+            remote_view(view, ctx, status, saved.pending_disable);
+            if let Err(e) = store.save(saved) {
+                saved.remote_consent = false;
+                saved.pending_disable = true;
+                publish(view, ctx, saved, &e, false);
+            } else if !saved.pending_disable {
+                clear_disable_marker(marker.as_deref());
+            }
+        }
+        Err(e) if e.invalidates_session() => {
+            remote_invalid(view);
+            saved.pending_disable = false;
+            saved.remote_consent = false;
+            saved.active = false;
+            if store.save(saved).is_ok() {
+                clear_disable_marker(marker.as_deref());
+            }
+            publish(
+                view,
+                ctx,
+                saved,
+                "设备授权已失效，服务器远程保护已撤销。",
+                false,
+            );
+        }
+        Err(_) => {
+            if let Ok(mut v) = view.lock() {
+                v.remote_message = if saved.pending_disable {
+                    "服务器关闭未确认，可能仍会超时暂停；正在重试。"
+                } else {
+                    "无法确认服务器远程保护状态，正在重试。"
+                }
+                .into();
+            }
+            ctx.request_repaint();
+        }
+    }
+}
+#[allow(clippy::too_many_arguments)]
+fn enable_remote(
+    api: &Api,
+    store: &Store,
+    saved: &mut Saved,
+    binding: &DeviceBinding,
+    view: &Arc<Mutex<View>>,
+    ctx: &egui::Context,
+    shared: &Arc<Mutex<crate::shared::Shared>>,
+    run: i64,
+) {
+    let Some(token) = token(shared) else {
+        publish(
+            view,
+            ctx,
+            saved,
+            "请先登录雷神加速器账号，再开启远程保护。",
+            false,
+        );
+        return;
+    };
+    // Durable compensation intent precedes uploading any token. Crash/timeout will
+    // revoke an uncertain grant on the next run, never silently enable it.
+    saved.pending_disable = true;
+    if let Err(e) = store.save(saved) {
+        publish(view, ctx, saved, &e, false);
+        return;
+    }
+    match api.remote_authorize(binding, &token, saved.remote_revision, run, false) {
+        Ok(status) => {
+            saved.remote_revision = status.revision;
+            saved.remote_consent = true;
+            saved.pending_disable = false;
+            saved.remote_token_digest = token_digest(&token);
+            remote_view(view, ctx, status, saved.pending_disable);
+        }
+        Err(e) => {
+            saved.remote_consent = false;
+            if let Ok(mut v) = view.lock() {
+                v.remote_error = match e {
+                    Error::InvalidInput | Error::Conflict => {
+                        "授权失败：请检查雷神登录、账号归属及设备状态，再重新开启。".into()
+                    }
+                    _ => format!("授权未完成：{}", e.message()),
+                };
+            }
+            publish(view, ctx, saved, e.message(), false);
+        }
+    }
+    if let Err(e) = store.save(saved) {
+        saved.remote_consent = false;
+        saved.pending_disable = true;
+        publish(view, ctx, saved, &e, false);
+    }
+}
+
+static REMOTE_MARKER_LOCK: Mutex<()> = Mutex::new(());
+fn disable_marker_path() -> PathBuf {
+    crate::config::Config::path().with_file_name("platform-remote-disable.pending")
+}
+fn read_disable_marker() -> Option<String> {
+    let _guard = REMOTE_MARKER_LOCK.lock().ok()?;
+    std::fs::read_to_string(disable_marker_path()).ok()
+}
+fn write_disable_marker() -> Result<(), String> {
+    use std::io::Write;
+    let _guard = REMOTE_MARKER_LOCK
+        .lock()
+        .map_err(|_| "无法保存远程关闭请求")?;
+    let path = disable_marker_path();
+    let result = (|| -> std::io::Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut file = std::fs::File::create(&path)?;
+        file.write_all(
+            chrono::Utc::now()
+                .timestamp_nanos_opt()
+                .unwrap_or_default()
+                .to_string()
+                .as_bytes(),
+        )?;
+        file.sync_all()
+    })();
+    result.map_err(|_| "无法保存远程关闭请求".into())
+}
+fn clear_disable_marker(expected: Option<&str>) {
+    let Ok(_guard) = REMOTE_MARKER_LOCK.lock() else {
+        return;
+    };
+    if expected.is_some()
+        && std::fs::read_to_string(disable_marker_path())
+            .ok()
+            .as_deref()
+            == expected
+    {
+        let _ = std::fs::remove_file(disable_marker_path());
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn invalid_device_never_keeps_a_stale_protected_view() {
+        let view = Arc::new(Mutex::new(View {
+            remote: RemoteStatus {
+                available: true,
+                enabled: true,
+                protection: "armed".into(),
+                ..Default::default()
+            },
+            remote_message: "服务器已确认远程保护生效".into(),
+            ..Default::default()
+        }));
+        remote_invalid(&view);
+        let v = view.lock().unwrap();
+        assert!(!v.remote.enabled);
+        assert!(!v.remote.available);
+        assert!(!v.remote_message.contains("保护生效"));
+    }
+
     #[test]
     fn account_payload_contains_only_a_digest_and_masked_label() {
         let link = account_link(
@@ -506,11 +912,15 @@ mod tests {
         let original = s.installation_key.clone();
         s.reserved_until = 256;
         s.paused = true;
+        s.pending_disable = true;
+        s.remote_revision = 4;
         store.save(&s).unwrap();
         let read = store.load().unwrap();
         assert_eq!(read.installation_key, original);
         assert_eq!(read.reserved_until, 256);
         assert!(read.paused);
+        assert!(read.pending_disable);
+        assert_eq!(read.remote_revision, 4);
         assert!(!std::fs::read_to_string(&store.0)
             .unwrap()
             .contains(&original));

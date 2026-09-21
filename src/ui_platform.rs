@@ -13,6 +13,8 @@ pub(crate) enum Action {
     Bind,
     Pair,
     StopDevice,
+    EnableRemote,
+    DisableRemote,
     Refresh,
     Logout,
 }
@@ -42,6 +44,7 @@ pub(crate) struct Panel {
     challenge: Option<(String, CodeChallenge)>,
     next_code: Instant,
     pair_code: String,
+    remote_consent: bool,
     agent: Option<crate::platform_device::Agent>,
     pub(crate) remember: bool,
     pub(crate) message: String,
@@ -64,6 +67,7 @@ impl Default for Panel {
             challenge: None,
             next_code: Instant::now(),
             pair_code: String::new(),
+            remote_consent: false,
             agent: None,
             remember: false,
             message: "尚未登录平台；本地守护可正常使用。".into(),
@@ -79,6 +83,37 @@ impl Default for Panel {
     }
 }
 impl Panel {
+    #[cfg(test)]
+    pub(crate) fn remote_fixture(&mut self, enabled: bool, pending: bool) {
+        self.agent = Some(crate::platform_device::Agent::fixture(
+            crate::platform_device::View {
+                owner: "演示平台用户".into(),
+                device_id: "12345678-1234-1234-1234-123456789abc".into(),
+                account: "雷神账号 · ***1234".into(),
+                active: true,
+                pending_disable: pending,
+                remote: crate::platform_api::RemoteStatus {
+                    available: true,
+                    enabled,
+                    revision: 1,
+                    protection: if enabled { "armed" } else { "off" }.into(),
+                    credential: if enabled { "valid" } else { "none" }.into(),
+                    last_result: "none".into(),
+                    ..Default::default()
+                },
+                remote_message: if pending {
+                    "服务器关闭未确认，可能仍会超时暂停；正在重试。"
+                } else if enabled {
+                    "服务器已确认远程保护生效"
+                } else {
+                    "远程保护已关闭"
+                }
+                .into(),
+                ..Default::default()
+            },
+        ));
+    }
+
     pub(crate) fn start_device_agent(
         &mut self,
         shared: std::sync::Arc<std::sync::Mutex<crate::shared::Shared>>,
@@ -88,6 +123,11 @@ impl Panel {
         self.agent = Some(crate::platform_device::Agent::start(shared, config, ctx));
     }
 
+    pub(crate) fn revoke_remote(&self) {
+        if let Some(agent) = &self.agent {
+            agent.remote(false);
+        }
+    }
     pub(crate) fn restore(&mut self, store: &impl Store, ctx: &egui::Context) {
         match store.load() {
             Ok(Some(session)) => {
@@ -183,6 +223,17 @@ impl Panel {
                     agent.pair(code, self.session.clone().filter(|_| self.verified));
                     self.pair_code.clear();
                 }
+            }
+            Action::EnableRemote => {
+                if self.remote_consent {
+                    if let Some(agent) = &self.agent {
+                        agent.remote(true);
+                    }
+                    self.remote_consent = false;
+                }
+            }
+            Action::DisableRemote => {
+                self.revoke_remote();
             }
             Action::StopDevice => {
                 if let Some(agent) = &self.agent {
@@ -530,6 +581,57 @@ impl Panel {
         } else {
             &view.message
         });
+        ui.add_space(10.0);
+        ui.label(theme::title("服务器失联保护", 16.0));
+        ui.label(if view.remote_message.is_empty() {
+            "远程保护默认关闭，需单独授权。"
+        } else {
+            &view.remote_message
+        });
+        if !view.remote_error.is_empty() {
+            ui.label(
+                egui::RichText::new(&view.remote_error).color(egui::Color32::from_rgb(179, 49, 59)),
+            );
+        }
+        ui.label(format!(
+            "凭据：{} · 最近结果：{}",
+            match view.remote.credential.as_str() {
+                "valid" => "已验证",
+                "reauthorize" => "需要重新授权",
+                "deleted" => "已删除",
+                _ => "未授权",
+            },
+            match view.remote.last_result.as_str() {
+                "pause_confirmed" => "暂停已确认",
+                "already_paused" => "原本已暂停",
+                "confirmed_after_cancel" => "取消前已发送，查询确认已暂停",
+                "none" => "暂无",
+                _ => "请查看网页任务记录",
+            }
+        ));
+        if view.remote.enabled || view.pending_disable {
+            if ui
+                .add_enabled(!view.busy, egui::Button::new("关闭本机远程保护"))
+                .clicked()
+            {
+                self.action = Some(Action::DisableRemote);
+            }
+        } else {
+            ui.checkbox(
+                &mut self.remote_consent,
+                "同意上海服务器加密保存当前雷神登录凭据并执行失联暂停",
+            );
+            ui.label(egui::RichText::new("此凭据具有雷神账号权限。全部受保护设备连续失联 120 秒且准备期结束后，服务器尝试暂停；服务异常时可能延迟。关闭确认前仍可能暂停，已发送的请求无法撤回。").size(12.0).color(theme::MUTED));
+            if ui
+                .add_enabled(
+                    view.active && view.remote.available && self.remote_consent && !view.busy,
+                    egui::Button::new("授权并开启远程保护"),
+                )
+                .clicked()
+            {
+                self.action = Some(Action::EnableRemote);
+            }
+        }
         ui.add_enabled_ui(!busy && !view.busy, |ui| {
             ui.horizontal_wrapped(|ui| {
                 if ui
@@ -560,7 +662,7 @@ impl Panel {
         });
         ui.label(
             egui::RichText::new(
-                "设备授权独立保存；退出平台账号会停止本机上报。可在网页撤销或解除设备绑定。",
+                "退出平台账号或停止上报会请求关闭本机远程保护；断网时会持续重试，需以服务器确认为准。",
             )
             .size(12.0)
             .color(theme::MUTED),
@@ -581,9 +683,11 @@ impl Panel {
         );
         ui.add_space(6.0);
         ui.label(
-            egui::RichText::new("设备绑定后上报在线和游戏运行状态，并关联当前雷神账号的脱敏标识。自动暂停仍由本机执行。")
-                .size(13.0)
-                .color(theme::MUTED),
+            egui::RichText::new(
+                "设备绑定后上报在线和游戏运行状态。远程失联保护需单独开启；本地守护继续独立运行。",
+            )
+            .size(13.0)
+            .color(theme::MUTED),
         );
     }
 }

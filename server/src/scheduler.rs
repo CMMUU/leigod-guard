@@ -17,8 +17,8 @@ async fn tick(s: &AppState) -> ApiResult<()> {
     if !locked {
         return Ok(());
     }
-    // No credentials or pause calls exist in this release: offline is an observation only.
-    sqlx::query("WITH expired AS (UPDATE devices SET observed_offline=true WHERE NOT revoked AND NOT observed_offline AND last_seen<now()-interval '120 seconds' RETURNING id,user_id) INSERT INTO events(user_id,device_id,kind,detail) SELECT user_id,id,'device_offline','设备超过 120 秒未上报；仅记录观察，不执行暂停' FROM expired").execute(&mut *tx).await?;
+    // Observation never sends HTTP. Account-level execution runs in its own worker.
+    sqlx::query("WITH expired AS (UPDATE devices SET observed_offline=true WHERE NOT revoked AND NOT observed_offline AND last_seen<now()-interval '120 seconds' RETURNING id,user_id) INSERT INTO events(user_id,device_id,kind,detail) SELECT user_id,id,'device_offline','设备超过 120 秒未上报；远程暂停取决于单独授权及账号全部设备状态' FROM expired").execute(&mut *tx).await?;
     sqlx::query("INSERT INTO metrics(bucket,online_devices,online_users,web_users) SELECT date_trunc('minute',now()),(SELECT count(*) FROM devices WHERE NOT revoked AND last_seen>now()-interval '45 seconds'),(SELECT count(DISTINCT user_id) FROM devices WHERE NOT revoked AND last_seen>now()-interval '45 seconds'),(SELECT count(DISTINCT user_id) FROM sessions WHERE expires_at>now() AND last_seen>now()-interval '5 minutes') ON CONFLICT(bucket) DO UPDATE SET online_devices=EXCLUDED.online_devices,online_users=EXCLUDED.online_users,web_users=EXCLUDED.web_users").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM sessions WHERE expires_at<now()")
         .execute(&mut *tx)

@@ -99,12 +99,43 @@ pub struct AccountLink {
 }
 #[derive(Serialize)]
 pub struct Heartbeat {
+    pub run_generation: i64,
+    pub remote_revision: Option<i64>,
     pub sequence: i64,
     pub game_running: Option<bool>,
     pub prepare_seconds: u32,
     pub version: String,
     pub account_action: String,
     pub leigod_account: Option<AccountLink>,
+}
+#[derive(Clone, Default, Deserialize)]
+pub struct RemoteStatus {
+    pub available: bool,
+    pub enabled: bool,
+    pub revision: i64,
+    #[serde(default)]
+    pub account_key: String,
+    #[serde(default)]
+    pub label: String,
+    pub protection: String,
+    pub credential: String,
+    pub last_result: String,
+}
+impl RemoteStatus {
+    pub fn message(&self) -> &'static str {
+        match self.protection.as_str() {
+            "off" => "远程保护已关闭",
+            "awaiting_heartbeat" => "授权已保存，等待首次心跳",
+            "armed" => "服务器已确认远程保护生效",
+            "waiting" => "设备失联观察中，等待全部受保护设备超时",
+            "executing" => "服务器正在执行暂停并查询确认",
+            "confirmed" => "服务器已查询确认暂停",
+            "unconfirmed" => "远程暂停未确认，请检查雷神账号状态",
+            "reauthorize" => "雷神凭据失效，请重新登录雷神并开启保护",
+            "service_abnormal" => "远程服务观察或异常期间，自动暂停暂缓",
+            _ => "远程保护状态未知",
+        }
+    }
 }
 fn read_binding(response: Response) -> Result<DeviceBinding, Error> {
     let binding: DeviceBinding = read_json(successful(response)?)?;
@@ -303,6 +334,44 @@ impl Api {
         }
         Ok(())
     }
+    pub fn remote_status(&self, binding: &DeviceBinding) -> Result<RemoteStatus, Error> {
+        let response = self
+            .client
+            .get(format!("{}/api/device/remote", self.origin))
+            .bearer_auth(&binding.device_token)
+            .send()
+            .map_err(|_| Error::Network)?;
+        read_remote(response)
+    }
+    pub fn remote_authorize(
+        &self,
+        binding: &DeviceBinding,
+        token: &str,
+        revision: i64,
+        run: i64,
+        refresh: bool,
+    ) -> Result<RemoteStatus, Error> {
+        if token.is_empty() || token.len() > 4096 {
+            return Err(Error::InvalidInput);
+        }
+        let response=self.client.post(format!("{}/api/device/remote/authorize",self.origin)).timeout(std::time::Duration::from_secs(25)).bearer_auth(&binding.device_token)
+            .json(&serde_json::json!({"account_token":token,"revision":revision,"run_generation":run,"refresh":refresh})).send().map_err(|_|Error::Network)?;
+        read_remote(response)
+    }
+    pub fn remote_disable(
+        &self,
+        binding: &DeviceBinding,
+        revision: i64,
+    ) -> Result<RemoteStatus, Error> {
+        let response = self
+            .client
+            .post(format!("{}/api/device/remote/disable", self.origin))
+            .bearer_auth(&binding.device_token)
+            .json(&serde_json::json!({"revision":revision}))
+            .send()
+            .map_err(|_| Error::Network)?;
+        read_remote(response)
+    }
     fn identity(&self, token: &str) -> Result<User, Error> {
         if !secret_valid(token) {
             return Err(Error::Protocol);
@@ -418,6 +487,21 @@ fn login_cookie(response: &Response) -> Result<(String, i64), Error> {
         return Ok((token.into(), seconds));
     }
     Err(Error::Protocol)
+}
+
+fn read_remote(response: Response) -> Result<RemoteStatus, Error> {
+    let status: RemoteStatus = read_json(successful(response)?)?;
+    if status.revision < 0
+        || status.revision == i64::MAX
+        || status.account_key.len() > 64
+        || status.label.len() > 100
+        || status.protection.len() > 40
+        || status.credential.len() > 40
+        || status.last_result.len() > 100
+    {
+        return Err(Error::Protocol);
+    }
+    Ok(status)
 }
 
 #[cfg(test)]
