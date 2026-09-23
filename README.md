@@ -14,8 +14,6 @@
 
 **自建后台：** 服务端源码位于 [server/](server/)，支持 [Docker Compose 或 Linux 可执行文件部署](docs/SERVER_DEPLOYMENT.md)。说明包含 PostgreSQL、管理员初始化、邮件、HTTPS、远程保护及客户端连接地址配置。
 
-**v0.16.1 成品直达：** [Windows 安装版 EXE](https://github.com/CMMUU/leigod-guard/releases/download/v0.16.1/leigod-guard-v0.16.1-windows-x64-setup.exe) · [绿色免安装 ZIP](https://github.com/CMMUU/leigod-guard/releases/download/v0.16.1/leigod-guard-v0.16.1-windows-x64.zip) · [SHA-256 校验](https://github.com/CMMUU/leigod-guard/releases/download/v0.16.1/SHA256SUMS.txt)。国内用户可使用上方 Gitee 发布页或应用内更新。
-
 两处发布页均提供**安装版 EXE、绿色免安装 ZIP 和校验文件**。一般用户选择安装版；希望解压即用的用户选择绿色版。已有用户可在「关于与更新」中检查新版，点击「下载并自动更新」完成升级。
 
 也可在[官网直接下载最新可用版本](https://leigod.cmmuu.com/#download)：点击「下载安装版」或「下载绿色版」，自动比较完整正式版，同版本优先 Gitee；支持指定单一来源和同版本备用下载。下载信息最多缓存 5 分钟，文件交给浏览器下载，安装需手动打开安装包。
