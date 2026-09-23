@@ -85,7 +85,7 @@
 
 界面的模糊纹理只生成并缓存一次，不持续计算或采集桌面；文字、按钮和倒计时保持清晰。
 
-Accelerator Guard is an independent, open-source Windows companion for the Leigod game accelerator. It checks configured game processes, requests a pause after the applicable grace period, and displays the latest queried account balance. Installer and portable packages are available on Gitee and GitHub, with in-app updates. It does not start or stop the official client's acceleration.
+Accelerator Guard is an independent, open-source Windows companion for the Leigod and ETAlien game accelerators. It checks configured game processes, requests a pause after the applicable grace period, and displays the latest queried account balance. Each accelerator can also be separately authorized for server-side pause protection after all protected devices for that account lose contact for 120 seconds. Installer and portable packages are available on Gitee and GitHub, with in-app updates. It does not start or stop the official client's acceleration.
 
 ## 平台账号、设备与远程失联保护（0.15.0）
 
