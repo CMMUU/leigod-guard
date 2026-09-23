@@ -6,7 +6,7 @@
 
 **加速器守护（原雷神守护）是 Windows 开源计时守护工具。** 游戏结束忘了暂停，重启电脑却只是处理工作，或者刚开启加速、还在准备进游戏——它通过游戏进程和可调整的等待规则，帮助减少闲置时长消耗，也给开玩前的准备留出时间。
 
-**当前开发版 0.16.0：** 统一名称与 Logo，增加外星仔本机自动暂停的试验性接入。外星仔需独立登录、在官方客户端暂停并完成一次状态校准后手动启用；账号实测尚待验收。平台服务器失联保护仍仅支持雷神。见下方[外星仔首次配置](#外星仔首次配置试验性)及[完整使用与验收说明](https://github.com/CMMUU/leigod-guard/blob/feat/accelerator-guard-etalien/docs/外星仔接入说明.md)。下方 v0.15.2 下载是此前正式版，不含这些新功能。
+**当前版本 0.16.1：** 统一名称与 Logo，增加外星仔本机自动暂停的试验性接入。外星仔需独立登录、在官方客户端暂停并完成一次状态校准后手动启用；账号实测尚待验收。平台服务器失联保护仍仅支持雷神。见下方[外星仔首次配置](#外星仔首次配置试验性)及[完整使用与验收说明](https://github.com/CMMUU/leigod-guard/blob/v0.16.1/docs/外星仔接入说明.md)。外星仔默认关闭，可按说明手动开启测试。
 
 **Windows 10 / 11 x64 · MIT 开源 · 安装版 EXE / 绿色免安装 ZIP · 应用内更新**
 
@@ -14,7 +14,7 @@
 
 **自建后台：** 服务端源码位于 [server/](server/)，支持 [Docker Compose 或 Linux 可执行文件部署](docs/SERVER_DEPLOYMENT.md)。说明包含 PostgreSQL、管理员初始化、邮件、HTTPS、远程保护及客户端连接地址配置。
 
-**v0.15.2 成品直达：** [Windows 安装版 EXE](https://github.com/CMMUU/leigod-guard/releases/download/v0.15.2/leigod-guard-v0.15.2-windows-x64-setup.exe) · [绿色免安装 ZIP](https://github.com/CMMUU/leigod-guard/releases/download/v0.15.2/leigod-guard-v0.15.2-windows-x64.zip) · [SHA-256 校验](https://github.com/CMMUU/leigod-guard/releases/download/v0.15.2/SHA256SUMS.txt)。国内用户可使用上方 Gitee 发布页或应用内更新。
+**v0.16.1 成品直达：** [Windows 安装版 EXE](https://github.com/CMMUU/leigod-guard/releases/download/v0.16.1/leigod-guard-v0.16.1-windows-x64-setup.exe) · [绿色免安装 ZIP](https://github.com/CMMUU/leigod-guard/releases/download/v0.16.1/leigod-guard-v0.16.1-windows-x64.zip) · [SHA-256 校验](https://github.com/CMMUU/leigod-guard/releases/download/v0.16.1/SHA256SUMS.txt)。国内用户可使用上方 Gitee 发布页或应用内更新。
 
 两处发布页均提供**安装版 EXE、绿色免安装 ZIP 和校验文件**。一般用户选择安装版；希望解压即用的用户选择绿色版。已有用户可在「关于与更新」中检查新版，点击「下载并自动更新」完成升级。
 
@@ -221,12 +221,12 @@ Windows 10 / 11 x64 是当前支持目标，并不表示所有系统版本、驱
 
 | 版本 | 下载后怎样使用 | 适合谁 |
 | --- | --- | --- |
-| [安装版 EXE](https://github.com/CMMUU/leigod-guard/releases/download/v0.12.2/leigod-guard-v0.12.2-windows-x64-setup.exe) | 双击安装，按需自动补装 WebView2，提供快捷方式和卸载入口 | 普通用户，推荐 |
-| [绿色免安装版 ZIP](https://github.com/CMMUU/leigod-guard/releases/download/v0.12.2/leigod-guard-v0.12.2-windows-x64.zip) | 解压到固定且可写的目录，运行 `leigod-guard.exe`；验证码需要已有 WebView2 Runtime | 希望自行管理程序目录的用户 |
+| [安装版 EXE](https://github.com/CMMUU/leigod-guard/releases/download/v0.16.1/leigod-guard-v0.16.1-windows-x64-setup.exe) | 双击安装，按需自动补装 WebView2，提供快捷方式和卸载入口 | 普通用户，推荐 |
+| [绿色免安装版 ZIP](https://github.com/CMMUU/leigod-guard/releases/download/v0.16.1/leigod-guard-v0.16.1-windows-x64.zip) | 解压到固定且可写的目录，运行 `leigod-guard.exe`；验证码需要已有 WebView2 Runtime | 希望自行管理程序目录的用户 |
 
 两种版本功能相同，都支持应用内更新。这里的「绿色免安装」指不需要安装向导：配置和日志仍保存在 `%APPDATA%\leigod-guard\`；若主动开启开机自启，也会写入当前用户的 Windows 自启注册表项。它不是将所有数据保存到程序目录、完全不写注册表的移动应用。
 
-1. 下载 [Windows x64 安装包](https://github.com/CMMUU/leigod-guard/releases/download/v0.12.2/leigod-guard-v0.12.2-windows-x64-setup.exe)：`leigod-guard-v0.12.2-windows-x64-setup.exe`。页面中的 `Source code` 是源码，不是安装程序。
+1. 下载 [Windows x64 安装包](https://github.com/CMMUU/leigod-guard/releases/download/v0.16.1/leigod-guard-v0.16.1-windows-x64-setup.exe)：`leigod-guard-v0.16.1-windows-x64-setup.exe`。页面中的 `Source code` 是源码，不是安装程序。
 2. 双击安装包，按向导完成安装，然后从开始菜单或桌面快捷方式打开「加速器守护」。**不需要解压或手动配置运行库。** 安装器会在需要时自动安装验证码窗口所需的 WebView2 Runtime；首次补装运行时需要联网。
 3. 打开「账户」页，用自己的雷神账户登录。提供密码、短信验证码和已有 token 三种方式；遇到人机验证时按窗口提示完成。不要把密码、短信验证码或 token 发到 Issues。
 4. 打开「游戏名单」，从「常用游戏」下拉列表选择游戏；未列出的游戏可选择「自定义 / 手动填写」，或先启动一次游戏，再用「从运行进程选择…」选择真正的游戏进程。请核对预设文件名与本机实际进程是否一致；自定义时填写例如 `ExampleGame.exe` 的文件名，不填完整路径、桌面快捷方式名称或 `*.exe`。
@@ -239,7 +239,7 @@ Windows 10 / 11 x64 是当前支持目标，并不表示所有系统版本、驱
 
 WebView2 Runtime 适用独立的 [微软许可条款](licenses/webview2-runtime/LICENSE.txt)。安装向导会展示相应条款；其中默认启用的 Microsoft Defender SmartScreen 会按微软隐私声明处理并向微软发送信息，详见 [隐私说明](docs/PRIVACY.md)。
 
-绿色免安装版下载文件为 `leigod-guard-v0.12.2-windows-x64.zip`，请完整解压后运行，不要直接从 ZIP 预览窗口启动。该版本不提供安装和卸载向导；普通用户建议使用上面的安装版。
+绿色免安装版下载文件为 `leigod-guard-v0.16.1-windows-x64.zip`，请完整解压后运行，不要直接从 ZIP 预览窗口启动。该版本不提供安装和卸载向导；普通用户建议使用上面的安装版。
 
 ### 应用内更新
 
@@ -276,7 +276,7 @@ GitHub 是主发布源；配置发布凭据后，自动同步任务会把同一�
 在下载目录的 PowerShell 中运行：
 
 ```powershell
-Get-FileHash .\leigod-guard-v0.12.2-windows-x64-setup.exe -Algorithm SHA256
+Get-FileHash .\leigod-guard-v0.16.1-windows-x64-setup.exe -Algorithm SHA256
 ```
 
 将结果与同一 Release 提供的 `SHA256SUMS.txt` 中相同文件名的记录核对。便携 ZIP 也可用同样方式校验。哈希校验用于确认下载内容一致，不等同于 Windows 代码签名。
