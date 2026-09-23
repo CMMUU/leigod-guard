@@ -54,4 +54,4 @@ jobs:
           SYNC_TAG: ${{ github.event.release.tag_name || (github.event_name == 'workflow_run' && startsWith(github.event.workflow_run.head_branch, 'v') && github.event.workflow_run.head_branch) || inputs.tag || '' }}
         run: >-
           python3 scripts/sync_gitee.py --repo leigod-guard
-          --scope "$SYNC_SCOPE" --tag "$SYNC_TAG" --work-dir "$RUNNER_TEMP/gitee-sync" --apply
+          --scope "$SYNC_SCOPE" --tag "$SYNC_TAG" --work-dir "$RUNNER_TEMP/gitee-sync" --sync-description --apply

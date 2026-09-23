@@ -997,6 +997,27 @@ fn clear_disable_marker(expected: Option<&str>, kind: Provider) {
 mod tests {
     use super::*;
     #[test]
+    fn legacy_consent_migrates_without_enabling_etalien_and_roundtrips_independently() {
+        let legacy = serde_json::json!({"origin":ORIGIN_URL,"installation_key":"a".repeat(64),"binding":null,"active":false,"reserved_until":256,"remote_consent":true,"remote_revision":7,"remote_token_digest":"b".repeat(64),"pending_disable":false});
+        let mut saved: Saved = serde_json::from_value(legacy).unwrap();
+        assert!(saved.valid());
+        assert!(saved[Provider::Leigod].remote_consent);
+        assert!(!saved[Provider::Etalien].remote_consent);
+        saved[Provider::Etalien].pending_disable = true;
+        saved[Provider::Etalien].remote_revision = 12;
+        let roundtrip: Saved =
+            serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        assert_eq!(roundtrip[Provider::Leigod].remote_revision, 7);
+        assert_eq!(roundtrip[Provider::Etalien].remote_revision, 12);
+        assert!(roundtrip[Provider::Etalien].pending_disable);
+        assert!(!roundtrip[Provider::Leigod].pending_disable);
+        assert_ne!(
+            disable_marker_path(Provider::Leigod),
+            disable_marker_path(Provider::Etalien)
+        );
+    }
+
+    #[test]
     fn invalid_device_never_keeps_a_stale_protected_view() {
         let view = Arc::new(Mutex::new(View {
             remote: [

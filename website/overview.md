@@ -1,14 +1,14 @@
 # 加速器守护 Accelerator Guard
 
-> 配合雷神加速器使用的独立开源 Windows 计时守护工具：按游戏进程请求暂停账户计时，重启后检查闲置计时，查询账户剩余时长。
+> 支持雷神与外星仔加速器的独立开源 Windows 计时守护工具：按游戏进程请求暂停账户计时，重启后检查闲置计时，查询账户剩余时长。
 
 项目网站：{{SITE_URL}}/
 资料对应仓库版本：v{{APP_VERSION}}
 内容最近修改：{{LAST_MODIFIED}}
 
-加速器守护不是雷神加速器官方产品，与其运营方没有隶属、合作或授权关系。软件采用 MIT 许可证，目前提供 Windows 10 / 11 x64 版本。游戏、线路选择和开启加速仍由雷神官方客户端完成。
+加速器守护不是雷神或外星仔加速器官方产品，与两者运营方没有隶属、合作或授权关系。软件采用 MIT 许可证，目前提供 Windows 10 / 11 x64 版本。游戏、线路选择和开启加速仍由对应加速器官方客户端完成。
 
-Accelerator Guard is an independent, MIT-licensed Windows companion for the Leigod accelerator. It monitors configured game processes, requests account billing pauses, and displays the latest queried remaining time. It does not stop client acceleration or operate after the computer loses power.
+Accelerator Guard is an independent, MIT-licensed Windows companion for the Leigod and ETAlien accelerators. It monitors configured game processes, requests account billing pauses, and displays the latest queried remaining time. Local protection stops when the computer loses power. Separately authorized server protection can request a pause after all protected devices for the same account lose contact for 120 seconds.
 
 ## 下载与更新
 
@@ -25,7 +25,11 @@ Accelerator Guard is an independent, MIT-licensed Windows companion for the Leig
 2. 本次启动检查：检查有效时，默认连续等待 3 分钟；仍无名单游戏运行则尝试暂停。
 3. 准备游戏：尚未结束的启动检查可以延后，保护到至少点击后 10 分钟；不能重启已经结束的启动检查。
 
-这些是独立场景，等待时间不会相加。需要有效游戏名单、已开启的策略、登录与网络。异常断电后工具无法继续工作，也不能追回已经消耗的时长。
+这些是独立场景，等待时间不会相加。需要有效游戏名单、已开启的策略、登录与网络。异常断电后本机工具无法继续工作。已单独授权的服务器保护在同一账号全部受保护设备失联 120 秒且准备期结束后尝试暂停；接口或网络异常仍可能失败，无法追回已消耗时长。
+
+## 服务器失联保护
+
+两款加速器分别授权，默认关闭。外星仔首次授权前需在官方客户端暂停并校准；服务器验证账号身份，收到当前授权版本的心跳后才生效。同一账号任一受保护设备在线则不暂停。关闭确认前及请求已发送后仍有执行边界，详见仓库使用与隐私说明。外星仔本机已有用户可用反馈，新增服务器适配仍需真实账号验收。
 
 ## 剩余时长
 

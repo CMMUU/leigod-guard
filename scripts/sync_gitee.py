@@ -331,6 +331,21 @@ class Sync:
         validate_pair(self.repo, self.source, target)
         return target
 
+    def sync_description(self, apply):
+        target = self.guard()
+        description = self.source.get("description")
+        if not isinstance(description, str) or not description.strip() or len(description) > 500:
+            raise SyncError("Source description must be a nonempty string of at most 500 characters")
+        if target.get("description") == description:
+            return
+        if not apply:
+            print("Repository description differs; no change without --apply.")
+            return
+        self.ge.request(self.target_path, method="PATCH", data={"description": description})
+        if self.ge.request(self.target_path).get("description") != description:
+            raise SyncError("Gitee description update could not be confirmed")
+        print("Gitee repository description verified.")
+
     def sync_refs(self):
         self.guard()
         self.work.mkdir(parents=True, exist_ok=True)
@@ -480,6 +495,7 @@ def main():
     parser.add_argument("--scope", choices=("refs", "release", "all"), default="all")
     parser.add_argument("--tag", default="", help="Exact published stable-format tag for release scope; empty selects GitHub latest")
     parser.add_argument("--work-dir", type=Path, required=True)
+    parser.add_argument("--sync-description", action="store_true", help="Copy only the verified GitHub repository description to Gitee")
     parser.add_argument("--apply", action="store_true", help="Explicitly authorize writes to the checked Gitee repository")
     args = parser.parse_args()
     gh_token, ge_token = os.environ.get("GITHUB_TOKEN"), os.environ.get("GITEE_TOKEN")
@@ -490,7 +506,10 @@ def main():
     extra_hosts = {value.strip().lower() for value in os.environ.get("GITEE_ASSET_HOSTS", "").split(",") if value.strip()}
     if any(not re.fullmatch(r"[a-z0-9]+(?:[.-][a-z0-9]+)*", host) for host in extra_hosts):
         raise SyncError("GITEE_ASSET_HOSTS accepts exact hostnames only, without wildcards or URLs")
-    Sync(args.repo, Api("github", gh_token), Api("gitee", ge_token, extra_hosts), args.work_dir).run(args.scope, args.apply, args.tag)
+    job = Sync(args.repo, Api("github", gh_token), Api("gitee", ge_token, extra_hosts), args.work_dir)
+    job.run(args.scope, args.apply, args.tag)
+    if args.sync_description:
+        job.sync_description(args.apply)
 
 
 if __name__ == "__main__":

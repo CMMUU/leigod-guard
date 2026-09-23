@@ -2,7 +2,7 @@
 import http.cookiejar,json,os,secrets,subprocess,time,urllib.error,urllib.request
 BASE=os.environ.get('BASE_URL','http://127.0.0.1:3089');assert BASE.startswith('http://127.0.0.1:')
 assert os.environ['ETALIEN_TEST_ORIGIN']=='http://127.0.0.1:3093'
-nonce=secrets.token_hex(5)
+nonce=secrets.token_hex(5);ACCOUNT_ID=int(nonce,16)+1000000000000
 def sql(q):
  args=json.loads(os.environ['TEST_PSQL']) if 'TEST_PSQL' in os.environ else ['psql',os.environ['DATABASE_URL'],'-v','ON_ERROR_STOP=1','-At']
  return subprocess.run(args,input=q,text=True,capture_output=True,check=True).stdout.strip()
@@ -55,9 +55,9 @@ def check(t):print('PASS',t,flush=True)
 d=Device();d.beat();et='et-'+nonce;lei='lei-'+nonce
 mock(et,state=0);d.auth('etalien',et,status=400)
 mock(et,state=2,id=0);d.auth('etalien',et,status=400)
-mock(et,state=2,id=123456);d.auth('etalien',et,paused=1,status=400)
+mock(et,state=2,id=ACCOUNT_ID);d.auth('etalien',et,paused=1,status=400)
 d.auth('etalien',et)
-mock(lei,port=3091,account='123456');d.auth('leigod',lei);d.beat()
+mock(lei,port=3091,account=str(ACCOUNT_ID));d.auth('leigod',lei);d.beat()
 assert d.status('etalien')['enabled'] and d.status('leigod')['enabled']
 assert d.aid('etalien')!=d.aid('leigod')
 check('official identity and paused calibration required; two independent grants per physical device')
@@ -65,7 +65,7 @@ x=Device(other);x.beat();x.auth('etalien',et,status=409)
 assert not x.status('etalien')['enabled'];assert not other.call('/remote')['grants']
 check('verified identity prevents cross-owner authorization')
 # A new token of the same account groups with the same heartbeat peers.
-et2='rotation-'+nonce;mock(et2,id=123456,state=2)
+et2='rotation-'+nonce;mock(et2,id=ACCOUNT_ID,state=2)
 e=Device();e.beat();e.auth('etalien',et2);e.beat();assert e.aid('etalien')==d.aid('etalien')
 mock(et2,state=0);d.stale();ready();time.sleep(6);assert stats(et2)['pause_calls']==0
 e.stale();ready();wait(d.confirmed);assert stats(et2)['pause_calls']==1
@@ -83,7 +83,7 @@ owner.call('/devices/'+d.id+'/remote/disable?provider=etalien',{})
 assert not d.status('etalien')['enabled'] and d.status('leigod')['enabled']
 # A separate device/user avoids the deliberately low authorization rate limit.
 yowner=user(3);y=Device(yowner);y.beat();yt='y-'+nonce;yl='yl-'+nonce
-mock(yt,id=654321,state=2);mock(yl,port=3091,account='654321');y.auth('etalien',yt);y.auth('leigod',yl);y.beat()
+mock(yt,id=ACCOUNT_ID+1,state=2);mock(yl,port=3091,account=str(ACCOUNT_ID+1));y.auth('etalien',yt);y.auth('leigod',yl);y.beat()
 yowner.call('/devices/'+y.id+'/revoke',{})
 assert sql(f"SELECT count(*) FROM remote_grants WHERE device_id='{y.id}' AND enabled;")=='0'
 assert sql(f"SELECT count(*) FROM remote_accounts a JOIN remote_grants g ON g.account_id=a.id WHERE g.device_id='{y.id}' AND a.credential IS NOT NULL;")=='0'
@@ -93,3 +93,11 @@ visible=json.dumps(owner.call('/remote'))+json.dumps(owner.call('/events'))
 assert et not in visible and et2 not in visible and lei not in visible
 d.off('leigod')
 check('credentials absent from public views and audit')
+
+z=Device(yowner);z.beat();zt='race-'+nonce;mock(zt,id=ACCOUNT_ID+2,state=2);z.auth('etalien',zt);z.beat()
+mock(zt,state=0,delay=2);z.stale();ready();wait(lambda:stats(zt)['profile_calls']>=2)
+z.beat();time.sleep(6);assert stats(zt)['pause_calls']==0
+check('fresh heartbeat during slow ET query cancels write')
+mock(zt,expired=True,delay=0);z.stale();ready();wait(lambda:z.status('etalien')['credential']=='reauthorize')
+assert stats(zt)['pause_calls']==0;z.off('etalien')
+check('expired ET token becomes reauthorization without a pause write')
