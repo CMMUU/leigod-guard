@@ -333,6 +333,8 @@ pub struct Heartbeat {
     run_generation: i64,
     #[serde(default)]
     remote_revision: Option<i64>,
+    #[serde(default)]
+    etalien_revision: Option<i64>,
     sequence: i64,
     game_running: Option<bool>,
     #[serde(default)]
@@ -401,6 +403,17 @@ pub async fn heartbeat(
         p.remote_revision,
         p.account_action == "clear",
         p.prepare_seconds,
+        provider::Kind::Leigod,
+    )
+    .await?;
+    remote::heartbeat(
+        &mut tx,
+        id,
+        p.run_generation,
+        p.etalien_revision,
+        false,
+        p.prepare_seconds,
+        provider::Kind::Etalien,
     )
     .await?;
     if p.account_action != "keep" {

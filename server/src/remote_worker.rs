@@ -8,6 +8,7 @@ struct Job {
     epoch: i64,
     credential_version: i64,
     key: String,
+    provider: provider::Kind,
     cipher: Vec<u8>,
     attempts: i32,
 }
@@ -87,7 +88,7 @@ async fn tick(s: &AppState, healthy: bool) -> ApiResult<()> {
 async fn claim(s: &AppState) -> ApiResult<Option<Job>> {
     let mut tx = s.db.begin().await?;
     remote::lock(&mut tx).await?;
-    let row=sqlx::query(&format!("SELECT j.id,j.account_id,j.epoch,j.credential_version,j.attempts,a.provider_key,a.credential FROM remote_jobs j JOIN remote_accounts a ON a.id=j.account_id,remote_service s WHERE j.state IN ('queued','running') AND j.next_attempt<=now() AND j.expires_at>now()+interval '40 seconds' AND j.attempts<3 AND (j.lease_until IS NULL OR j.lease_until<now()) AND j.epoch=a.epoch AND j.credential_version=a.credential_version AND {ELIGIBLE} AND s.ingress_ok AND NOT s.blocked AND s.warmup_until<=now() AND s.last_tick>now()-interval '20 seconds' AND (SELECT count(*) FROM remote_jobs WHERE lease_until>now())<2 AND NOT EXISTS(SELECT 1 FROM remote_jobs k WHERE k.account_id=a.id AND k.lease_until>now()) ORDER BY j.next_attempt FOR UPDATE OF j SKIP LOCKED LIMIT 1")).fetch_optional(&mut *tx).await?;
+    let row=sqlx::query(&format!("SELECT j.id,j.account_id,j.epoch,j.credential_version,j.attempts,a.provider_key,a.provider,a.credential FROM remote_jobs j JOIN remote_accounts a ON a.id=j.account_id,remote_service s WHERE j.state IN ('queued','running') AND j.next_attempt<=now() AND j.expires_at>now()+interval '40 seconds' AND j.attempts<3 AND (j.lease_until IS NULL OR j.lease_until<now()) AND j.epoch=a.epoch AND j.credential_version=a.credential_version AND {ELIGIBLE} AND s.ingress_ok AND NOT s.blocked AND s.warmup_until<=now() AND s.last_tick>now()-interval '20 seconds' AND (SELECT count(*) FROM remote_jobs WHERE lease_until>now())<2 AND NOT EXISTS(SELECT 1 FROM remote_jobs k WHERE k.account_id=a.id AND k.lease_until>now()) ORDER BY j.next_attempt FOR UPDATE OF j SKIP LOCKED LIMIT 1")).fetch_optional(&mut *tx).await?;
     let Some(r) = row else {
         return Ok(None);
     };
@@ -98,6 +99,8 @@ async fn claim(s: &AppState) -> ApiResult<Option<Job>> {
         credential_version: r.get("credential_version"),
         lease: Uuid::new_v4(),
         key: r.get("provider_key"),
+        provider: provider::Kind::parse(r.get("provider"))
+            .map_err(|_| ApiError(StatusCode::INTERNAL_SERVER_ERROR, "未知加速器"))?,
         cipher: r.get("credential"),
         attempts: r.get::<i32, _>("attempts") + 1,
     };
@@ -123,7 +126,7 @@ async fn execute(s: &AppState, j: &Job) -> ApiResult<()> {
         Ok(t) => t,
         Err(_) => return finish(s, j, "reauthorize", "credential_unreadable").await,
     };
-    let before = p.info(&token).await;
+    let before = p.info(j.provider, &token).await;
     match before {
         Ok(info) if info.key != j.key => {
             return finish(s, j, "reauthorize", "credential_account_mismatch").await
@@ -142,12 +145,12 @@ async fn execute(s: &AppState, j: &Job) -> ApiResult<()> {
     }
     // There is no provider fencing/idempotency contract. Cancellation after this
     // dispatch is best effort, explicitly surfaced in the audit/status contract.
-    let sent = p.pause(&token).await;
+    let sent = p.pause(j.provider, &token).await;
     if sent == Err(provider::Failure::Credential) {
         return finish(s, j, "reauthorize", "credential_expired").await;
     }
     // Always query after dispatch, including timeouts that may have applied remotely.
-    match p.info(&token).await {
+    match p.info(j.provider, &token).await {
         Ok(info) if info.key == j.key && info.paused == Some(true) => {
             finish(s, j, "confirmed", "pause_confirmed").await
         }
@@ -210,8 +213,8 @@ async fn finish(s: &AppState, j: &Job, state: &str, result: &str) -> ApiResult<(
             .fetch_one(&mut *tx)
             .await?;
         let detail = match row.get::<String, _>("state").as_str() {
-            "confirmed" => "远程暂停已通过雷神状态查询确认",
-            "reauthorize" => "雷神凭据已失效，请在客户端重新授权",
+            "confirmed" => "远程暂停已通过加速器官方状态查询确认",
+            "reauthorize" => "加速器凭据已失效，请在客户端重新授权",
             "unconfirmed" => "远程暂停未确认；有限重试已结束",
             _ => "远程任务已取消；已发出请求的结果请查看任务记录",
         };

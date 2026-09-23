@@ -652,6 +652,7 @@ impl App {
         app.etalien.shared = etalien;
         app.platform.start_device_agent(
             app.shared.clone(),
+            app.etalien.shared.clone(),
             app.config.clone(),
             cc.egui_ctx.clone(),
         );
@@ -2059,7 +2060,7 @@ impl App {
         });
         ui.separator();
         if self.account_provider == 1 {
-            self.etalien.show(ui, &self.config);
+            self.etalien.show(ui, &self.config, &self.platform);
             return;
         }
         ui.label(

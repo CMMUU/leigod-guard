@@ -233,6 +233,7 @@ fn email_login_thirty_day_cookie_and_device_headers() {
         &device,
         &Heartbeat {
             run_generation: 1,
+            etalien_revision: None,
             remote_revision: None,
             sequence: 0,
             game_running: None,

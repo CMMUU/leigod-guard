@@ -10,6 +10,7 @@ use std::time::Duration;
 pub struct Provider {
     client: reqwest::Client,
     host: String,
+    etalien_host: String,
     cipher: Aes256Gcm,
 }
 #[derive(Debug, PartialEq)]
@@ -58,6 +59,7 @@ impl Provider {
             }
             Err(_) => "https://webapi.leigod.com".into(),
         };
+        let etalien_host = test_origin(origin, "ETALIEN_TEST_ORIGIN", "https://api.et-api.com")?;
         Ok(Some(Self {
             client: reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
@@ -65,6 +67,7 @@ impl Provider {
                 .timeout(Duration::from_secs(10))
                 .build()?,
             host,
+            etalien_host,
             cipher: Aes256Gcm::new_from_slice(&key).map_err(|_| "invalid remote key")?,
         }))
     }
@@ -133,10 +136,16 @@ impl Provider {
         }
         Ok(value)
     }
-    pub async fn info(&self, token: &str) -> Result<Info, Failure> {
+    pub async fn info(&self, kind: Kind, token: &str) -> Result<Info, Failure> {
+        if kind == Kind::Etalien {
+            return crate::etalien::info(&self.client, &self.etalien_host, token).await;
+        }
         parse_info(&self.call("/api/user/info", token).await?)
     }
-    pub async fn pause(&self, token: &str) -> Result<(), Failure> {
+    pub async fn pause(&self, kind: Kind, token: &str) -> Result<(), Failure> {
+        if kind == Kind::Etalien {
+            return crate::etalien::pause(&self.client, &self.etalien_host, token).await;
+        }
         let response = self.call("/api/user/pause", token).await?;
         match number(&response["code"]) {
             Some(0 | 400803) => Ok(()),
@@ -274,6 +283,7 @@ mod tests {
         let p = Provider {
             client: reqwest::Client::new(),
             host: String::new(),
+            etalien_host: String::new(),
             cipher: Aes256Gcm::new_from_slice(&[17; 32]).unwrap(),
         };
         let a = p.seal("account-a", "fixture-secret").unwrap();
@@ -285,5 +295,58 @@ mod tests {
         bad[15] ^= 1;
         assert!(p.open("account-a", &bad).is_err());
         assert!(p.open("account-a", &[]).is_err());
+    }
+}
+
+#[derive(Clone, Copy, Default, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    #[default]
+    Leigod,
+    Etalien,
+}
+impl Kind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Leigod => "leigod",
+            Self::Etalien => "etalien",
+        }
+    }
+    pub fn revision_column(self) -> &'static str {
+        match self {
+            Self::Leigod => "remote_revision",
+            Self::Etalien => "etalien_revision",
+        }
+    }
+    pub fn parse(s: &str) -> Result<Self, Failure> {
+        match s {
+            "leigod" => Ok(Self::Leigod),
+            "etalien" => Ok(Self::Etalien),
+            _ => Err(Failure::InvalidAccount),
+        }
+    }
+}
+fn test_origin(
+    origin: &str,
+    variable: &str,
+    production: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    match std::env::var(variable) {
+        Err(_) => Ok(production.into()),
+        Ok(test) => {
+            let url = reqwest::Url::parse(&test)?;
+            if !origin.starts_with("http://127.0.0.1:")
+                || url.scheme() != "http"
+                || url.host_str() != Some("127.0.0.1")
+                || url.path() != "/"
+                || url.query().is_some()
+                || url.fragment().is_some()
+                || !url.username().is_empty()
+                || url.password().is_some()
+            {
+                return Err("provider test endpoint requires loopback isolation".into());
+            }
+            Ok(test.trim_end_matches('/').into())
+        }
     }
 }

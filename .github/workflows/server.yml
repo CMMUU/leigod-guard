@@ -68,15 +68,18 @@ jobs:
           wait "$SERVER_PID" || true
           python3 tests/leigod_mock.py > /tmp/guard-provider.log 2>&1 &
           PROVIDER_PID=$!
+          python3 tests/etalien_mock.py > /tmp/guard-etalien.log 2>&1 &
+          ETALIEN_PID=$!
           python3 -c "import os; p='/tmp/guard-remote.key'; open(p,'wb').write(os.urandom(32)); os.chmod(p,0o600)"
-          export REMOTE_EXECUTION=true REMOTE_KEY_FILE=/tmp/guard-remote.key LEIGOD_TEST_ORIGIN=http://127.0.0.1:3091
+          export REMOTE_EXECUTION=true REMOTE_KEY_FILE=/tmp/guard-remote.key LEIGOD_TEST_ORIGIN=http://127.0.0.1:3091 ETALIEN_TEST_ORIGIN=http://127.0.0.1:3093
           ./target/debug/leigod-guard-server > /tmp/guard-remote.log 2>&1 &
           SERVER_PID=$!
-          trap 'kill "$SERVER_PID" "$MAIL_PID" "$PROVIDER_PID" 2>/dev/null || true' EXIT
+          trap 'kill "$SERVER_PID" "$MAIL_PID" "$PROVIDER_PID" "$ETALIEN_PID" 2>/dev/null || true' EXIT
           for attempt in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:3089/api/health > /dev/null; then break; fi
             sleep 1
           done
+          python3 tests/etalien_integration.py
           TEST_SERVER_PID="$SERVER_PID" TEST_SERVER_BINARY="$PWD/target/debug/leigod-guard-server" python3 tests/remote_integration.py
       - name: Build portable Linux binary
         run: cargo build --locked --release --target x86_64-unknown-linux-musl

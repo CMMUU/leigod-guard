@@ -1,6 +1,7 @@
 mod auth;
 mod devices;
 mod email;
+mod etalien;
 mod provider;
 mod remote;
 mod remote_worker;
@@ -129,6 +130,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api = Router::new()
         .route("/health", get(routes::health))
         .route("/device/remote", get(remote::status))
+        .route("/device/remote/etalien", get(remote::status))
+        .route("/device/remote/etalien/authorize", post(remote::authorize))
+        .route("/device/remote/etalien/disable", post(remote::disable))
         .route("/device/remote/authorize", post(remote::authorize))
         .route("/device/remote/disable", post(remote::disable))
         .route("/devices/{id}/remote/disable", post(remote::web_disable))
