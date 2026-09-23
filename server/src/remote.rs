@@ -405,7 +405,7 @@ pub async fn heartbeat(
             } else {
                 sqlx::query("UPDATE remote_grants SET armed_at=COALESCE(armed_at,now()),last_seen=now(),prepare_until=now()+make_interval(secs=>$2),run_generation=$3,updated_at=now() WHERE device_id=$1 AND provider=$4")
                     .bind(id).bind(prepare as f64).bind(run).bind(kind.as_str()).execute(&mut **tx).await?;
-                sqlx::query("SELECT remote_cancel($1)")
+                sqlx::query("SELECT remote_cancel($1) WHERE NOT EXISTS(SELECT 1 FROM cafe_policies WHERE account_id=$1 AND enabled)")
                     .bind(g.get::<Uuid, _>("account_id"))
                     .execute(&mut **tx)
                     .await?;
@@ -416,10 +416,10 @@ pub async fn heartbeat(
 }
 pub async fn listing(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Json<Value>> {
     let u = auth::user(&s, &h, false).await?;
-    let rows:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('device_id',d.id,'provider',g.provider,'device_name',d.name,'owner',COALESCE(u.email,u.username),'user_id',d.user_id,'label',a.label,'enabled',g.enabled,'credential',a.credential_state,'armed_at',g.armed_at,'last_seen',g.last_seen,'revision',g.revision,'connection',CASE WHEN d.revoked THEN 'revoked' WHEN g.last_seen>now()-interval '45 seconds' THEN 'online' WHEN g.last_seen>now()-interval '120 seconds' THEN 'waiting' ELSE 'offline' END,'last_result',j.result,'protection',CASE WHEN NOT g.enabled THEN 'off' WHEN a.credential_state<>'valid' THEN 'reauthorize' WHEN g.armed_at IS NULL THEN 'awaiting_heartbeat' WHEN j.epoch=a.epoch AND j.state='running' THEN 'executing' WHEN j.epoch=a.epoch AND j.state='confirmed' THEN 'confirmed' WHEN j.epoch=a.epoch AND j.state='unconfirmed' THEN 'unconfirmed' WHEN g.last_seen<now()-interval '45 seconds' THEN 'waiting' ELSE 'armed' END) FROM remote_grants g JOIN devices d ON d.id=g.device_id JOIN users u ON u.id=d.user_id JOIN remote_accounts a ON a.id=g.account_id LEFT JOIN LATERAL(SELECT epoch,state,result FROM remote_jobs WHERE account_id=a.id ORDER BY created_at DESC LIMIT 1) j ON true WHERE ($1 OR d.user_id=$2) ORDER BY g.updated_at DESC LIMIT 500").bind(u.role=="admin").bind(u.id).fetch_all(&s.db).await?;
-    let jobs:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('id',j.id,'provider',a.provider,'label',a.label,'state',j.state,'result',j.result,'attempts',j.attempts,'created_at',j.created_at,'updated_at',j.updated_at) FROM remote_jobs j JOIN remote_accounts a ON a.id=j.account_id WHERE ($1 OR a.user_id=$2) ORDER BY j.created_at DESC LIMIT 100").bind(u.role=="admin").bind(u.id).fetch_all(&s.db).await?;
+    let rows:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('device_id',d.id,'provider',g.provider,'device_name',d.name,'owner',COALESCE(u.email,u.username),'user_id',d.user_id,'label',a.label,'cafe_enabled',EXISTS(SELECT 1 FROM cafe_policies c WHERE c.account_id=a.id AND c.enabled),'enabled',g.enabled,'credential',a.credential_state,'armed_at',g.armed_at,'last_seen',g.last_seen,'revision',g.revision,'connection',CASE WHEN d.revoked THEN 'revoked' WHEN g.last_seen>now()-interval '45 seconds' THEN 'online' WHEN g.last_seen>now()-interval '120 seconds' THEN 'waiting' ELSE 'offline' END,'last_result',j.result,'protection',CASE WHEN NOT g.enabled THEN 'off' WHEN a.credential_state<>'valid' THEN 'reauthorize' WHEN g.armed_at IS NULL THEN 'awaiting_heartbeat' WHEN j.epoch=a.epoch AND j.state='running' THEN 'executing' WHEN j.epoch=a.epoch AND j.state='confirmed' THEN 'confirmed' WHEN j.epoch=a.epoch AND j.state='unconfirmed' THEN 'unconfirmed' WHEN g.last_seen<now()-interval '45 seconds' THEN 'waiting' ELSE 'armed' END) FROM remote_grants g JOIN devices d ON d.id=g.device_id JOIN users u ON u.id=d.user_id JOIN remote_accounts a ON a.id=g.account_id LEFT JOIN LATERAL(SELECT epoch,state,result FROM remote_jobs WHERE account_id=a.id ORDER BY created_at DESC LIMIT 1) j ON true WHERE ($1 OR d.user_id=$2) ORDER BY g.updated_at DESC LIMIT 500").bind(u.role=="admin").bind(u.id).fetch_all(&s.db).await?;
+    let jobs:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('id',j.id,'provider',a.provider,'label',a.label,'state',j.state,'trigger_kind',j.trigger_kind,'result',j.result,'attempts',j.attempts,'created_at',j.created_at,'updated_at',j.updated_at) FROM remote_jobs j JOIN remote_accounts a ON a.id=j.account_id WHERE ($1 OR a.user_id=$2) ORDER BY j.created_at DESC LIMIT 100").bind(u.role=="admin").bind(u.id).fetch_all(&s.db).await?;
     Ok(Json(
-        json!({"grants":rows,"jobs":jobs,"service":service(&s).await?}),
+        json!({"grants":rows,"jobs":jobs,"cafe":cafe::listing(&s,&u).await?,"service":service(&s).await?}),
     ))
 }
 pub async fn acknowledge(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Json<Value>> {
@@ -428,6 +428,8 @@ pub async fn acknowledge(State(s): State<AppState>, h: HeaderMap) -> ApiResult<J
     lock(&mut tx).await?;
     // Acknowledgement discards old offline episodes, never releases a stale batch.
     sqlx::query("UPDATE remote_jobs SET state='cancelled',result='incident_acknowledged',updated_at=now() WHERE state IN ('queued','running')").execute(&mut *tx).await?;
+    sqlx::query("UPDATE cafe_policies SET started_at=NULL,observed_at=NULL,observed_state='unknown',revision=revision+1,poll_lease=NULL,poll_until=NULL,next_poll=now() WHERE enabled")
+        .execute(&mut *tx).await?;
     sqlx::query("UPDATE remote_grants SET armed_at=NULL WHERE enabled")
         .execute(&mut *tx)
         .await?;
