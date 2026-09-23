@@ -11,6 +11,7 @@ INSERT INTO devices(id,user_id,name,token_hash,remote_revision) VALUES('00000000
 INSERT INTO remote_accounts(id,user_id,provider_key,label,credential) VALUES('00000000-0000-0000-0000-000000000003','00000000-0000-0000-0000-000000000001','fixture-key','fixture',decode('aabbcc','hex'));
 INSERT INTO remote_grants(device_id,account_id,revision,armed_at,last_seen) VALUES('00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000003',7,now(),now());
 \ir ../migrations/0004_provider_grants.sql
+\ir ../migrations/0005_cafe_mode.sql
 DO $$ BEGIN
  IF NOT EXISTS(SELECT 1 FROM remote_grants g JOIN remote_accounts a ON a.id=g.account_id WHERE g.enabled AND g.provider='leigod' AND a.provider='leigod' AND g.revision=7 AND g.armed_at IS NOT NULL AND a.credential=decode('aabbcc','hex')) THEN
   RAISE EXCEPTION 'existing Lei grant or ciphertext changed during upgrade';
@@ -20,5 +21,14 @@ DO $$ BEGIN
  PERFORM remote_revoke_device('00000000-0000-0000-0000-000000000002');
  IF EXISTS(SELECT 1 FROM remote_grants WHERE enabled) OR EXISTS(SELECT 1 FROM remote_accounts WHERE credential IS NOT NULL) THEN RAISE EXCEPTION 'whole-device revoke did not clear legacy credential'; END IF;
 END $$;
+DO $$ BEGIN
+ IF EXISTS(SELECT 1 FROM cafe_policies) THEN RAISE EXCEPTION 'upgrade silently enabled cafe policy'; END IF;
+ UPDATE remote_accounts SET credential=decode('aabbcc','hex'),credential_state='valid';
+ INSERT INTO cafe_policies(account_id,enabled) VALUES('00000000-0000-0000-0000-000000000003',true);
+ PERFORM remote_cancel('00000000-0000-0000-0000-000000000003');
+ IF NOT EXISTS(SELECT 1 FROM remote_accounts WHERE credential=decode('aabbcc','hex')) THEN RAISE EXCEPTION 'device revoke removed independently authorized cloud credential'; END IF;
+ UPDATE users SET disabled=true WHERE id='00000000-0000-0000-0000-000000000001';
+ IF EXISTS(SELECT 1 FROM cafe_policies WHERE enabled) OR EXISTS(SELECT 1 FROM remote_accounts WHERE credential IS NOT NULL) THEN RAISE EXCEPTION 'disabled user retained cloud control'; END IF;
+END $$;
 ROLLBACK;
-\echo PASS migration 0003 to 0004 preserves existing authorization and ciphertext
+\echo PASS migrations 0003 through 0005 preserve grants and respect independent cloud consent

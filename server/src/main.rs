@@ -1,4 +1,5 @@
 mod auth;
+mod cafe;
 mod devices;
 mod email;
 mod etalien;
@@ -137,6 +138,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/device/remote/disable", post(remote::disable))
         .route("/devices/{id}/remote/disable", post(remote::web_disable))
         .route("/remote", get(remote::listing))
+        .route("/remote/cafe/{id}", post(cafe::save))
         .route("/admin/remote/acknowledge", post(remote::acknowledge))
         .route("/login", post(routes::login))
         .route("/email/code", post(email::send_code))

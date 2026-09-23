@@ -162,6 +162,11 @@ if os.environ.get('TEST_SERVER_PID'):
  sql("UPDATE remote_service SET warmup_until=now()+interval '120 seconds';")
  sql(f"INSERT INTO remote_jobs(id,account_id,epoch,credential_version) SELECT gen_random_uuid(),id,epoch,credential_version FROM remote_accounts WHERE id='{aid}' ON CONFLICT DO NOTHING;")
  oldid=sql(f"SELECT id FROM remote_jobs WHERE account_id='{aid}';")
+ # Independent cafe clock must survive a real short backend restart as well.
+ cr=Device(b);cr.beat();ct='cafe-restart-'+nonce;mock(ct,account=ct);cr.authorize(ct)
+ b.call('/remote/cafe/'+cr.account(),{'enabled':True,'revision':0})
+ wait(lambda:sql(f"SELECT started_at IS NOT NULL FROM cafe_policies WHERE account_id='{cr.account()}';")=='t')
+ cafe_start=sql(f"SELECT started_at FROM cafe_policies WHERE account_id='{cr.account()}';")
  os.kill(int(os.environ['TEST_SERVER_PID']),signal.SIGINT)
  time.sleep(1)
  binary=pathlib.Path(os.environ['TEST_SERVER_BINARY']).resolve();assert binary.name=='leigod-guard-server'
@@ -174,6 +179,9 @@ if os.environ.get('TEST_SERVER_PID'):
  wait(up)
  wait(lambda:admin.call('/remote')['service']['state']=='warming');time.sleep(6);assert stats(tr)['pause_calls']==0
  assert sql(f"SELECT id FROM remote_jobs WHERE account_id='{aid}';")==oldid
+ assert sql(f"SELECT started_at FROM cafe_policies WHERE account_id='{cr.account()}';")==cafe_start
+ assert stats(ct)['pause_calls']==0
  ready();wait(lambda:r.terminal('confirmed'));assert stats(tr)['pause_calls']==1 and len(r.jobs())==1;r.off()
- check('real backend process restart preserves queued task and enforces reconnect observation')
+ b.call('/remote/cafe/'+cr.account(),{'enabled':False,'revision':1});cr.off()
+ check('real backend restart preserves offline task and cafe start, enforces reconnect observation')
 print(json.dumps({'passed':len(checks),'checks':checks},ensure_ascii=False))
