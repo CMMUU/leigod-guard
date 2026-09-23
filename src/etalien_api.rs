@@ -80,7 +80,8 @@ fn request(
         ))
         .header("Content-Type", "application/x-protobuf")
         .header("Accept", "application/x-protobuf")
-        .header("x-eta", format!("os=1&ver=1.26.11&dvc={device}&ch=default"))
+        .header("reqChannel", "1")
+        .header("x-eta", format!("os=2&ver=1.0.0&dvc={device}&ch=h5"))
         .body(body);
     if !token.is_empty() {
         req = req.header("Authorization", token);
