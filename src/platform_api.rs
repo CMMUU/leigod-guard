@@ -22,6 +22,7 @@ pub enum Error {
     Conflict,
     LeigodCredential,
     LeigodIdentity,
+    EtalienCalibration,
     RemoteAccountOwned,
     RemoteStateChanged,
 }
@@ -36,10 +37,13 @@ impl Error {
             Self::Protocol => "平台返回了无法识别的登录信息，请稍后重试。",
             Self::InvalidInput => "请检查邮箱、验证码或账号信息后重试。",
             Self::Conflict => "设备绑定冲突或已撤销。请在原账号解除绑定，或手动重新绑定本机。",
-            Self::LeigodCredential => "雷神登录已失效，请重新登录雷神账号后开启保护。",
-            Self::LeigodIdentity => "服务器无法识别雷神账号身份，请检查后台版本或联系管理员。",
+            Self::LeigodCredential => "加速器登录已失效，请重新登录对应账号后开启保护。",
+            Self::LeigodIdentity => "服务器无法识别加速器账号身份，请检查后台版本或联系管理员。",
             Self::RemoteAccountOwned => {
-                "该雷神账号已绑定其他平台账号，请使用原平台账号或联系管理员。"
+                "该加速器账号已绑定其他平台账号，请使用原平台账号或联系管理员。"
+            }
+            Self::EtalienCalibration => {
+                "请先在外星仔官方客户端暂停并刷新，回到守护读取校准后再授权。"
             }
             Self::RemoteStateChanged => "设备或远程授权状态已变化，请刷新后重新开启保护。",
         }
@@ -113,10 +117,49 @@ pub struct AccountLink {
     pub key: String,
     pub label: String,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Provider {
+    Leigod,
+    Etalien,
+}
+impl Provider {
+    pub const ALL: [Self; 2] = [Self::Leigod, Self::Etalien];
+    pub fn index(self) -> usize {
+        match self {
+            Self::Leigod => 0,
+            Self::Etalien => 1,
+        }
+    }
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Leigod => "雷神",
+            Self::Etalien => "外星仔",
+        }
+    }
+    pub fn path(self) -> &'static str {
+        match self {
+            Self::Leigod => "",
+            Self::Etalien => "/etalien",
+        }
+    }
+    pub fn query(self) -> &'static str {
+        match self {
+            Self::Leigod => "",
+            Self::Etalien => "?provider=etalien",
+        }
+    }
+}
+#[derive(Serialize)]
+pub struct RemoteCredential {
+    pub account_token: String,
+    pub device_id: String,
+    pub paused_state: i64,
+}
 #[derive(Serialize)]
 pub struct Heartbeat {
     pub run_generation: i64,
     pub remote_revision: Option<i64>,
+    pub etalien_revision: Option<i64>,
     pub sequence: i64,
     pub game_running: Option<bool>,
     pub prepare_seconds: u32,
@@ -350,15 +393,29 @@ impl Api {
         }
         Ok(())
     }
+    #[cfg(test)]
     pub fn remote_status(&self, binding: &DeviceBinding) -> Result<RemoteStatus, Error> {
+        self.remote_status_for(binding, Provider::Leigod)
+    }
+    pub fn remote_status_for(
+        &self,
+        binding: &DeviceBinding,
+        provider: Provider,
+    ) -> Result<RemoteStatus, Error> {
         let response = self
             .client
-            .get(format!("{}/api/device/remote", self.origin))
+            .get(format!(
+                "{}/api/device/remote{}{}",
+                self.origin,
+                provider.path(),
+                provider.query()
+            ))
             .bearer_auth(&binding.device_token)
             .send()
             .map_err(|_| Error::Network)?;
-        read_remote(response)
+        read_remote(response, provider)
     }
+    #[cfg(test)]
     pub fn remote_authorize(
         &self,
         binding: &DeviceBinding,
@@ -367,26 +424,64 @@ impl Api {
         run: i64,
         refresh: bool,
     ) -> Result<RemoteStatus, Error> {
-        if token.is_empty() || token.len() > 4096 {
+        self.remote_authorize_for(
+            binding,
+            Provider::Leigod,
+            &RemoteCredential {
+                account_token: token.into(),
+                device_id: String::new(),
+                paused_state: 0,
+            },
+            revision,
+            run,
+            refresh,
+        )
+    }
+    pub fn remote_authorize_for(
+        &self,
+        binding: &DeviceBinding,
+        provider: Provider,
+        c: &RemoteCredential,
+        revision: i64,
+        run: i64,
+        refresh: bool,
+    ) -> Result<RemoteStatus, Error> {
+        if c.account_token.is_empty() || c.account_token.len() > 4096 {
             return Err(Error::InvalidInput);
         }
-        let response=self.client.post(format!("{}/api/device/remote/authorize",self.origin)).timeout(std::time::Duration::from_secs(25)).bearer_auth(&binding.device_token)
-            .json(&serde_json::json!({"account_token":token,"revision":revision,"run_generation":run,"refresh":refresh})).send().map_err(|_|Error::Network)?;
-        read_remote(response)
+        let response = self.client.post(format!("{}/api/device/remote{}/authorize{}",self.origin,provider.path(),provider.query()))
+            .timeout(std::time::Duration::from_secs(35)).bearer_auth(&binding.device_token)
+            .json(&serde_json::json!({"account_token":c.account_token,"device_id":c.device_id,"paused_state":c.paused_state,"revision":revision,"run_generation":run,"refresh":refresh}))
+            .send().map_err(|_|Error::Network)?;
+        read_remote(response, provider)
     }
+    #[cfg(test)]
     pub fn remote_disable(
         &self,
         binding: &DeviceBinding,
         revision: i64,
     ) -> Result<RemoteStatus, Error> {
+        self.remote_disable_for(binding, revision, Provider::Leigod)
+    }
+    pub fn remote_disable_for(
+        &self,
+        binding: &DeviceBinding,
+        revision: i64,
+        provider: Provider,
+    ) -> Result<RemoteStatus, Error> {
         let response = self
             .client
-            .post(format!("{}/api/device/remote/disable", self.origin))
+            .post(format!(
+                "{}/api/device/remote{}/disable{}",
+                self.origin,
+                provider.path(),
+                provider.query()
+            ))
             .bearer_auth(&binding.device_token)
             .json(&serde_json::json!({"revision":revision}))
             .send()
             .map_err(|_| Error::Network)?;
-        read_remote(response)
+        read_remote(response, provider)
     }
     fn identity(&self, token: &str) -> Result<User, Error> {
         if !secret_valid(token) {
@@ -505,7 +600,7 @@ fn login_cookie(response: &Response) -> Result<(String, i64), Error> {
     Err(Error::Protocol)
 }
 
-fn read_remote(response: Response) -> Result<RemoteStatus, Error> {
+fn read_remote(response: Response, provider: Provider) -> Result<RemoteStatus, Error> {
     let http_status = response.status().as_u16();
     if matches!(http_status, 400 | 409) {
         // The status still controls consent revocation if an error body is
@@ -514,27 +609,46 @@ fn read_remote(response: Response) -> Result<RemoteStatus, Error> {
         // Only known server errors select local text. Never show arbitrary
         // response bodies, which could contain echoed credentials.
         return Err(match (http_status, body["error"].as_str()) {
-            (400, Some("雷神登录已失效，请在客户端重新登录")) => {
-                Error::LeigodCredential
+            (
+                400,
+                Some("雷神登录已失效，请在客户端重新登录" | "加速器登录已失效，请在客户端重新登录"),
+            ) => Error::LeigodCredential,
+            (
+                400,
+                Some(
+                    "无法验证雷神账号唯一身份，未开启保护"
+                    | "无法验证加速器账号唯一身份，未开启保护",
+                ),
+            ) => Error::LeigodIdentity,
+            (409, Some("该雷神账号已属于其他平台账号" | "该加速器账号已属于其他平台账号")) => {
+                Error::RemoteAccountOwned
             }
-            (400, Some("无法验证雷神账号唯一身份，未开启保护")) => {
-                Error::LeigodIdentity
-            }
-            (409, Some("该雷神账号已属于其他平台账号")) => Error::RemoteAccountOwned,
             (
                 409,
                 Some(
                     "客户端运行代次已变化，请重新连接"
                     | "远程授权已变化，请重新确认"
                     | "雷神账号已切换，请关闭旧保护后重新开启"
-                    | "远程授权已变化，请刷新后重试",
+                    | "远程授权已变化，请刷新后重试"
+                    | "加速器账号已切换，请关闭旧保护后重新开启",
                 ),
             ) => Error::RemoteStateChanged,
+            (
+                400,
+                Some(
+                    "请先在外星仔官方客户端暂停并校准，再授权服务器保护"
+                    | "请先登录并校准外星仔暂停状态",
+                ),
+            ) => Error::EtalienCalibration,
             (400, _) => Error::InvalidInput,
             _ => Error::Conflict,
         });
     }
-    let status: RemoteStatus = read_json(successful(response)?)?;
+    let value: serde_json::Value = read_json(successful(response)?)?;
+    if provider == Provider::Etalien && value["provider"] != "etalien" {
+        return Err(Error::Protocol);
+    }
+    let status: RemoteStatus = serde_json::from_value(value).map_err(|_| Error::Protocol)?;
     if status.revision < 0
         || status.revision == i64::MAX
         || status.account_key.len() > 64

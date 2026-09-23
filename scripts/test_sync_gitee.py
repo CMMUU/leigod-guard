@@ -63,6 +63,21 @@ class SyncTests(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         return Path(temp.name)
 
+    def test_description_sync_is_scoped_and_verified(self):
+        ge = Mock()
+        job = sync.Sync("leigod-guard", Mock(), ge, self.fixture())
+        job.source = {"description": "加速器守护：雷神与外星仔自动暂停"}
+        target = {"name":"leigod-guard","description":"old","has_issues":False,"has_wiki":False,"can_comment":True}
+        with patch.object(job, "guard", return_value=target):
+            job.sync_description(False)
+            ge.request.assert_not_called()
+            ge.request.side_effect = [{}, {**target, **job.source}]
+            job.sync_description(True)
+            self.assertEqual(ge.request.call_args_list[0].args, ("/repos/cmmuu/leigod-guard",))
+            self.assertEqual(ge.request.call_args_list[0].kwargs, {"method":"PATCH", "data":{"name":"leigod-guard",**job.source,"has_issues":"false","has_wiki":"false","can_comment":"true"}})
+            job.source = {"description": None}
+            with self.assertRaises(sync.SyncError): job.sync_description(True)
+
     def test_single_release_sync_does_not_read_or_validate_historical_assets(self):
         release = {"id": 13, "tag_name": "v0.11.3", "draft": False, "prerelease": False}
         for tag, endpoint in (("v0.11.3", "/releases/tags/v0.11.3"), ("", "/releases/latest")):

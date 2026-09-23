@@ -162,14 +162,21 @@ impl Panel {
         self.message = outcome.unwrap_or_else(|error| error);
     }
 
-    pub fn show(&mut self, ui: &mut egui::Ui, config: &Arc<Mutex<Config>>) {
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        config: &Arc<Mutex<Config>>,
+        platform: &crate::ui_platform::Panel,
+    ) {
         self.poll(config);
         let account = config.lock().map(|c| c.etalien.clone()).unwrap_or_default();
         ui.label(egui::RichText::new("外星仔加速器 · 本机自动暂停（试验性接入）").strong());
-        ui.label("使用游戏名单、游戏退出宽限期和启动保护。平台服务器失联保护目前仅支持雷神。");
+        ui.label(
+            "使用游戏名单、游戏退出宽限期和启动保护。服务器失联保护可在“平台账号”页单独授权开启。",
+        );
         ui.label(
             egui::RichText::new(
-                "登录令牌由 Windows 加密保存；密码不保存。接口与真实账号兼容性仍需验收。",
+                "登录令牌由 Windows 加密保存；密码不保存。本机暂停已收到用户实测反馈；首次使用请核对官方计时状态。",
             )
             .color(theme::MUTED),
         );
@@ -181,7 +188,7 @@ impl Panel {
                 ui.selectable_value(&mut self.token_mode, true, "已有 Token");
             });
             if self.token_mode {
-                ui.label("粘贴你本人账号的 Authorization（不会发送给守护平台）：");
+                ui.label("粘贴你本人账号的 Authorization（仅单独授权远程保护后上传平台）：");
                 ui.add(
                     egui::TextEdit::singleline(&mut self.token_input)
                         .password(true)
@@ -204,6 +211,7 @@ impl Panel {
                 });
             }
             if theme::primary(ui, "登录外星仔").clicked() {
+                platform.revoke_etalien();
                 let user = if self.user.trim().is_empty() {
                     account.username.clone()
                 } else {
@@ -240,6 +248,9 @@ impl Panel {
                     let calibrate = ui.button("我已在官方暂停，读取并校准").clicked();
                     let refresh = ui.button("刷新状态").clicked();
                     if calibrate || refresh {
+                        if calibrate {
+                            platform.revoke_etalien();
+                        }
                         let token = token.clone().unwrap_or_default();
                         let device = account.device_id.clone();
                         self.start(ui.ctx().clone(), move || {
@@ -286,6 +297,7 @@ impl Panel {
             }
         });
         if ui.button("退出外星仔账号并清除保存").clicked() {
+            platform.revoke_etalien();
             self.events = None;
             self.message = match save(config, Etalien::default()) {
                 Ok(()) => {

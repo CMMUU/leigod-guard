@@ -233,6 +233,7 @@ fn email_login_thirty_day_cookie_and_device_headers() {
         &device,
         &Heartbeat {
             run_generation: 1,
+            etalien_revision: None,
             remote_revision: None,
             sequence: 0,
             game_running: None,
@@ -371,5 +372,54 @@ fn remote_errors_explain_known_reasons_without_echoing_response_secrets() {
             Some(expected)
         );
         thread.join().unwrap();
+    }
+}
+
+#[test]
+fn etalien_uses_distinct_routes_and_rejects_legacy_or_wrong_provider_responses() {
+    let id = "12345678-1234-1234-1234-123456789abc";
+    let binding = DeviceBinding {
+        device_id: id.into(),
+        device_token: "d".repeat(64),
+        owner_id: id.into(),
+        owner: "fixture".into(),
+        sequence: 0,
+    };
+    let base = serde_json::json!({"available":true,"enabled":false,"revision":3,"protection":"off","credential":"none","last_result":"none"});
+    let mut et = base.clone();
+    et["provider"] = "etalien".into();
+    let (api, requests, task) = mock(vec![
+        ok(&base.to_string()),
+        ok(&et.to_string()),
+        ok(&et.to_string()),
+        ok(&et.to_string()),
+    ]);
+    assert!(matches!(
+        api.remote_status_for(&binding, Provider::Etalien),
+        Err(Error::Protocol)
+    ));
+    api.remote_status_for(&binding, Provider::Etalien).unwrap();
+    let credential = RemoteCredential {
+        account_token: "fixture-et-token".into(),
+        device_id: "a".repeat(32),
+        paused_state: 2,
+    };
+    api.remote_authorize_for(&binding, Provider::Etalien, &credential, 3, 4, false)
+        .unwrap();
+    api.remote_disable_for(&binding, 3, Provider::Etalien)
+        .unwrap();
+    task.join().unwrap();
+    let requests = requests.lock().unwrap();
+    assert!(requests[0].starts_with("GET /api/device/remote/etalien?provider=etalien HTTP"));
+    assert!(
+        requests[2].starts_with("POST /api/device/remote/etalien/authorize?provider=etalien HTTP")
+    );
+    assert!(
+        requests[3].starts_with("POST /api/device/remote/etalien/disable?provider=etalien HTTP")
+    );
+    for (i, r) in requests.iter().enumerate() {
+        assert_eq!(r.contains("fixture-et-token"), i == 2);
+        assert!(!r.lines().next().unwrap().contains("fixture-et-token"));
+        assert!(!r.contains("password"));
     }
 }
