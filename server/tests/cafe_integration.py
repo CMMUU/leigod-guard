@@ -121,6 +121,20 @@ mock(c.token,mode='expired');c.poll();wait(lambda:c.view()['credential']=='reaut
 c.set(enabled=False);c.off_device()
 check('unknown upstream state defers; expired credential requires reauthorization without pause')
 
+# Durable polling leases prevent overlapping reads and recover after a worker dies.
+e=Account();e.set();wait(lambda:e.view()['started_at'])
+sql(f"UPDATE cafe_policies SET next_poll=now(),poll_lease=gen_random_uuid(),poll_until=now()+interval '60 seconds' WHERE account_id='{e.id}';")
+before=stats(e.token)['info_calls'];time.sleep(6);assert stats(e.token)['info_calls']==before
+sql(f"UPDATE cafe_policies SET poll_until=now()-interval '1 second' WHERE account_id='{e.id}';")
+wait(lambda:stats(e.token)['info_calls']>before)
+wait(lambda:sql(f"SELECT poll_lease IS NULL FROM cafe_policies WHERE account_id='{e.id}';")=='t')
+# A stale delayed poll must not resurrect disabled consent or overwrite its fields.
+mock(e.token,info_delay=3);before=stats(e.token)['info_calls'];e.poll()
+wait(lambda:stats(e.token)['info_calls']>before);e.set(enabled=False)
+time.sleep(5);assert e.view()['started_at'] is None and not e.view()['enabled'] and e.calls()==0
+mock(e.token,info_delay=0);e.off_device()
+check('poll leases recover after expiry; delayed observation cannot resurrect disabled policy')
+
 # A disabled platform user cannot leave a cloud policy or usable credential behind.
 d=Account(client=other);d.set();wait(lambda:d.view()['started_at'])
 admin.call('/admin/users/'+other_uid+'/status',{'disabled':True})
