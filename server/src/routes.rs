@@ -3,7 +3,7 @@ use crate::*;
 pub async fn health(State(s): State<AppState>) -> ApiResult<Json<Value>> {
     sqlx::query("SELECT 1").execute(&s.db).await?;
     Ok(Json(
-        json!({"status":"ok","version":env!("CARGO_PKG_VERSION"),"mode":if s.provider.is_some(){"remote"}else{"observe"},"remote_execution":s.provider.is_some()}),
+        json!({"status":"ok","version":env!("CARGO_PKG_VERSION"),"mode":if s.provider.is_some(){"remote"}else{"observe"},"remote_execution":s.provider.is_some(),"remote_providers":if s.provider.is_some(){vec!["leigod","etalien"]}else{vec![]}}),
     ))
 }
 #[derive(Deserialize)]

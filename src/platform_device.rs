@@ -827,7 +827,13 @@ fn sync_remote(
                                 saved[kind].remote_revision = status.revision;
                                 saved[kind].remote_token_digest = digest;
                             }
-                            Err(e) if e.is_conflict() => {
+                            Err(e)
+                                if e.is_conflict()
+                                    || matches!(
+                                        e,
+                                        Error::EtalienCalibration | Error::InvalidInput
+                                    ) =>
+                            {
                                 saved[kind].remote_consent = false;
                                 saved[kind].pending_disable = true;
                             }

@@ -151,11 +151,19 @@ pub async fn authorize(
         .map_err(|e| match e {
             provider::Failure::Credential => ApiError(
                 StatusCode::BAD_REQUEST,
-                "加速器登录已失效，请在客户端重新登录",
+                if q.provider == Kind::Leigod {
+                    "雷神登录已失效，请在客户端重新登录"
+                } else {
+                    "加速器登录已失效，请在客户端重新登录"
+                },
             ),
             provider::Failure::InvalidAccount => ApiError(
                 StatusCode::BAD_REQUEST,
-                "无法验证加速器账号唯一身份，未开启保护",
+                if q.provider == Kind::Leigod {
+                    "无法验证雷神账号唯一身份，未开启保护"
+                } else {
+                    "无法验证加速器账号唯一身份，未开启保护"
+                },
             ),
             _ => ApiError(StatusCode::BAD_GATEWAY, "加速器账号验证失败，请稍后重试"),
         })?;
@@ -215,7 +223,11 @@ pub async fn authorize(
         if account.get::<Uuid, _>("user_id") != uid {
             return Err(ApiError(
                 StatusCode::CONFLICT,
-                "该加速器账号已属于其他平台账号",
+                if q.provider == Kind::Leigod {
+                    "该雷神账号已属于其他平台账号"
+                } else {
+                    "该加速器账号已属于其他平台账号"
+                },
             ));
         }
         account.get::<Uuid, _>("id")
@@ -236,7 +248,11 @@ pub async fn authorize(
         if p.refresh && old.get::<Uuid, _>("account_id") != aid {
             return Err(ApiError(
                 StatusCode::CONFLICT,
-                "加速器账号已切换，请关闭旧保护后重新开启",
+                if q.provider == Kind::Leigod {
+                    "雷神账号已切换，请关闭旧保护后重新开启"
+                } else {
+                    "加速器账号已切换，请关闭旧保护后重新开启"
+                },
             ));
         }
         sqlx::query("SELECT remote_revoke_provider($1,$2)")

@@ -31,6 +31,8 @@ impl Credential {
 struct Profile {
     #[prost(int64, tag = "1")]
     user_id: i64,
+    #[prost(int64, tag = "5")]
+    register_time: i64,
 }
 #[derive(Clone, PartialEq, Message)]
 struct Remaining {
@@ -101,7 +103,7 @@ pub async fn info(client: &reqwest::Client, host: &str, value: &str) -> Result<I
     )
     .await?;
     let profile = Profile::decode(bytes.as_slice()).map_err(|_| Failure::InvalidAccount)?;
-    if profile.user_id <= 0 {
+    if profile.user_id <= 0 || profile.register_time <= 0 {
         return Err(Failure::InvalidAccount);
     }
     let bytes = request(

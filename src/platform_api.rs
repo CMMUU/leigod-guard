@@ -22,6 +22,7 @@ pub enum Error {
     Conflict,
     LeigodCredential,
     LeigodIdentity,
+    EtalienCalibration,
     RemoteAccountOwned,
     RemoteStateChanged,
 }
@@ -36,10 +37,13 @@ impl Error {
             Self::Protocol => "平台返回了无法识别的登录信息，请稍后重试。",
             Self::InvalidInput => "请检查邮箱、验证码或账号信息后重试。",
             Self::Conflict => "设备绑定冲突或已撤销。请在原账号解除绑定，或手动重新绑定本机。",
-            Self::LeigodCredential => "雷神登录已失效，请重新登录雷神账号后开启保护。",
-            Self::LeigodIdentity => "服务器无法识别雷神账号身份，请检查后台版本或联系管理员。",
+            Self::LeigodCredential => "加速器登录已失效，请重新登录对应账号后开启保护。",
+            Self::LeigodIdentity => "服务器无法识别加速器账号身份，请检查后台版本或联系管理员。",
             Self::RemoteAccountOwned => {
-                "该雷神账号已绑定其他平台账号，请使用原平台账号或联系管理员。"
+                "该加速器账号已绑定其他平台账号，请使用原平台账号或联系管理员。"
+            }
+            Self::EtalienCalibration => {
+                "请先在外星仔官方客户端暂停并刷新，回到守护读取校准后再授权。"
             }
             Self::RemoteStateChanged => "设备或远程授权状态已变化，请刷新后重新开启保护。",
         }
@@ -605,22 +609,37 @@ fn read_remote(response: Response, provider: Provider) -> Result<RemoteStatus, E
         // Only known server errors select local text. Never show arbitrary
         // response bodies, which could contain echoed credentials.
         return Err(match (http_status, body["error"].as_str()) {
-            (400, Some("雷神登录已失效，请在客户端重新登录")) => {
-                Error::LeigodCredential
+            (
+                400,
+                Some("雷神登录已失效，请在客户端重新登录" | "加速器登录已失效，请在客户端重新登录"),
+            ) => Error::LeigodCredential,
+            (
+                400,
+                Some(
+                    "无法验证雷神账号唯一身份，未开启保护"
+                    | "无法验证加速器账号唯一身份，未开启保护",
+                ),
+            ) => Error::LeigodIdentity,
+            (409, Some("该雷神账号已属于其他平台账号" | "该加速器账号已属于其他平台账号")) => {
+                Error::RemoteAccountOwned
             }
-            (400, Some("无法验证雷神账号唯一身份，未开启保护")) => {
-                Error::LeigodIdentity
-            }
-            (409, Some("该雷神账号已属于其他平台账号")) => Error::RemoteAccountOwned,
             (
                 409,
                 Some(
                     "客户端运行代次已变化，请重新连接"
                     | "远程授权已变化，请重新确认"
                     | "雷神账号已切换，请关闭旧保护后重新开启"
-                    | "远程授权已变化，请刷新后重试",
+                    | "远程授权已变化，请刷新后重试"
+                    | "加速器账号已切换，请关闭旧保护后重新开启",
                 ),
             ) => Error::RemoteStateChanged,
+            (
+                400,
+                Some(
+                    "请先在外星仔官方客户端暂停并校准，再授权服务器保护"
+                    | "请先登录并校准外星仔暂停状态",
+                ),
+            ) => Error::EtalienCalibration,
             (400, _) => Error::InvalidInput,
             _ => Error::Conflict,
         });

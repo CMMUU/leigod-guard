@@ -33,7 +33,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
    v=state.get(token)
    if not v or v.get('expired'):self.send(b'',401);return
    snap=dict(v)
-   if u.path=='/account/v1/my_profile' and method=='GET':v['profile_calls']+=1;result=field(1,snap['id']) if snap['id'] else b''
+   if u.path=='/account/v1/my_profile' and method=='GET':v['profile_calls']+=1;result=field(1,snap['id'])+field(5,1700000000) if snap['id'] else b''
    elif u.path=='/v2/account/remain/duration' and method=='POST':result=field(1,600)+field(3,int(time.time()))+field(4,snap['state'])
    elif u.path=='/v2/account/update/pause/state' and method=='POST':
     if body!=field(1,2):self.send(b'',400);return
