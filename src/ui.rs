@@ -488,9 +488,12 @@ fn tray_event_loop(
                 // Keep the current game in the foreground; no window or popup.
                 ctx.request_repaint();
             } else if id == ids.pause {
+                let account = config.lock().map(|c| c.account.clone()).unwrap_or_default();
                 if let Ok(mut s) = shared.lock() {
-                    s.manual_cmd = Some(ManualCmd::Pause);
-                    s.log("托盘指令：立即暂停");
+                    if account.configured(s.token.is_some()) {
+                        s.manual_cmd = Some(ManualCmd::Pause);
+                        s.log("托盘指令：立即暂停雷神");
+                    }
                 }
                 if let Ok(mut s) = etalien.lock() {
                     s.manual_cmd = Some(ManualCmd::Pause);

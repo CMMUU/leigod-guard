@@ -434,9 +434,10 @@ pub fn run(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
     // 自动暂停包含一次启动补查和原有的游戏退出宽限期；不自动恢复计时。
     let mut pause_watch = AutoPauseWatch::default();
     let mut monitor_failed = false;
+    let mut was_configured = false;
 
     loop {
-        let (interval, enabled, startup_enabled, startup_grace_secs, grace_secs, watch) = {
+        let (interval, enabled, startup_enabled, startup_grace_secs, grace_secs, watch, configured) = {
             let c = match cfg.lock() {
                 Ok(c) => c.clone(),
                 Err(_) => {
@@ -448,6 +449,9 @@ pub fn run(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
                 }
             };
             let watch = checked_watch(&c);
+            let configured = c
+                .account
+                .configured(shared.lock().map(|s| s.token.is_some()).unwrap_or(false));
             (
                 c.strategy.check_interval_secs.max(1),
                 c.strategy.enabled,
@@ -455,9 +459,14 @@ pub fn run(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
                 c.strategy.startup_grace_secs,
                 c.strategy.grace_secs,
                 watch,
+                configured,
             )
         };
-        pause_watch.configure(enabled, startup_enabled, watch.is_some());
+        if configured && !was_configured {
+            pause_watch = AutoPauseWatch::default();
+        }
+        was_configured = configured;
+        pause_watch.configure(enabled && configured, startup_enabled, watch.is_some());
         pause_watch.startup_grace_secs = startup_grace_secs;
         let _ = consume_startup_request(&shared, &mut pause_watch, Instant::now());
 
@@ -529,6 +538,11 @@ pub fn run(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
             s.running_games = matched.clone();
         }
 
+        if !configured {
+            set_status(&shared, "雷神未登录，等待配置账户");
+            std::thread::sleep(Duration::from_secs(interval));
+            continue;
+        }
         if !enabled {
             set_status(&shared, "自动暂停已停用");
             std::thread::sleep(Duration::from_secs(interval));

@@ -106,6 +106,14 @@ pub struct Account {
     pub token_enc: String,
 }
 
+impl Account {
+    pub fn configured(&self, runtime_token: bool) -> bool {
+        runtime_token
+            || !self.token_enc.is_empty()
+            || (!self.username.is_empty() && !self.cred_enc.is_empty())
+    }
+}
+
 /// 外星仔凭据与雷神完全隔离；只有完成官方暂停状态校准后才能启用。
 #[derive(Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -152,6 +160,25 @@ pub struct Config {
 #[cfg(test)]
 mod tests {
     use super::{valid_game_executable, Config};
+
+    #[test]
+    fn providers_do_not_enable_one_another() {
+        let mut cfg = Config::default();
+        cfg.etalien.enabled = true;
+        cfg.etalien.token_enc = "encrypted-fixture".into();
+        cfg.etalien.device_id = "fixture-device".into();
+        cfg.etalien.paused_state = Some(1);
+        assert!(cfg.etalien.ready());
+        assert!(!cfg.account.configured(false));
+        assert!(cfg.account.configured(true));
+        cfg.account.username = "fixture-user".into();
+        assert!(!cfg.account.configured(false));
+        cfg.account.cred_enc = "encrypted-fixture".into();
+        assert!(cfg.account.configured(false));
+        cfg.etalien.enabled = false;
+        assert!(!cfg.etalien.ready());
+        assert!(cfg.account.configured(false));
+    }
 
     #[test]
     fn older_config_does_not_enable_update_requests() {
