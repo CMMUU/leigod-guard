@@ -116,6 +116,7 @@ Source: "{#SourceDir}\CHANGELOG.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\config.example.toml"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\docs\PRIVACY.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 Source: "{#SourceDir}\docs\RELEASING.md"; DestDir: "{app}\docs"; Flags: ignoreversion
+Source: "{#SourceDir}\docs\外星仔接入说明.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 Source: "{#SourceDir}\licenses\*"; DestDir: "{app}\licenses"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#InstallerDir}WEBVIEW2-NOTICE.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
 

@@ -67,7 +67,7 @@ try {
 
     $documents = @(
         'README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.txt', 'CHANGELOG.md',
-        'config.example.toml', 'docs/PRIVACY.md', 'docs/RELEASING.md'
+        'config.example.toml', 'docs/PRIVACY.md', 'docs/RELEASING.md', 'docs/外星仔接入说明.md'
     )
     foreach ($relativePath in $documents) {
         if (-not (Test-Path -LiteralPath (Join-Path $repositoryRoot $relativePath) -PathType Leaf)) {
