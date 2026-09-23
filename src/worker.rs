@@ -681,7 +681,12 @@ pub fn run(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
 pub fn run_etalien(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
     if let Ok(c) = cfg.lock() {
         if let Ok(token) = dpapi::unprotect(&c.etalien.token_enc) {
-            shared.lock().unwrap().set_token(Some(token));
+            if !token.is_empty() {
+                if let Ok(mut state) = shared.lock() {
+                    state.set_token(Some(token));
+                    state.account_status = "已恢复本地令牌，请刷新确认登录与计时状态".into();
+                }
+            }
         }
     }
     let mut pause_watch = AutoPauseWatch::default();
@@ -750,10 +755,11 @@ pub fn run_etalien(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
         if manual || matches!(decision, PauseDecision::Pause | PauseDecision::StartupPause) {
             let token = shared.lock().ok().and_then(|s| s.token.clone());
             let result = token
+                .as_deref()
                 .ok_or_else(|| "请重新登录外星仔账号".to_string())
                 .and_then(|token| {
                     crate::etalien_api::pause(
-                        &token,
+                        token,
                         &account.device_id,
                         account.paused_state.unwrap(),
                         Duration::from_secs(18),
@@ -767,7 +773,7 @@ pub fn run_etalien(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
                                 return Err("账号或守护配置已变化，取消旧请求".into());
                             }
                             if shared.lock().map_err(|_| "无法读取账号")?.token.as_deref()
-                                != Some(&token)
+                                != Some(token)
                             {
                                 return Err("登录状态已变化，取消旧请求".into());
                             }
@@ -784,23 +790,37 @@ pub fn run_etalien(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
                         },
                     )
                 });
+            // Hold both locks in config -> state order while publishing. A late
+            // response must not overwrite a logout or a newly selected account.
+            let Ok(current) = cfg.lock() else {
+                continue;
+            };
+            if !current.etalien.ready()
+                || current.etalien.token_enc != account.token_enc
+                || current.etalien.device_id != account.device_id
+                || current.etalien.paused_state != account.paused_state
+            {
+                continue;
+            }
+            let Ok(mut state) = shared.lock() else {
+                continue;
+            };
+            if state.token != token {
+                continue;
+            }
             match result {
                 Ok(info) => {
                     pause_watch.pause_succeeded();
-                    set_status(&shared, "外星仔官方状态已确认暂停");
-                    log(&shared, "暂停状态查询已确认");
-                    if let Ok(mut s) = shared.lock() {
-                        s.account_status = crate::ui_etalien::describe(&info, account.paused_state);
-                        s.manual_pause_result = Some(true);
-                    }
+                    state.set_status("外星仔官方状态已确认暂停");
+                    state.log("暂停状态查询已确认");
+                    state.account_status = crate::ui_etalien::describe(&info, account.paused_state);
+                    state.manual_pause_result = Some(true);
                 }
                 Err(error) => {
                     pause_watch.pause_failed(Instant::now());
-                    set_status(&shared, &error);
-                    log(&shared, &error);
-                    if let Ok(mut s) = shared.lock() {
-                        s.manual_pause_result = Some(false);
-                    }
+                    state.set_status(&error);
+                    state.log(&error);
+                    state.manual_pause_result = Some(false);
                 }
             }
         } else {
