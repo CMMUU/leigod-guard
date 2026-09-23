@@ -598,7 +598,7 @@ impl App {
         let menu = Menu::new();
         let menu_open = MenuItem::new("打开面板", true, None);
         let menu_defer_startup = MenuItem::new("准备游戏：延后启动检查10分钟", true, None);
-        let menu_pause = MenuItem::new("立即暂停计时", true, None);
+        let menu_pause = MenuItem::new("立即暂停已启用的加速器", true, None);
         // 延后入口只保护待处理的启动检查，不会开启或恢复加速。
         let menu_quit = MenuItem::new("退出", true, None);
         let _ = menu.append_items(&[
@@ -1145,7 +1145,7 @@ impl App {
                             Page::Games => self.page_games(ui),
                             Page::Plans => self.page_plans(ui),
                             Page::Account => {
-                                page_header(ui, "账户", "管理雷神账号与本机保存的登录凭据。");
+                                page_header(ui, "账户", "分别管理雷神、外星仔账号与本机登录凭据。");
                                 theme::card().show(ui, |ui| {
                                     ui.set_min_width(ui.available_width());
                                     self.page_account(ui);

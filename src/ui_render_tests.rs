@@ -114,7 +114,7 @@ fn home_controls_update_real_in_memory_strategy_and_commands() {
         .startup_defer_requested_at
         .is_some());
     assert!(app.shared.lock().unwrap().manual_cmd.is_none());
-    click(&ctx, &mut app, "立即暂停计时");
+    click(&ctx, &mut app, "立即暂停雷神");
     assert!(matches!(
         app.shared.lock().unwrap().manual_cmd,
         Some(ManualCmd::Pause)
@@ -489,7 +489,7 @@ fn home_balance_and_protection_countdown_are_independent_and_fit_small_windows()
         let balance = text_rect(&output.shapes, "8941 时 15 分 01 秒");
         let countdown = text_rect(&output.shapes, "02:36");
         assert!(!balance.intersects(countdown));
-        text_rect(&output.shapes, "账户剩余时长");
+        text_rect(&output.shapes, "雷神账户剩余时长");
         text_rect(&output.shapes, "刷新时长");
     }
     set_demo_balance(&mut app, 999_999 * 3600 + 59 * 60 + 59);

@@ -135,7 +135,7 @@ pub fn render(ctx: &Context, backdrop: &egui::TextureHandle) -> bool {
             ui.painter().text(
                 r.center(),
                 Align2::CENTER_CENTER,
-                "暂停是否生效，请在雷神官方微信小程序下拉刷新核对。",
+                "暂停结果请到对应加速器官方客户端或小程序刷新核对。",
                 egui::FontId::proportional(12.0),
                 theme::MUTED,
             );
