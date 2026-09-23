@@ -341,8 +341,18 @@ class Sync:
         if not apply:
             print("Repository description differs; no change without --apply.")
             return
-        self.ge.request(self.target_path, method="PATCH", data={"description": description})
-        if self.ge.request(self.target_path).get("description") != description:
+        # Gitee requires name even for a description-only edit. Its boolean
+        # defaults must be sent back explicitly so unrelated settings are preserved.
+        name = target.get("name")
+        flags = ("has_issues", "has_wiki", "can_comment")
+        if not isinstance(name, str) or not name or any(type(target.get(k)) is not bool for k in flags):
+            raise SyncError("Cannot preserve existing Gitee repository settings")
+        fields = {"name": name, "description": description, **{k: str(target[k]).lower() for k in flags}}
+        self.ge.request(self.target_path, method="PATCH", data=fields)
+        updated = self.ge.request(self.target_path)
+        if updated.get("name") != name or any(updated.get(k) != target[k] for k in flags):
+            raise SyncError("Gitee repository settings did not remain unchanged")
+        if updated.get("description") != description:
             raise SyncError("Gitee description update could not be confirmed")
         print("Gitee repository description verified.")
 

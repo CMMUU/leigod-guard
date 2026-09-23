@@ -67,13 +67,14 @@ class SyncTests(unittest.TestCase):
         ge = Mock()
         job = sync.Sync("leigod-guard", Mock(), ge, self.fixture())
         job.source = {"description": "加速器守护：雷神与外星仔自动暂停"}
-        with patch.object(job, "guard", return_value={"description": "old"}):
+        target = {"name":"leigod-guard","description":"old","has_issues":False,"has_wiki":False,"can_comment":True}
+        with patch.object(job, "guard", return_value=target):
             job.sync_description(False)
             ge.request.assert_not_called()
-            ge.request.side_effect = [{}, dict(job.source)]
+            ge.request.side_effect = [{}, {**target, **job.source}]
             job.sync_description(True)
             self.assertEqual(ge.request.call_args_list[0].args, ("/repos/cmmuu/leigod-guard",))
-            self.assertEqual(ge.request.call_args_list[0].kwargs, {"method":"PATCH", "data":dict(job.source)})
+            self.assertEqual(ge.request.call_args_list[0].kwargs, {"method":"PATCH", "data":{"name":"leigod-guard",**job.source,"has_issues":"false","has_wiki":"false","can_comment":"true"}})
             job.source = {"description": None}
             with self.assertRaises(sync.SyncError): job.sync_description(True)
 
