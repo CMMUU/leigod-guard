@@ -805,7 +805,7 @@ fn run_inner(plan_path: &Path) -> Result<(), String> {
         // Only restart an unchanged/restored old executable after a failed apply.
         if file_sha256(&executable).is_ok_and(|hash| hash == plan.previous_sha256) {
             if let Err(restart_error) = restart(&executable) {
-                return Err(format!("{error}\n旧版文件已保留，但没有重新打开，请手动启动雷神守护。\n{restart_error}"));
+                return Err(format!("{error}\n旧版文件已保留，但没有重新打开，请手动启动加速器守护。\n{restart_error}"));
             }
             return Err(format!("{error}\n已重新打开原版本。"));
         }

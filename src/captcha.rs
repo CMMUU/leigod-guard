@@ -114,7 +114,7 @@ fn run_window(
     let mut event_loop = EventLoopBuilder::new().with_any_thread(true).build();
     crate::ui::dbglog("[captcha] event loop built");
     let window = WindowBuilder::new()
-        .with_title("人机验证 - 雷神守护")
+        .with_title("人机验证 - 加速器守护")
         .with_inner_size(tao::dpi::LogicalSize::new(400.0, 480.0))
         .with_resizable(false)
         .build(&event_loop)

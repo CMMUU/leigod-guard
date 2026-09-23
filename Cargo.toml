@@ -1,9 +1,9 @@
 [package]
 name = "leigod-guard"
-version = "0.15.2"
+version = "0.16.0"
 edition = "2021"
 build = "build.rs"
-description = "Windows 雷神加速器自动暂停计时工具（非官方）"
+description = "Windows 加速器自动暂停计时工具（非官方）"
 license = "MIT"
 repository = "https://github.com/CMMUU/leigod-guard"
 readme = "README.md"
@@ -28,6 +28,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 getrandom = "0.2"
+prost = "0.13"
 zip = { version = "8.6", default-features = false, features = ["deflate"] }
 toml = "0.8"
 md-5 = "0.10"

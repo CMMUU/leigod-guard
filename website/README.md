@@ -1,4 +1,4 @@
-# 雷神守护项目网站
+# 加速器守护项目网站
 
 单页源码与 Windows 应用在同一仓库维护，设计稿位于 [`docs/website-design/`](../docs/website-design/README.md)。正文采用静态 HTML/CSS，不依赖前端框架或外部字体；下载区域通过一个本站脚本和 Pages Functions 查询公开正式版本。
 

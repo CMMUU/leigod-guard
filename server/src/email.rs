@@ -61,8 +61,8 @@ impl Mailer {
     async fn send(&self, email: &str, id: Uuid, code: &str) -> ApiResult<()> {
         let mut response = self.client.post(&self.endpoint).bearer_auth(&self.key)
             .header("Idempotency-Key", format!("guard-login-{id}"))
-            .json(&json!({"from":self.from,"to":[email],"subject":"雷神守护登录验证码",
-                "text":format!("你的雷神守护验证码是：{code}\n\n10 分钟内有效，仅可使用一次。首次验证成功会创建普通平台账号。请勿向他人提供验证码。\n如果不是你本人操作，请忽略此邮件。\n雷神守护是独立开源工具，与雷神加速器官方无隶属关系。") }))
+            .json(&json!({"from":self.from,"to":[email],"subject":"加速器守护登录验证码",
+                "text":format!("你的加速器守护验证码是：{code}\n\n10 分钟内有效，仅可使用一次。首次验证成功会创建普通平台账号。请勿向他人提供验证码。\n如果不是你本人操作，请忽略此邮件。\n加速器守护是独立开源工具，与雷神加速器官方无隶属关系。") }))
             .send().await.map_err(|_| ApiError(StatusCode::SERVICE_UNAVAILABLE,"验证码发送暂不可用，请稍后重试"))?;
         if !response.status().is_success() {
             tracing::warn!(

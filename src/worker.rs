@@ -663,6 +663,159 @@ pub fn run(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
     }
 }
 
+/// Independent account state; shares the tested game/exit/startup policy only.
+pub fn run_etalien(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
+    if let Ok(c) = cfg.lock() {
+        if let Ok(token) = dpapi::unprotect(&c.etalien.token_enc) {
+            shared.lock().unwrap().set_token(Some(token));
+        }
+    }
+    let mut pause_watch = AutoPauseWatch::default();
+    let mut previous_session = None;
+    loop {
+        std::thread::sleep(Duration::from_secs(1));
+        let Ok(config) = cfg.lock().map(|c| c.clone()) else {
+            continue;
+        };
+        let account = config.etalien.clone();
+        let session = (
+            account.enabled,
+            account.token_enc.clone(),
+            account.paused_state,
+        );
+        if previous_session.as_ref() != Some(&session) {
+            pause_watch = AutoPauseWatch::default();
+            previous_session = Some(session);
+        }
+        if !account.ready() {
+            pause_watch.configure(false, false, false);
+            publish_startup_status(&shared, &pause_watch, Instant::now());
+            set_status(&shared, "外星仔守护未开启：请登录、校准并启用");
+            if let Ok(mut s) = shared.lock() {
+                s.manual_cmd = None;
+            }
+            continue;
+        }
+        let watch = checked_watch(&config);
+        pause_watch.configure(
+            config.strategy.enabled,
+            config.strategy.pause_on_startup,
+            watch.is_some(),
+        );
+        pause_watch.startup_grace_secs = config.strategy.startup_grace_secs;
+        let _ = consume_startup_request(&shared, &mut pause_watch, Instant::now());
+        let manual = shared
+            .lock()
+            .ok()
+            .and_then(|mut s| s.manual_cmd.take())
+            .is_some();
+        let decision = match monitor::try_running_process_names() {
+            Ok(processes) => {
+                publish_process_snapshot(&shared, Some(&processes));
+                let games = watch
+                    .as_ref()
+                    .map(|w| monitor::match_games(&processes, w))
+                    .unwrap_or_default();
+                if let Ok(mut s) = shared.lock() {
+                    s.running_games = games.clone();
+                }
+                pause_watch.observe(
+                    Instant::now(),
+                    !games.is_empty(),
+                    config.strategy.grace_secs,
+                )
+            }
+            Err(_) => {
+                pause_watch.observation_failed();
+                publish_process_snapshot(&shared, None);
+                set_status(&shared, "进程检测失败，暂缓自动暂停");
+                PauseDecision::Idle
+            }
+        };
+        publish_startup_status(&shared, &pause_watch, Instant::now());
+        if manual || matches!(decision, PauseDecision::Pause | PauseDecision::StartupPause) {
+            let token = shared.lock().ok().and_then(|s| s.token.clone());
+            let result = token
+                .ok_or_else(|| "请重新登录外星仔账号".to_string())
+                .and_then(|token| {
+                    crate::etalien_api::pause(
+                        &token,
+                        &account.device_id,
+                        account.paused_state.unwrap(),
+                        Duration::from_secs(18),
+                        || {
+                            let latest = cfg.lock().map_err(|_| "无法读取配置")?.etalien.clone();
+                            if !latest.ready()
+                                || latest.token_enc != account.token_enc
+                                || latest.paused_state != account.paused_state
+                                || latest.device_id != account.device_id
+                            {
+                                return Err("账号或守护配置已变化，取消旧请求".into());
+                            }
+                            if shared.lock().map_err(|_| "无法读取账号")?.token.as_deref()
+                                != Some(&token)
+                            {
+                                return Err("登录状态已变化，取消旧请求".into());
+                            }
+                            if !manual {
+                                auto_pause_guard(
+                                    &cfg,
+                                    &shared,
+                                    &mut pause_watch,
+                                    decision == PauseDecision::StartupPause,
+                                )
+                                .map_err(|_| "暂停前复核未通过，已暂缓本次自动暂停".to_string())?;
+                            }
+                            Ok(())
+                        },
+                    )
+                });
+            match result {
+                Ok(info) => {
+                    pause_watch.pause_succeeded();
+                    set_status(&shared, "外星仔官方状态已确认暂停");
+                    log(&shared, "暂停状态查询已确认");
+                    if let Ok(mut s) = shared.lock() {
+                        s.account_status = crate::ui_etalien::describe(&info, account.paused_state);
+                        s.manual_pause_result = Some(true);
+                    }
+                }
+                Err(error) => {
+                    pause_watch.pause_failed(Instant::now());
+                    set_status(&shared, &error);
+                    log(&shared, &error);
+                    if let Ok(mut s) = shared.lock() {
+                        s.manual_pause_result = Some(false);
+                    }
+                }
+            }
+        } else {
+            match decision {
+                PauseDecision::Running => set_status(&shared, "游戏运行中，外星仔自动暂停待命"),
+                PauseDecision::GraceStarted | PauseDecision::Waiting(_) => {
+                    set_exit_grace_status(&shared, &pause_watch.exit)
+                }
+                PauseDecision::StartupWaiting {
+                    remaining_secs,
+                    preparing_game,
+                } => set_startup_waiting_status(&shared, remaining_secs, preparing_game),
+                PauseDecision::RetryWaiting => {} // Keep the last actionable error visible.
+                PauseDecision::Idle if !config.strategy.enabled => {
+                    set_status(&shared, "自动暂停总开关已关闭")
+                }
+                PauseDecision::Idle if watch.is_none() => {
+                    set_status(&shared, "名单为空或无效，暂缓自动暂停")
+                }
+                _ => {}
+            }
+        }
+        publish_startup_status(&shared, &pause_watch, Instant::now());
+        std::thread::sleep(Duration::from_secs(
+            config.strategy.check_interval_secs.max(1).saturating_sub(1),
+        ));
+    }
+}
+
 fn set_status(shared: &Arc<Mutex<Shared>>, status: &str) {
     if let Ok(mut s) = shared.lock() {
         s.set_status(status);

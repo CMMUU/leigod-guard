@@ -7,7 +7,7 @@
 //!
 //! 游戏加加没有公开的进程级排除接口。用户明确开启严格屏蔽后，主程序在拿
 //! 单实例锁和初始化 DirectX 之前，以 Windows 进程创建缓解策略重新启动自身。
-//! 该策略只作用于新建的雷神守护进程，但会阻止所有不属于 Microsoft、Store
+//! 该策略只作用于新建的加速器守护进程，但会阻止所有不属于 Microsoft、Store
 //! 或 WHQL 信任范围的 DLL，而不仅是游戏加加模块。
 
 use std::path::{Path, PathBuf};
@@ -219,7 +219,7 @@ fn spawn_gamepp_protected(
             &startup.StartupInfo,
             &mut process_info,
         )
-        .map_err(|error| format!("启动受保护的雷神守护进程失败: {error}"))?;
+        .map_err(|error| format!("启动受保护的加速器守护进程失败: {error}"))?;
     }
 
     let process = OwnedHandle(process_info.hProcess);

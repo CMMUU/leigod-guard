@@ -1,4 +1,4 @@
-# 雷神守护 Leigod Guard
+# 加速器守护 Accelerator Guard
 
 > 配合雷神加速器使用的独立开源 Windows 计时守护工具：按游戏进程请求暂停账户计时，重启后检查闲置计时，查询账户剩余时长。
 
@@ -6,9 +6,9 @@
 资料对应仓库版本：v{{APP_VERSION}}
 内容最近修改：{{LAST_MODIFIED}}
 
-雷神守护不是雷神加速器官方产品，与其运营方没有隶属、合作或授权关系。软件采用 MIT 许可证，目前提供 Windows 10 / 11 x64 版本。游戏、线路选择和开启加速仍由雷神官方客户端完成。
+加速器守护不是雷神加速器官方产品，与其运营方没有隶属、合作或授权关系。软件采用 MIT 许可证，目前提供 Windows 10 / 11 x64 版本。游戏、线路选择和开启加速仍由雷神官方客户端完成。
 
-Leigod Guard is an independent, MIT-licensed Windows companion for the Leigod accelerator. It monitors configured game processes, requests account billing pauses, and displays the latest queried remaining time. It does not stop client acceleration or operate after the computer loses power.
+Accelerator Guard is an independent, MIT-licensed Windows companion for the Leigod accelerator. It monitors configured game processes, requests account billing pauses, and displays the latest queried remaining time. It does not stop client acceleration or operate after the computer loses power.
 
 ## 下载与更新
 

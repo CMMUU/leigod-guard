@@ -106,6 +106,26 @@ pub struct Account {
     pub token_enc: String,
 }
 
+/// 外星仔凭据与雷神完全隔离；只有完成官方暂停状态校准后才能启用。
+#[derive(Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct Etalien {
+    pub enabled: bool,
+    pub username: String,
+    pub token_enc: String,
+    pub device_id: String,
+    pub paused_state: Option<i64>,
+}
+
+impl Etalien {
+    pub fn ready(&self) -> bool {
+        self.enabled
+            && !self.token_enc.is_empty()
+            && !self.device_id.is_empty()
+            && self.paused_state.is_some_and(|state| state > 0)
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct Updates {
@@ -124,6 +144,8 @@ pub struct Config {
     #[serde(default)]
     pub account: Account,
     #[serde(default)]
+    pub etalien: Etalien,
+    #[serde(default)]
     pub updates: Updates,
 }
 
@@ -137,6 +159,8 @@ mod tests {
         assert!(!cfg.updates.check_on_startup);
         assert_eq!(cfg.updates.source, crate::updater::UpdateMode::Auto);
         assert!(cfg.strategy.enabled);
+        assert!(!cfg.etalien.ready());
+        assert!(cfg.etalien.token_enc.is_empty());
     }
 
     #[test]

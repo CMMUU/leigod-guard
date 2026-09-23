@@ -1,10 +1,25 @@
 //! App-owned light window chrome. Rendering only emits viewport commands;
 //! native hide-to-tray is applied by App after rendering, never by UI fixtures.
-use crate::ui_theme::{self as theme, Icon};
+use crate::ui_theme as theme;
 use egui::{pos2, vec2, Align2, Context, Rect, ResizeDirection, Sense, Stroke, ViewportCommand};
 
 pub fn render(ctx: &Context, backdrop: &egui::TextureHandle) -> bool {
     let mut hide = false;
+    let logo_id = egui::Id::new("accelerator-guard-brand-icon");
+    let logo = ctx.data(|data| data.get_temp::<egui::TextureHandle>(logo_id));
+    let logo = logo.unwrap_or_else(|| {
+        let image = egui::ColorImage::from_rgba_unmultiplied(
+            [256, 256],
+            include_bytes!("../assets/app-icon-256.rgba"),
+        );
+        let logo = ctx.load_texture(
+            "accelerator-guard-logo",
+            image,
+            egui::TextureOptions::LINEAR,
+        );
+        ctx.data_mut(|data| data.insert_temp(logo_id, logo.clone()));
+        logo
+    });
     let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
     egui::TopBottomPanel::top("title-bar")
         .exact_height(50.0)
@@ -24,16 +39,16 @@ pub fn render(ctx: &Context, backdrop: &egui::TextureHandle) -> bool {
             } else if drag.drag_started_by(egui::PointerButton::Primary) {
                 ctx.send_viewport_cmd(ViewportCommand::StartDrag);
             }
-            theme::icon(
-                ui,
-                Icon::Shield,
-                Rect::from_center_size(pos2(r.left() + 29.0, r.center().y), vec2(21.0, 21.0)),
-                theme::TEXT,
+            ui.painter().image(
+                logo.id(),
+                Rect::from_center_size(pos2(r.left() + 29.0, r.center().y), vec2(30.0, 30.0)),
+                Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                egui::Color32::WHITE,
             );
             ui.painter().text(
                 pos2(r.left() + 51.0, r.center().y),
                 Align2::LEFT_CENTER,
-                "雷神守护",
+                "加速器守护",
                 theme::heading_font(17.0),
                 theme::TEXT,
             );
