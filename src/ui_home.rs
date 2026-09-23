@@ -212,7 +212,11 @@ pub fn render(ui: &mut Ui, state: &HomeState<'_>, enabled: &mut bool) -> HomeAct
                     );
                 });
             } else {
-                ui.label(RichText::new("雷神账户剩余时长").size(13.0).color(theme::MUTED));
+                ui.label(
+                    RichText::new("雷神账户剩余时长")
+                        .size(13.0)
+                        .color(theme::MUTED),
+                );
                 action = time_balance(ui, state.balance);
             }
         });
