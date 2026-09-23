@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 #[cfg(not(target_os = "windows"))]
-compile_error!("LeigodGuard currently supports Windows only.");
+compile_error!("Accelerator Guard currently supports Windows only.");
 
 mod autostart;
 mod captcha;
@@ -42,7 +42,7 @@ fn main() {
     }
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!(
-            "LeigodGuard {} (Windows)\nUsage: leigod-guard [--minimized] [--version] [--help]",
+            "Accelerator Guard {} (Windows)\nUsage: leigod-guard [--minimized] [--version] [--help]",
             env!("CARGO_PKG_VERSION")
         );
         return;

@@ -204,7 +204,11 @@ impl Panel {
                 });
             }
             if theme::primary(ui, "登录外星仔").clicked() {
-                let user = self.user.trim().to_owned();
+                let user = if self.user.trim().is_empty() {
+                    account.username.clone()
+                } else {
+                    self.user.trim().to_owned()
+                };
                 let password = std::mem::take(&mut self.password);
                 let imported = std::mem::take(&mut self.token_input).trim().to_owned();
                 let token_mode = self.token_mode;

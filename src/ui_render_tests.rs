@@ -786,6 +786,19 @@ fn render_apple_preview() {
     let gpu = Offscreen::new();
     for (suffix, size) in [("", [1180.0, 780.0]), ("-narrow", [680.0, 460.0])] {
         let (ctx, mut app) = fixture();
+        app.page = Page::Account;
+        app.account_provider = 1;
+        gpu.save(
+            &ctx,
+            &mut app,
+            size,
+            1.0,
+            &output.join(format!("etalien-account{suffix}.png")),
+        );
+    }
+
+    for (suffix, size) in [("", [1180.0, 780.0]), ("-narrow", [680.0, 460.0])] {
+        let (ctx, mut app) = fixture();
         app.page = Page::Platform;
         app.platform.email_mode = false;
         app.platform.username = "demo-admin".into();
