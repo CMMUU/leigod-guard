@@ -52,6 +52,7 @@ jobs:
           cargo clippy --locked --all-targets -- -D warnings
           cargo test --locked
           cargo build --locked
+          psql "$DATABASE_URL" -f tests/migration_upgrade.sql
           ./target/debug/leigod-guard-server create-admin
           python3 tests/mail_mock.py > /tmp/guard-mail.log 2>&1 &
           MAIL_PID=$!
