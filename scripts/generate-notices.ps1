@@ -22,7 +22,7 @@ foreach ($target in @('x86_64-pc-windows-msvc', 'x86_64-pc-windows-gnu')) {
     }
 }
 $notice = [Text.StringBuilder]::new()
-[void]$notice.AppendLine('Third-party notices for LeigodGuard (Windows x64)')
+[void]$notice.AppendLine('Third-party notices for Accelerator Guard (Windows x64)')
 [void]$notice.AppendLine('Generated from Cargo.lock and the published dependency source packages.')
 [void]$notice.AppendLine('Dependencies retain their own licenses and copyright notices; the project MIT license does not replace them.')
 [void]$notice.AppendLine('This inventory includes build-time dependencies for the Windows MSVC and GNU targets.')

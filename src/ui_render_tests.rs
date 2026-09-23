@@ -114,7 +114,7 @@ fn home_controls_update_real_in_memory_strategy_and_commands() {
         .startup_defer_requested_at
         .is_some());
     assert!(app.shared.lock().unwrap().manual_cmd.is_none());
-    click(&ctx, &mut app, "立即暂停计时");
+    click(&ctx, &mut app, "立即暂停雷神");
     assert!(matches!(
         app.shared.lock().unwrap().manual_cmd,
         Some(ManualCmd::Pause)
@@ -489,7 +489,7 @@ fn home_balance_and_protection_countdown_are_independent_and_fit_small_windows()
         let balance = text_rect(&output.shapes, "8941 时 15 分 01 秒");
         let countdown = text_rect(&output.shapes, "02:36");
         assert!(!balance.intersects(countdown));
-        text_rect(&output.shapes, "账户剩余时长");
+        text_rect(&output.shapes, "雷神账户剩余时长");
         text_rect(&output.shapes, "刷新时长");
     }
     set_demo_balance(&mut app, 999_999 * 3600 + 59 * 60 + 59);
@@ -784,6 +784,19 @@ fn render_apple_preview() {
         .unwrap_or_else(|| std::path::PathBuf::from("target/ui-preview"));
     std::fs::create_dir_all(&output).unwrap();
     let gpu = Offscreen::new();
+    for (suffix, size) in [("", [1180.0, 780.0]), ("-narrow", [680.0, 460.0])] {
+        let (ctx, mut app) = fixture();
+        app.page = Page::Account;
+        app.account_provider = 1;
+        gpu.save(
+            &ctx,
+            &mut app,
+            size,
+            1.0,
+            &output.join(format!("etalien-account{suffix}.png")),
+        );
+    }
+
     for (suffix, size) in [("", [1180.0, 780.0]), ("-narrow", [680.0, 460.0])] {
         let (ctx, mut app) = fixture();
         app.page = Page::Platform;

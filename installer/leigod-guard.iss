@@ -16,7 +16,7 @@
   #error BootstrapperFile must be supplied
 #endif
 
-#define ProductName "LeigodGuard"
+#define ProductName "Accelerator Guard"
 #define ProductExe "leigod-guard.exe"
 #define ProjectURL "https://github.com/CMMUU/leigod-guard"
 #define InstallerDir AddBackslash(SourcePath)
@@ -40,7 +40,7 @@ AppUpdatesURL={#ProjectURL}/releases/latest
 LicenseFile={#SourceDir}\licenses\webview2-runtime\INSTALLER-LICENSE.txt
 VersionInfoVersion={#AppVersion}
 VersionInfoProductName={#ProductName}
-VersionInfoDescription=LeigodGuard Setup
+VersionInfoDescription=Accelerator Guard Setup
 DefaultDirName={localappdata}\Programs\LeigodGuard
 DefaultGroupName=LeigodGuard
 DisableProgramGroupPage=yes
@@ -72,28 +72,28 @@ Name: "chinesesimplified"; MessagesFile: "compiler:Default.isl,{#InstallerDir}la
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [CustomMessages]
-chinesesimplified.AppDisplayName=雷神守护
-english.AppDisplayName=LeigodGuard
+chinesesimplified.AppDisplayName=加速器守护
+english.AppDisplayName=Accelerator Guard
 chinesesimplified.DesktopIcon=创建桌面快捷方式(&D)
 english.DesktopIcon=Create a &desktop shortcut
 chinesesimplified.AdditionalIcons=快捷方式：
 english.AdditionalIcons=Shortcuts:
-chinesesimplified.LaunchApp=启动雷神守护
-english.LaunchApp=Launch LeigodGuard
+chinesesimplified.LaunchApp=启动加速器守护
+english.LaunchApp=Launch Accelerator Guard
 chinesesimplified.ProjectWebsite=使用说明与更新
 english.ProjectWebsite=Help and updates
-chinesesimplified.AppRunning=雷神守护正在运行。请先从系统托盘右键菜单退出雷神守护，然后重新开始安装。
-english.AppRunning=LeigodGuard is running. Exit it from its system tray menu, then start installation again.
+chinesesimplified.AppRunning=加速器守护正在运行。请先从系统托盘右键菜单退出加速器守护，然后重新开始安装。
+english.AppRunning=Accelerator Guard is running. Exit it from its system tray menu, then start installation again.
 chinesesimplified.RuntimeTitle=准备所需组件
 english.RuntimeTitle=Preparing required components
-chinesesimplified.RuntimeDescription=正在为雷神守护准备登录组件。
-english.RuntimeDescription=Preparing the sign-in component for LeigodGuard.
+chinesesimplified.RuntimeDescription=正在为加速器守护准备登录组件。
+english.RuntimeDescription=Preparing the sign-in component for Accelerator Guard.
 chinesesimplified.RuntimeInstalling=正在安装 Microsoft Edge WebView2。请保持网络连接，这可能需要几分钟。
 english.RuntimeInstalling=Installing Microsoft Edge WebView2. Stay connected to the internet; this may take a few minutes.
 chinesesimplified.RuntimeFailed=Microsoft Edge WebView2 未能安装完成。请检查网络连接后点击“重试”，或点击“取消”返回，稍后重新安装。
 english.RuntimeFailed=Microsoft Edge WebView2 could not be installed. Check your internet connection and select Retry, or select Cancel to return and run Setup again later.
-chinesesimplified.RuntimeRestart=Microsoft Edge WebView2 需要重启电脑才能完成安装。请重启后再次运行雷神守护安装程序。
-english.RuntimeRestart=Microsoft Edge WebView2 needs a computer restart to finish installing. Restart your computer, then run LeigodGuard Setup again.
+chinesesimplified.RuntimeRestart=Microsoft Edge WebView2 需要重启电脑才能完成安装。请重启后再次运行加速器守护安装程序。
+english.RuntimeRestart=Microsoft Edge WebView2 needs a computer restart to finish installing. Restart your computer, then run Accelerator Guard Setup again.
 
 [Messages]
 english.ConfirmUninstall=Remove %1 and its program files? Saved account and preference settings will be kept.
@@ -118,6 +118,13 @@ Source: "{#SourceDir}\docs\PRIVACY.md"; DestDir: "{app}\docs"; Flags: ignorevers
 Source: "{#SourceDir}\docs\RELEASING.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 Source: "{#SourceDir}\licenses\*"; DestDir: "{app}\licenses"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#InstallerDir}WEBVIEW2-NOTICE.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
+
+[InstallDelete]
+; Remove only the old product shortcut names; keep the installation identity.
+Type: files; Name: "{group}\雷神守护.lnk"
+Type: files; Name: "{group}\LeigodGuard.lnk"
+Type: files; Name: "{autodesktop}\雷神守护.lnk"
+Type: files; Name: "{autodesktop}\LeigodGuard.lnk"
 
 [Icons]
 Name: "{group}\{cm:AppDisplayName}"; Filename: "{app}\{#ProductExe}"; WorkingDir: "{app}"

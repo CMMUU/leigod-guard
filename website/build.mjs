@@ -53,7 +53,7 @@ const application = {
   '@type': 'SoftwareApplication',
   '@id': site.origin + '/#software',
   name: config.name,
-  alternateName: ['雷神守护', 'Leigod Guard', 'leigod-guard'],
+  alternateName: ['加速器守护', 'Accelerator Guard', 'leigod-guard'],
   url: site.origin + '/',
   description: '配合雷神加速器使用的独立开源 Windows 计时守护工具，支持按游戏进程暂停计时与查询剩余时长。',
   applicationCategory: 'UtilitiesApplication',
@@ -71,7 +71,7 @@ const structuredData = JSON.stringify({
   '@context': 'https://schema.org',
   '@graph': [
     { '@type': 'WebSite', '@id': site.origin + '/#website', url: site.origin + '/', name: config.name, inLanguage: 'zh-CN' },
-    { '@type': 'WebPage', '@id': site.origin + '/#webpage', url: site.origin + '/', name: '雷神守护 · 雷神加速器自动暂停计时工具', inLanguage: 'zh-CN', dateModified: lastModified, isPartOf: { '@id': site.origin + '/#website' }, about: { '@id': application['@id'] } },
+    { '@type': 'WebPage', '@id': site.origin + '/#webpage', url: site.origin + '/', name: '加速器守护 · 雷神加速器自动暂停计时工具', inLanguage: 'zh-CN', dateModified: lastModified, isPartOf: { '@id': site.origin + '/#website' }, about: { '@id': application['@id'] } },
     application,
     { '@type': 'FAQPage', '@id': site.origin + '/#faq', url: site.origin + '/#faq', isPartOf: { '@id': site.origin + '/#webpage' }, mainEntity: faq.map(item => ({ '@type': 'Question', name: item.question, acceptedAnswer: { '@type': 'Answer', text: item.answer } })) }
   ]
@@ -102,7 +102,7 @@ const rules = sections.map(title => {
   return readme.slice(start, end < 0 ? undefined : end).trim();
 }).join('\n\n');
 await writeFile(path.join(output, 'llms-full.txt'), `${overview}\n\n---\n\n# README 详细规则摘录\n\n来源：https://github.com/CMMUU/leigod-guard/blob/${revision}/README.md\n\n${rules}\n`);
-await writeFile(path.join(output, 'llms.txt'), `# 雷神守护 Leigod Guard\n\n> 配合雷神加速器使用的独立开源 Windows 计时守护工具。请求暂停账户计时，不停止客户端加速。\n\n目前仅提供 Windows 10 / 11 x64 版本。断电后本地程序无法工作，重启检查需要有效策略、名单、登录与网络。网站时长为演示值，不查询访客账户。此文件是公开资料索引，不代表任何搜索引擎或 AI 已收录本项目。\n\n## 项目资料\n\n- [项目概览与常见问题](${site.origin}/index.html.md): 首页信息的 Markdown 版本，包含下载、适用范围和能力边界。\n- [完整资料与暂停规则](${site.origin}/llms-full.txt): 合并项目概览与 README 的刷新、暂停和核对规则。\n- [项目首页](${site.origin}/): 面向用户的单页下载与介绍入口。\n\n## 下载与源码\n\n- [Gitee 发布页](https://gitee.com/cmmuu/leigod-guard/releases): 国内下载，选择安装版或绿色版。\n- [GitHub 最新正式版](https://github.com/CMMUU/leigod-guard/releases/latest): 主发布源与备用下载。\n- [GitHub 源码](https://github.com/CMMUU/leigod-guard): 源码、版本历史、问题反馈。\n\n## Optional\n\n- [隐私说明](https://gitee.com/cmmuu/leigod-guard/blob/main/docs/PRIVACY.md): 本地数据与联网范围。\n- [MIT 许可证](https://gitee.com/cmmuu/leigod-guard/blob/main/LICENSE): 开源许可。\n`);
+await writeFile(path.join(output, 'llms.txt'), `# 加速器守护 Accelerator Guard\n\n> 配合雷神加速器使用的独立开源 Windows 计时守护工具。请求暂停账户计时，不停止客户端加速。\n\n目前仅提供 Windows 10 / 11 x64 版本。断电后本地程序无法工作，重启检查需要有效策略、名单、登录与网络。网站时长为演示值，不查询访客账户。此文件是公开资料索引，不代表任何搜索引擎或 AI 已收录本项目。\n\n## 项目资料\n\n- [项目概览与常见问题](${site.origin}/index.html.md): 首页信息的 Markdown 版本，包含下载、适用范围和能力边界。\n- [完整资料与暂停规则](${site.origin}/llms-full.txt): 合并项目概览与 README 的刷新、暂停和核对规则。\n- [项目首页](${site.origin}/): 面向用户的单页下载与介绍入口。\n\n## 下载与源码\n\n- [Gitee 发布页](https://gitee.com/cmmuu/leigod-guard/releases): 国内下载，选择安装版或绿色版。\n- [GitHub 最新正式版](https://github.com/CMMUU/leigod-guard/releases/latest): 主发布源与备用下载。\n- [GitHub 源码](https://github.com/CMMUU/leigod-guard): 源码、版本历史、问题反馈。\n\n## Optional\n\n- [隐私说明](https://gitee.com/cmmuu/leigod-guard/blob/main/docs/PRIVACY.md): 本地数据与联网范围。\n- [MIT 许可证](https://gitee.com/cmmuu/leigod-guard/blob/main/LICENSE): 开源许可。\n`);
 await writeFile(path.join(output, config.indexNowKey + '.txt'), config.indexNowKey + '\n');
 await writeFile(path.join(output, '_headers'), `/*
   X-Content-Type-Options: nosniff

@@ -1,12 +1,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 #[cfg(not(target_os = "windows"))]
-compile_error!("LeigodGuard currently supports Windows only.");
+compile_error!("Accelerator Guard currently supports Windows only.");
 
 mod autostart;
 mod captcha;
 mod config;
 mod dpapi;
+mod etalien_api;
 mod game_presets;
 mod instance;
 mod leigod_api;
@@ -20,6 +21,7 @@ mod shared;
 mod shutdown;
 mod ui;
 mod ui_chrome;
+mod ui_etalien;
 mod ui_home;
 mod ui_platform;
 mod ui_scroll;
@@ -40,7 +42,7 @@ fn main() {
     }
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!(
-            "LeigodGuard {} (Windows)\nUsage: leigod-guard [--minimized] [--version] [--help]",
+            "Accelerator Guard {} (Windows)\nUsage: leigod-guard [--minimized] [--version] [--help]",
             env!("CARGO_PKG_VERSION")
         );
         return;
@@ -113,6 +115,7 @@ fn main() {
 
     let config = Arc::new(Mutex::new(loaded_config));
     let shared = Arc::new(Mutex::new(shared::Shared::default()));
+    let etalien = Arc::new(Mutex::new(shared::Shared::default()));
     if let Some(message) = startup_warning {
         shared.lock().unwrap().alert = Some(message);
     }
@@ -125,7 +128,16 @@ fn main() {
     }
 
     // 关机/注销监听线程（收到 WM_ENDSESSION 时自动暂停计时）
-    shutdown::start(Arc::clone(&shared), Arc::clone(&config));
+    {
+        let state = etalien.clone();
+        let config = config.clone();
+        std::thread::spawn(move || worker::run_etalien(state, config));
+    }
+    shutdown::start(
+        Arc::clone(&shared),
+        Arc::clone(&etalien),
+        Arc::clone(&config),
+    );
 
     // 主窗口
     let (rgba, w, h) = ui::make_icon_rgba();
@@ -155,7 +167,7 @@ fn main() {
     let shared_ui = Arc::clone(&shared);
     let config_ui = Arc::clone(&config);
     if let Err(e) = eframe::run_native(
-        "雷神守护 - LeigodGuard",
+        "加速器守护 - Accelerator Guard",
         options,
         Box::new(move |cc| {
             shutdown::install_main_window(cc)?;
@@ -165,7 +177,7 @@ fn main() {
                 window_visibility::install(cc)?;
                 ui::dbglog("silent startup window guard installed");
             }
-            Ok(Box::new(ui::App::new(cc, shared_ui, config_ui)) as Box<dyn eframe::App>)
+            Ok(Box::new(ui::App::new(cc, shared_ui, etalien, config_ui)) as Box<dyn eframe::App>)
         }),
     ) {
         eprintln!("GUI 启动失败: {e}");

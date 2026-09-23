@@ -106,6 +106,34 @@ pub struct Account {
     pub token_enc: String,
 }
 
+impl Account {
+    pub fn configured(&self, runtime_token: bool) -> bool {
+        runtime_token
+            || !self.token_enc.is_empty()
+            || (!self.username.is_empty() && !self.cred_enc.is_empty())
+    }
+}
+
+/// 外星仔凭据与雷神完全隔离；只有完成官方暂停状态校准后才能启用。
+#[derive(Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct Etalien {
+    pub enabled: bool,
+    pub username: String,
+    pub token_enc: String,
+    pub device_id: String,
+    pub paused_state: Option<i64>,
+}
+
+impl Etalien {
+    pub fn ready(&self) -> bool {
+        self.enabled
+            && !self.token_enc.is_empty()
+            && !self.device_id.is_empty()
+            && self.paused_state.is_some_and(|state| state > 0)
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct Updates {
@@ -124,6 +152,8 @@ pub struct Config {
     #[serde(default)]
     pub account: Account,
     #[serde(default)]
+    pub etalien: Etalien,
+    #[serde(default)]
     pub updates: Updates,
 }
 
@@ -132,11 +162,32 @@ mod tests {
     use super::{valid_game_executable, Config};
 
     #[test]
+    fn providers_do_not_enable_one_another() {
+        let mut cfg = Config::default();
+        cfg.etalien.enabled = true;
+        cfg.etalien.token_enc = "encrypted-fixture".into();
+        cfg.etalien.device_id = "fixture-device".into();
+        cfg.etalien.paused_state = Some(1);
+        assert!(cfg.etalien.ready());
+        assert!(!cfg.account.configured(false));
+        assert!(cfg.account.configured(true));
+        cfg.account.username = "fixture-user".into();
+        assert!(!cfg.account.configured(false));
+        cfg.account.cred_enc = "encrypted-fixture".into();
+        assert!(cfg.account.configured(false));
+        cfg.etalien.enabled = false;
+        assert!(!cfg.etalien.ready());
+        assert!(cfg.account.configured(false));
+    }
+
+    #[test]
     fn older_config_does_not_enable_update_requests() {
         let cfg: Config = toml::from_str("games = []\nplans = []\n").unwrap();
         assert!(!cfg.updates.check_on_startup);
         assert_eq!(cfg.updates.source, crate::updater::UpdateMode::Auto);
         assert!(cfg.strategy.enabled);
+        assert!(!cfg.etalien.ready());
+        assert!(cfg.etalien.token_enc.is_empty());
     }
 
     #[test]

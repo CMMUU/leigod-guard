@@ -1,10 +1,12 @@
-<p align="center"><img src="assets/app-icon.png" width="112" height="112" alt="雷神守护：盾牌、暂停与时钟图标"></p>
+<p align="center"><img src="assets/app-icon.png" width="112" height="112" alt="加速器守护：盾牌、暂停与时钟图标"></p>
 
-# 雷神守护 Leigod Guard
+# 加速器守护 Accelerator Guard
 
 ### 让加速时长，留给真正开玩的时刻。
 
-**雷神守护是配合雷神加速器使用的 Windows 开源计时守护工具。** 游戏结束忘了暂停，重启电脑却只是处理工作，或者刚开启加速、还在准备进游戏——它通过游戏进程和可调整的等待规则，帮助减少闲置时长消耗，也给开玩前的准备留出时间。
+**加速器守护（原雷神守护）是 Windows 开源计时守护工具。** 游戏结束忘了暂停，重启电脑却只是处理工作，或者刚开启加速、还在准备进游戏——它通过游戏进程和可调整的等待规则，帮助减少闲置时长消耗，也给开玩前的准备留出时间。
+
+**当前版本 0.16.1：** 统一名称与 Logo，增加外星仔本机自动暂停的试验性接入。外星仔需独立登录、在官方客户端暂停并完成一次状态校准后手动启用；账号实测尚待验收。平台服务器失联保护仍仅支持雷神。见下方[外星仔首次配置](#外星仔首次配置试验性)及[完整使用与验收说明](https://github.com/CMMUU/leigod-guard/blob/v0.16.1/docs/外星仔接入说明.md)。外星仔默认关闭，可按说明手动开启测试。
 
 **Windows 10 / 11 x64 · MIT 开源 · 安装版 EXE / 绿色免安装 ZIP · 应用内更新**
 
@@ -12,7 +14,7 @@
 
 **自建后台：** 服务端源码位于 [server/](server/)，支持 [Docker Compose 或 Linux 可执行文件部署](docs/SERVER_DEPLOYMENT.md)。说明包含 PostgreSQL、管理员初始化、邮件、HTTPS、远程保护及客户端连接地址配置。
 
-**v0.15.2 成品直达：** [Windows 安装版 EXE](https://github.com/CMMUU/leigod-guard/releases/download/v0.15.2/leigod-guard-v0.15.2-windows-x64-setup.exe) · [绿色免安装 ZIP](https://github.com/CMMUU/leigod-guard/releases/download/v0.15.2/leigod-guard-v0.15.2-windows-x64.zip) · [SHA-256 校验](https://github.com/CMMUU/leigod-guard/releases/download/v0.15.2/SHA256SUMS.txt)。国内用户可使用上方 Gitee 发布页或应用内更新。
+**v0.16.1 成品直达：** [Windows 安装版 EXE](https://github.com/CMMUU/leigod-guard/releases/download/v0.16.1/leigod-guard-v0.16.1-windows-x64-setup.exe) · [绿色免安装 ZIP](https://github.com/CMMUU/leigod-guard/releases/download/v0.16.1/leigod-guard-v0.16.1-windows-x64.zip) · [SHA-256 校验](https://github.com/CMMUU/leigod-guard/releases/download/v0.16.1/SHA256SUMS.txt)。国内用户可使用上方 Gitee 发布页或应用内更新。
 
 两处发布页均提供**安装版 EXE、绿色免安装 ZIP 和校验文件**。一般用户选择安装版；希望解压即用的用户选择绿色版。已有用户可在「关于与更新」中检查新版，点击「下载并自动更新」完成升级。
 
@@ -28,7 +30,7 @@
 
 ## 它能帮你做什么
 
-| 使用场景 | 雷神守护的处理方式 |
+| 使用场景 | 加速器守护的处理方式 |
 | --- | --- |
 | **游戏打完，忘记暂停** | 观察到名单游戏运行并全部退出后，默认等待 90 秒，再复查并尝试暂停计时。 |
 | **重启电脑，只想处理其他任务** | 启动检查有效时，默认连续等待 3 分钟；仍无名单游戏运行则尝试暂停，减少接下来的闲置消耗。 |
@@ -37,19 +39,28 @@
 
 上述自动暂停需要有效的游戏名单、已开启的对应策略、有效登录状态和网络连接。异常断电后，本地程序无法继续运行；重启检查也不能追回已经消耗的时长。完整条件见下方[自动暂停规则](#自动暂停规则)。
 
-![雷神守护 Windows 首页：账户剩余时长、启动保护倒计时、自动暂停规则与游戏名单](assets/ui-home.png)
+![加速器守护 Windows 首页：账户剩余时长、启动保护倒计时、自动暂停规则与游戏名单](assets/ui-home.png)
 
-*v0.12.1 原生界面的离屏截图，时长、游戏名单和倒计时均为演示数据。浅白淡紫背景、线性导航、细边框分组和描边按钮构成新的界面风格；当前仅支持 Windows。设计与验证记录见[界面说明](docs/UI_DESIGN.md)。*
+*v0.16.0 开发版原生界面的离屏截图，时长、游戏名单和倒计时均为演示数据。浅白淡紫背景、线性导航、细边框分组和描边按钮构成新的界面风格；当前仅支持 Windows。设计与验证记录见[界面说明](docs/UI_DESIGN.md)。*
 
 界面隐藏滚动条，仍可使用鼠标滚轮或触控板平滑滚动；边缘的淡色渐隐表示该方向还有内容。鼠标位于内容区域或点击内容空白处后，可用 Page Up / Page Down 翻页、Home / End 到顶或到底；输入框和下拉菜单保留自身按键操作。日志上翻后保持历史位置，回到底部后继续跟随新记录。
 
 ## 三步开始使用
 
-1. **下载并打开**：选择上方安装版，双击完成安装；或下载绿色版并完整解压。打开雷神守护后，登录自己的雷神账户。
+1. **下载并打开**：选择上方安装版，双击完成安装；或下载绿色版并完整解压。打开加速器守护后，登录自己的雷神账户。
 2. **加入游戏名单**：从常用游戏下拉列表选择预设，或自定义进程文件名；也可启动游戏后用「从运行进程选择…」确认实际进程。加速与线路选择仍在雷神官方客户端操作。**首次启动时名单为空，配置后若要执行启动检查，请完全退出并重新打开本工具**；无需重新启动电脑。正常游戏退出监控在名单有效、总开关开启且观察到游戏运行后，当次即可工作。
 3. **后台守护计时**：保持工具运行，按下方「自动暂停规则」检查游戏。准备开玩时，可在尚未结束的启动检查中点击「准备游戏，延后10分钟」。暂停后，打开雷神官方微信小程序，登录同一账号并下拉刷新，核对计时状态。
 
 安装、验证码、托盘操作和更新方法见[下载与首次使用](#下载与首次使用)。首次使用时请核对真实游戏进程，并在雷神官方微信小程序下拉刷新，确认暂停结果。
+
+## 外星仔首次配置（试验性）
+
+1. 打开“账户 → 外星仔加速器”，使用本人手机号和密码登录，或导入本人已有 Token。密码不保存，令牌使用 Windows DPAPI 加密。
+2. 在外星仔官方客户端手动暂停并刷新，确认计时已经暂停。
+3. 返回守护工具，点击“我已在官方暂停，读取并校准”。这一步只查询状态，不发送暂停或恢复请求。
+4. 勾选“启用外星仔自动暂停”，配置游戏名单和等待策略。请先在空闲账号上验收一次手动暂停，再验证游戏退出后的自动暂停。
+
+重新登录需要重新校准。暂停后会再次查询官方状态，未确认时不会显示成功。外星仔和雷神使用独立账户；“立即暂停雷神”只针对雷神，外星仔账户页提供独立暂停按钮。托盘暂停针对已配置的账号。本次外星仔仅提供本机自动暂停，服务器失联保护仍仅支持雷神，外星仔令牌不上传平台。真实外星仔账号兼容性尚待验收，默认关闭。
 
 ## 开机静默启动
 
@@ -74,7 +85,7 @@
 
 界面的模糊纹理只生成并缓存一次，不持续计算或采集桌面；文字、按钮和倒计时保持清晰。
 
-Leigod Guard is an independent, open-source Windows companion for the Leigod game accelerator. It checks configured game processes, requests a pause after the applicable grace period, and displays the latest queried account balance. Installer and portable packages are available on Gitee and GitHub, with in-app updates. It does not start or stop the official client's acceleration.
+Accelerator Guard is an independent, open-source Windows companion for the Leigod game accelerator. It checks configured game processes, requests a pause after the applicable grace period, and displays the latest queried account balance. Installer and portable packages are available on Gitee and GitHub, with in-app updates. It does not start or stop the official client's acceleration.
 
 ## 平台账号、设备与远程失联保护（0.15.0）
 
@@ -198,7 +209,7 @@ Windows 10 / 11 x64 是当前支持目标，并不表示所有系统版本、驱
 - 自定义检测间隔、自动暂停总开关和启动暂停选项。
 - 当前 Windows 用户登录时自动启动，并隐藏到托盘。
 - 收到 Windows 关机或注销通知时，尝试暂停计时。
-- 可在「策略」中按需阻止游戏加加向雷神守护进程注入；此选项默认关闭，从托盘完全退出雷神守护并重新打开后生效。它使用严格的进程 DLL 加载策略，因此也会阻止其他不属于 Microsoft、Microsoft Store 或 WHQL 信任范围的 DLL。
+- 可在「策略」中按需阻止游戏加加向加速器守护进程注入；此选项默认关闭，从托盘完全退出加速器守护并重新打开后生效。它使用严格的进程 DLL 加载策略，因此也会阻止其他不属于 Microsoft、Microsoft Store 或 WHQL 信任范围的 DLL。
 - 查看账户状态与运行日志。
 - 在 Gitee（国内）与 GitHub 间选择更新来源；手动检查新版本，或选择启动时自动检查，发现新版后点击「下载并自动更新」完成升级。
 
@@ -210,13 +221,13 @@ Windows 10 / 11 x64 是当前支持目标，并不表示所有系统版本、驱
 
 | 版本 | 下载后怎样使用 | 适合谁 |
 | --- | --- | --- |
-| [安装版 EXE](https://github.com/CMMUU/leigod-guard/releases/download/v0.12.2/leigod-guard-v0.12.2-windows-x64-setup.exe) | 双击安装，按需自动补装 WebView2，提供快捷方式和卸载入口 | 普通用户，推荐 |
-| [绿色免安装版 ZIP](https://github.com/CMMUU/leigod-guard/releases/download/v0.12.2/leigod-guard-v0.12.2-windows-x64.zip) | 解压到固定且可写的目录，运行 `leigod-guard.exe`；验证码需要已有 WebView2 Runtime | 希望自行管理程序目录的用户 |
+| [安装版 EXE](https://github.com/CMMUU/leigod-guard/releases/download/v0.16.1/leigod-guard-v0.16.1-windows-x64-setup.exe) | 双击安装，按需自动补装 WebView2，提供快捷方式和卸载入口 | 普通用户，推荐 |
+| [绿色免安装版 ZIP](https://github.com/CMMUU/leigod-guard/releases/download/v0.16.1/leigod-guard-v0.16.1-windows-x64.zip) | 解压到固定且可写的目录，运行 `leigod-guard.exe`；验证码需要已有 WebView2 Runtime | 希望自行管理程序目录的用户 |
 
 两种版本功能相同，都支持应用内更新。这里的「绿色免安装」指不需要安装向导：配置和日志仍保存在 `%APPDATA%\leigod-guard\`；若主动开启开机自启，也会写入当前用户的 Windows 自启注册表项。它不是将所有数据保存到程序目录、完全不写注册表的移动应用。
 
-1. 下载 [Windows x64 安装包](https://github.com/CMMUU/leigod-guard/releases/download/v0.12.2/leigod-guard-v0.12.2-windows-x64-setup.exe)：`leigod-guard-v0.12.2-windows-x64-setup.exe`。页面中的 `Source code` 是源码，不是安装程序。
-2. 双击安装包，按向导完成安装，然后从开始菜单或桌面快捷方式打开「雷神守护」。**不需要解压或手动配置运行库。** 安装器会在需要时自动安装验证码窗口所需的 WebView2 Runtime；首次补装运行时需要联网。
+1. 下载 [Windows x64 安装包](https://github.com/CMMUU/leigod-guard/releases/download/v0.16.1/leigod-guard-v0.16.1-windows-x64-setup.exe)：`leigod-guard-v0.16.1-windows-x64-setup.exe`。页面中的 `Source code` 是源码，不是安装程序。
+2. 双击安装包，按向导完成安装，然后从开始菜单或桌面快捷方式打开「加速器守护」。**不需要解压或手动配置运行库。** 安装器会在需要时自动安装验证码窗口所需的 WebView2 Runtime；首次补装运行时需要联网。
 3. 打开「账户」页，用自己的雷神账户登录。提供密码、短信验证码和已有 token 三种方式；遇到人机验证时按窗口提示完成。不要把密码、短信验证码或 token 发到 Issues。
 4. 打开「游戏名单」，从「常用游戏」下拉列表选择游戏；未列出的游戏可选择「自定义 / 手动填写」，或先启动一次游戏，再用「从运行进程选择…」选择真正的游戏进程。请核对预设文件名与本机实际进程是否一致；自定义时填写例如 `ExampleGame.exe` 的文件名，不填完整路径、桌面快捷方式名称或 `*.exe`。
 5. 在「策略」中确认「启用自动暂停」、默认开启的「启动时无游戏运行则暂停计时」、启动等待（默认 180 秒）和退出宽限期（默认 90 秒）。随后在雷神官方客户端中手动开启所需加速；启动检查仍在倒计时时，可用首页或托盘的「准备游戏，延后10分钟」。常用游戏预设只帮助填写名单，不代表已逐款通过实际游戏、账户暂停或反作弊测试。
@@ -228,7 +239,7 @@ Windows 10 / 11 x64 是当前支持目标，并不表示所有系统版本、驱
 
 WebView2 Runtime 适用独立的 [微软许可条款](licenses/webview2-runtime/LICENSE.txt)。安装向导会展示相应条款；其中默认启用的 Microsoft Defender SmartScreen 会按微软隐私声明处理并向微软发送信息，详见 [隐私说明](docs/PRIVACY.md)。
 
-绿色免安装版下载文件为 `leigod-guard-v0.12.2-windows-x64.zip`，请完整解压后运行，不要直接从 ZIP 预览窗口启动。该版本不提供安装和卸载向导；普通用户建议使用上面的安装版。
+绿色免安装版下载文件为 `leigod-guard-v0.16.1-windows-x64.zip`，请完整解压后运行，不要直接从 ZIP 预览窗口启动。该版本不提供安装和卸载向导；普通用户建议使用上面的安装版。
 
 ### 应用内更新
 
@@ -257,7 +268,7 @@ GitHub 是主发布源；配置发布凭据后，自动同步任务会把同一�
 - 0.6.0 起可通过「关于与更新」完成应用内升级。手动更新安装版时，先完全退出旧程序，再运行新版安装包。配置保存在用户目录，更新时会保留游戏名单、策略与登录配置。
 - 0.5.x 没有应用内更新，需要先手动下载新版安装 EXE，或完全退出后将新版绿色 ZIP 解压覆盖原程序目录。
 - 从旧便携版升级到安装版时，先退出旧程序，再运行安装包。新程序会读取同一 Windows 用户的原有配置，无须复制配置文件；安装器会把已有的本工具自启路径更新到安装目录，没有开启自启时不会自行开启。
-- 卸载安装版时，先退出程序，再到 Windows「设置 → 应用」中找到「雷神守护」（英文界面为 `LeigodGuard`）卸载。卸载器会清理指向本安装目录的自启项，并保留 `%APPDATA%\leigod-guard\` 中的用户数据，便于重装；若需清除账户信息，可先使用「退出登录」，更多清理方法见 [隐私说明](docs/PRIVACY.md)。便携版应先关闭自启，再退出并删除程序目录。
+- 卸载安装版时，先退出程序，再到 Windows「设置 → 应用」中找到「加速器守护」（英文界面为 `Accelerator Guard`）卸载。卸载器会清理指向本安装目录的自启项，并保留 `%APPDATA%\leigod-guard\` 中的用户数据，便于重装；若需清除账户信息，可先使用「退出登录」，更多清理方法见 [隐私说明](docs/PRIVACY.md)。便携版应先关闭自启，再退出并删除程序目录。
 - 当前版本重复打开时会尝试唤起已运行的主窗口。安装或卸载提示程序仍在运行时，请先通过托盘菜单完全退出后重试；旧版便携程序也应先手动退出。
 
 ### 校验下载文件
@@ -265,7 +276,7 @@ GitHub 是主发布源；配置发布凭据后，自动同步任务会把同一�
 在下载目录的 PowerShell 中运行：
 
 ```powershell
-Get-FileHash .\leigod-guard-v0.12.2-windows-x64-setup.exe -Algorithm SHA256
+Get-FileHash .\leigod-guard-v0.16.1-windows-x64-setup.exe -Algorithm SHA256
 ```
 
 将结果与同一 Release 提供的 `SHA256SUMS.txt` 中相同文件名的记录核对。便携 ZIP 也可用同样方式校验。哈希校验用于确认下载内容一致，不等同于 Windows 代码签名。
@@ -298,9 +309,9 @@ Get-FileHash .\leigod-guard-v0.12.2-windows-x64-setup.exe -Algorithm SHA256
 
 **游戏加加的监控出现在本工具窗口上，怎样屏蔽？**
 
-在「策略 → OSD 与注入屏蔽」开启「阻止游戏加加向本工具注入」，再从托盘完全退出雷神守护并重新打开。该选项默认关闭，只保护雷神守护进程；它不会关闭游戏加加，不修改游戏加加的文件、注册表、进程或游戏内设置，也不需要管理员权限。
+在「策略 → OSD 与注入屏蔽」开启「阻止游戏加加向本工具注入」，再从托盘完全退出加速器守护并重新打开。该选项默认关闭，只保护加速器守护进程；它不会关闭游戏加加，不修改游戏加加的文件、注册表、进程或游戏内设置，也不需要管理员权限。
 
-此功能使用 Windows 严格的进程 DLL 加载策略，同时会阻止其他不属于 Microsoft、Microsoft Store 或 WHQL 信任范围的 DLL，可能影响其他 OSD、录屏或输入法插件。如雷神守护出现启动或显示异常，请关闭该选项并完全退出后重新打开。当前仅在 GamePP SDK 1.2.1615.625 与 NVIDIA 显卡环境实测阻止游戏加加注入；AMD、Intel 显卡环境尚未覆盖，是否成功屏蔽请以策略页状态及本机实测为准。
+此功能使用 Windows 严格的进程 DLL 加载策略，同时会阻止其他不属于 Microsoft、Microsoft Store 或 WHQL 信任范围的 DLL，可能影响其他 OSD、录屏或输入法插件。如加速器守护出现启动或显示异常，请关闭该选项并完全退出后重新打开。当前仅在 GamePP SDK 1.2.1615.625 与 NVIDIA 显卡环境实测阻止游戏加加注入；AMD、Intel 显卡环境尚未覆盖，是否成功屏蔽请以策略页状态及本机实测为准。
 
 如果开启后窗口完全无法显示，请确认本工具进程已经退出，用记事本打开 `%APPDATA%\leigod-guard\config.toml`，将 `block_gamepp_injection = true` 改为 `false` 后再启动；删除这一行也会恢复默认关闭。不要改动同一文件中的账户密文。
 
@@ -308,7 +319,7 @@ Get-FileHash .\leigod-guard-v0.12.2-windows-x64-setup.exe -Algorithm SHA256
 
 0.8.1 / 0.8.2 开启严格屏蔽时，Windows 可能在拒绝游戏加加 DLL 注入的同时弹出此提示；它不一定意味着文件损坏。该错误也可能由 DLL 未满足进程的签名要求引起，微软的 [Code Integrity Guard 说明](https://learn.microsoft.com/en-us/officeupdates/current-channel#version-2412-january-07) 解释了这一行为。
 
-请更新到 0.8.3 或更高版本：程序在创建受保护进程前设置错误处理，阻止注入的同时让加载失败直接返回，避免该系统弹窗阻塞。旧版临时处理可在「策略」关闭游戏加加屏蔽，再从托盘完全退出雷神守护并重新打开；窗口无法打开时按上一段修改配置即可。无需删除游戏加加 DLL 或调整 Windows 的系统签名策略。如果新版仍有异常，请反馈版本号、错误码和 DLL 文件名。
+请更新到 0.8.3 或更高版本：程序在创建受保护进程前设置错误处理，阻止注入的同时让加载失败直接返回，避免该系统弹窗阻塞。旧版临时处理可在「策略」关闭游戏加加屏蔽，再从托盘完全退出加速器守护并重新打开；窗口无法打开时按上一段修改配置即可。无需删除游戏加加 DLL 或调整 Windows 的系统签名策略。如果新版仍有异常，请反馈版本号、错误码和 DLL 文件名。
 
 **登录失效或验证码出不来？**
 

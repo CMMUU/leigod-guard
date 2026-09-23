@@ -199,7 +199,7 @@ pub fn render(ui: &mut Ui, state: &HomeState<'_>, enabled: &mut bool) -> HomeAct
                         |ui| {
                             ui.set_min_width(155.0);
                             ui.add_space(3.0);
-                            ui.label(theme::title("账户剩余时长", 16.0));
+                            ui.label(theme::title("雷神账户剩余时长", 16.0));
                         },
                     );
                     ui.allocate_ui_with_layout(
@@ -212,7 +212,11 @@ pub fn render(ui: &mut Ui, state: &HomeState<'_>, enabled: &mut bool) -> HomeAct
                     );
                 });
             } else {
-                ui.label(RichText::new("账户剩余时长").size(13.0).color(theme::MUTED));
+                ui.label(
+                    RichText::new("雷神账户剩余时长")
+                        .size(13.0)
+                        .color(theme::MUTED),
+                );
                 action = time_balance(ui, state.balance);
             }
         });
@@ -263,7 +267,7 @@ pub fn render(ui: &mut Ui, state: &HomeState<'_>, enabled: &mut bool) -> HomeAct
         }
         if ui
             .add(
-                theme::outline_button("立即暂停计时", false)
+                theme::outline_button("立即暂停雷神", false)
                     .min_size(vec2((width - 20.0) / 2.0, 46.0)),
             )
             .clicked()

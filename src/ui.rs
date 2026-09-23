@@ -90,6 +90,8 @@ pub struct App {
     proc_list: Vec<String>,
 
     platform: crate::ui_platform::Panel,
+    etalien: crate::ui_etalien::Panel,
+    account_provider: u8,
 
     // 账户表单
     acc_user: String,
@@ -278,7 +280,7 @@ fn msgbox_exit(accelerating: bool) -> ExitChoice {
             .encode_utf16()
             .chain(std::iter::once(0))
             .collect();
-        let c: Vec<u16> = "退出雷神守护"
+        let c: Vec<u16> = "退出加速器守护"
             .encode_utf16()
             .chain(std::iter::once(0))
             .collect();
@@ -296,7 +298,7 @@ fn msgbox_exit(accelerating: bool) -> ExitChoice {
             _ => ExitChoice::Cancel,
         }
     } else if msgbox_yesno(
-        "退出雷神守护",
+        "退出加速器守护",
         "确定要退出吗？退出后将不再自动暂停计时。",
         false,
     ) {
@@ -328,7 +330,7 @@ fn request_startup_defer(shared: &mut Shared, requested_at: Instant) -> bool {
 fn find_main_hwnd() -> Option<windows::Win32::Foundation::HWND> {
     use windows::core::PCWSTR;
     use windows::Win32::UI::WindowsAndMessaging::FindWindowW;
-    let title: Vec<u16> = "雷神守护 - LeigodGuard\0".encode_utf16().collect();
+    let title: Vec<u16> = "加速器守护 - Accelerator Guard\0".encode_utf16().collect();
     let h = unsafe { FindWindowW(PCWSTR::null(), PCWSTR(title.as_ptr())) };
     match h {
         Ok(h) if !h.is_invalid() => Some(h),
@@ -415,6 +417,7 @@ fn show_window(
 fn tray_event_loop(
     ctx: egui::Context,
     shared: Arc<Mutex<Shared>>,
+    etalien: Arc<Mutex<Shared>>,
     config: Arc<Mutex<Config>>,
     update_preparing: Arc<AtomicBool>,
     ids: TrayIds,
@@ -436,7 +439,7 @@ fn tray_event_loop(
         if !crate::window_visibility::startup_hidden() {
             if let Some(msg) = pending_alert.take() {
                 show_window(&ctx, &shared, &mut hwnd);
-                msgbox_warn("雷神守护 - 警告", &msg);
+                msgbox_warn("加速器守护 - 警告", &msg);
             }
         }
 
@@ -479,12 +482,21 @@ fn tray_event_loop(
                 if let Ok(mut s) = shared.lock() {
                     request_startup_defer(&mut s, Instant::now());
                 }
+                if let Ok(mut s) = etalien.lock() {
+                    request_startup_defer(&mut s, Instant::now());
+                }
                 // Keep the current game in the foreground; no window or popup.
                 ctx.request_repaint();
             } else if id == ids.pause {
+                let account = config.lock().map(|c| c.account.clone()).unwrap_or_default();
                 if let Ok(mut s) = shared.lock() {
+                    if account.configured(s.token.is_some()) {
+                        s.manual_cmd = Some(ManualCmd::Pause);
+                        s.log("托盘指令：立即暂停雷神");
+                    }
+                }
+                if let Ok(mut s) = etalien.lock() {
                     s.manual_cmd = Some(ManualCmd::Pause);
-                    s.log("托盘指令：立即暂停");
                 }
             } else if id == ids.quit {
                 dbglog("tray quit -> direct exit");
@@ -569,7 +581,7 @@ fn create_tray(menu: &Menu) -> Option<TrayIcon> {
     let icon = tray_icon::Icon::from_rgba(rgba, w, h).ok()?;
     TrayIconBuilder::new()
         .with_menu(Box::new(menu.clone()))
-        .with_tooltip("雷神守护 - 自动暂停")
+        .with_tooltip("加速器守护 - 自动暂停")
         .with_icon(icon)
         .build()
         .ok()
@@ -579,6 +591,7 @@ impl App {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
         shared: Arc<Mutex<Shared>>,
+        etalien: Arc<Mutex<Shared>>,
         config: Arc<Mutex<Config>>,
     ) -> Self {
         load_cjk_fonts(&cc.egui_ctx);
@@ -588,7 +601,7 @@ impl App {
         let menu = Menu::new();
         let menu_open = MenuItem::new("打开面板", true, None);
         let menu_defer_startup = MenuItem::new("准备游戏：延后启动检查10分钟", true, None);
-        let menu_pause = MenuItem::new("立即暂停计时", true, None);
+        let menu_pause = MenuItem::new("立即暂停已启用的加速器", true, None);
         // 延后入口只保护待处理的启动检查，不会开启或恢复加速。
         let menu_quit = MenuItem::new("退出", true, None);
         let _ = menu.append_items(&[
@@ -621,7 +634,10 @@ impl App {
             let shared = Arc::clone(&shared);
             let config = Arc::clone(&config);
             let update_preparing = Arc::clone(&update_preparing);
-            std::thread::spawn(move || tray_event_loop(ctx, shared, config, update_preparing, ids));
+            let etalien = etalien.clone();
+            std::thread::spawn(move || {
+                tray_event_loop(ctx, shared, etalien, config, update_preparing, ids)
+            });
         }
 
         let mut app = Self::from_state(
@@ -633,6 +649,7 @@ impl App {
             update_preparing,
         );
         app.tray_retry = tray_retry;
+        app.etalien.shared = etalien;
         app.platform.start_device_agent(
             app.shared.clone(),
             app.config.clone(),
@@ -700,6 +717,8 @@ impl App {
             proc_filter: String::new(),
             proc_list: Vec::new(),
             platform: crate::ui_platform::Panel::default(),
+            etalien: crate::ui_etalien::Panel::default(),
+            account_provider: 0,
             acc_user,
             acc_pwd: if has_saved_pwd {
                 PWD_PLACEHOLDER.to_string()
@@ -1129,14 +1148,18 @@ impl App {
                             Page::Games => self.page_games(ui),
                             Page::Plans => self.page_plans(ui),
                             Page::Account => {
-                                page_header(ui, "账户", "管理雷神账号与本机保存的登录凭据。");
+                                page_header(ui, "账户", "分别管理雷神、外星仔账号与本机登录凭据。");
                                 theme::card().show(ui, |ui| {
                                     ui.set_min_width(ui.available_width());
                                     self.page_account(ui);
                                 });
                             }
                             Page::Platform => {
-                                page_header(ui, "平台账号", "登录雷神守护平台，管理你的平台身份。");
+                                page_header(
+                                    ui,
+                                    "平台账号",
+                                    "登录加速器守护平台，管理你的平台身份。",
+                                );
                                 theme::card().show(ui, |ui| {
                                     ui.set_min_width(ui.available_width());
                                     self.platform.render(ui);
@@ -1205,6 +1228,7 @@ fn page_header(ui: &mut egui::Ui, title: &str, subtitle: &str) {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.etalien.poll(&self.config);
         // Explorer may not have finished creating the tray at Windows login.
         // Retry on its owning UI thread without releasing the startup guard.
         if let Some((menu, last_attempt)) = self.tray_retry.as_mut() {
@@ -1478,6 +1502,32 @@ mod ui_tests {
 
 impl App {
     fn page_games(&mut self, ui: &mut egui::Ui) {
+        if self
+            .config
+            .lock()
+            .map(|c| c.etalien.enabled)
+            .unwrap_or(false)
+        {
+            let state = self
+                .etalien
+                .shared
+                .lock()
+                .map(|s| s.status_at(Instant::now()))
+                .unwrap_or_default();
+            ui.horizontal_wrapped(|ui| {
+                ui.label(format!("外星仔 · {state}"));
+                if ui.button("外星仔账号").clicked() {
+                    self.account_provider = 1;
+                    self.page = Page::Account;
+                }
+                if ui.button("准备游戏：延后外星仔启动检查").clicked() {
+                    if let Ok(mut s) = self.etalien.shared.lock() {
+                        request_startup_defer(&mut s, Instant::now());
+                    }
+                }
+            });
+            ui.add_space(6.0);
+        }
         let config = match self.config.lock() {
             Ok(config) => config.clone(),
             Err(_) => {
@@ -1529,6 +1579,9 @@ impl App {
             HomeAction::Defer => {
                 if let Ok(mut shared) = self.shared.lock() {
                     request_startup_defer(&mut shared, Instant::now());
+                }
+                if let Ok(mut s) = self.etalien.shared.lock() {
+                    request_startup_defer(&mut s, Instant::now());
                 }
                 ui.ctx().request_repaint();
             }
@@ -2000,6 +2053,15 @@ impl App {
     }
 
     fn page_account(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
+            ui.selectable_value(&mut self.account_provider, 0, "雷神加速器");
+            ui.selectable_value(&mut self.account_provider, 1, "外星仔加速器");
+        });
+        ui.separator();
+        if self.account_provider == 1 {
+            self.etalien.show(ui, &self.config);
+            return;
+        }
         ui.label(
             egui::RichText::new(
                 "登录凭据加密保存在本机，仅当前 Windows 用户可读取。登录失效后，请重新登录。",
@@ -2305,13 +2367,13 @@ impl App {
         theme::card().show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.add_space(8.0);
-            ui.label(format!("雷神守护 v{} · Windows x64", env!("CARGO_PKG_VERSION")));
+            ui.label(format!("加速器守护 v{} · Windows x64", env!("CARGO_PKG_VERSION")));
             match &self.update_kind {
                 Ok(PackageKind::Installer) => { ui.label("当前使用方式：安装版"); }
                 Ok(PackageKind::Portable) => { ui.label("当前使用方式：绿色免安装版"); }
                 Err(_) => { ui.label("当前使用方式：未能确认，请使用手动下载"); }
             }
-            ui.label("个人维护的第三方开源工具，与雷神加速器官方无隶属关系。");
+            ui.label("个人维护的第三方开源工具，与雷神、外星仔运营方无隶属关系。");
             ui.add_space(12.0);
             ui.separator();
             ui.add_space(8.0);
@@ -2564,7 +2626,7 @@ impl App {
             );
             ui.label(
                 egui::RichText::new(
-                    "严格策略只作用于新启动的雷神守护主进程，不改变游戏进程；不会关闭游戏加加或修改它的设置，无需管理员权限。",
+                    "严格策略只作用于新启动的加速器守护主进程，不改变游戏进程；不会关闭游戏加加或修改它的设置，无需管理员权限。",
                 )
                 .color(theme::MUTED)
                 .small(),

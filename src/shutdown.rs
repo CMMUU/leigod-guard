@@ -16,7 +16,7 @@ fn trace(message: &str) {
     }
 }
 
-pub fn start(shared: Arc<Mutex<Shared>>, config: Arc<Mutex<Config>>) {
+pub fn start(shared: Arc<Mutex<Shared>>, etalien: Arc<Mutex<Shared>>, config: Arc<Mutex<Config>>) {
     let (sender, receiver) = mpsc::sync_channel::<String>(64);
     let _ = TRACE.set(sender);
     let _ = std::thread::Builder::new()
@@ -28,10 +28,19 @@ pub fn start(shared: Arc<Mutex<Shared>>, config: Arc<Mutex<Config>>) {
         });
     let handler = SessionEnd::new(
         move |deadline| {
+            let etalien = etalien.clone();
+            let et_config = config.clone();
+            // Both providers share the same outer deadline, not sequential budgets.
+            let et = std::thread::spawn(move || {
+                pause_etalien_before_deadline(&etalien, &et_config, deadline)
+            });
             let result = pause_before_deadline(&shared, &config, deadline, api::pause_for_shutdown);
             // Finish writing the outcome before releasing the waiting windows.
             // A slow disk writer is still bounded by SessionEnd's outer deadline.
             crate::ui::dbglog(&format!("[shutdown] {result}"));
+            if let Ok(result) = et.join() {
+                crate::ui::dbglog(&format!("[shutdown][etalien] {result}"));
+            }
         },
         trace,
     );
@@ -52,6 +61,52 @@ pub fn start(shared: Arc<Mutex<Shared>>, config: Arc<Mutex<Config>>) {
     {
         trace("独立关机监听线程启动失败，将依赖主窗口监听");
     }
+}
+
+fn pause_etalien_before_deadline(
+    shared: &Mutex<Shared>,
+    config: &Mutex<Config>,
+    deadline: Instant,
+) -> String {
+    let snapshot_deadline = deadline.min(Instant::now() + Duration::from_millis(250));
+    let Some(account) = snapshot(config, snapshot_deadline, |c| {
+        (c.strategy.pause_on_shutdown && c.etalien.ready()).then(|| c.etalien.clone())
+    })
+    .flatten() else {
+        return "外星仔关机暂停未启用或配置不可用".into();
+    };
+    let Some(token) = snapshot(shared, snapshot_deadline, |s| s.token.clone()).flatten() else {
+        return "外星仔未登录".into();
+    };
+    let timeout = deadline
+        .saturating_duration_since(Instant::now())
+        .saturating_sub(Duration::from_millis(250))
+        .min(Duration::from_secs(3));
+    crate::etalien_api::pause(
+        &token,
+        &account.device_id,
+        account.paused_state.unwrap(),
+        timeout,
+        || {
+            let current = snapshot(
+                config,
+                deadline.min(Instant::now() + Duration::from_millis(50)),
+                |c| {
+                    c.strategy.pause_on_shutdown
+                        && c.etalien.ready()
+                        && c.etalien.token_enc == account.token_enc
+                        && c.etalien.paused_state == account.paused_state
+                },
+            );
+            if current == Some(true) {
+                Ok(())
+            } else {
+                Err("关机暂停配置已变化或无法读取".into())
+            }
+        },
+    )
+    .map(|_| "外星仔官方状态已确认暂停".into())
+    .unwrap_or_else(|e| e)
 }
 
 pub fn install_main_window(cc: &eframe::CreationContext<'_>) -> Result<(), String> {

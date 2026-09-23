@@ -51,3 +51,12 @@ username = ""
 cred_enc = ""
 # Windows DPAPI 加密的 token；不要填写 token 明文。
 token_enc = ""
+
+# 外星仔与雷神账号独立。请在账户页登录、校准官方暂停状态后再启用。
+# 不要在此填写明文密码或 Token；token_enc 由 Windows DPAPI 加密生成。
+[etalien]
+enabled = false
+username = ""
+token_enc = ""
+device_id = ""
+# paused_state 由应用读取校准，不手动猜测填写。
