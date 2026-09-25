@@ -137,7 +137,8 @@ class Api:
                 # Never print response bodies, full URLs or signed query strings.
                 message = f"{self.service} API returned HTTP {error.code}; no write was retried"
                 retryable = error.code in (500, 502, 503, 504)
-                error.close()
+                if error.fp is not None:
+                    error.close()
             except (URLError, TimeoutError, OSError, http.client.RemoteDisconnected, http.client.IncompleteRead):
                 message = f"{self.service} API transport failed; details suppressed to protect credentials"
                 retryable = True
