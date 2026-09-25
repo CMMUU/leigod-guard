@@ -249,6 +249,49 @@ class SyncTests(unittest.TestCase):
             self.assertNotIn("offline-secret", str(error.exception))
             self.assertNotIn("signed-url", str(error.exception))
 
+    def test_metadata_get_recovers_from_transport_and_temporary_http_failures(self):
+        api = sync.Api("gitee", "offline-secret")
+        api.opener = Opener([
+            TimeoutError("offline-secret"),
+            HTTPError("https://gitee.com/api", 503, "unavailable", {}, None),
+            Response(b'{"ok": true}'),
+        ])
+        with patch.object(sync.time, "sleep") as sleep, patch("builtins.print") as output:
+            self.assertEqual(api.request("/repos/cmmuu/leigod-guard"), {"ok": True})
+        self.assertEqual(len(api.opener.requests), 3)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [2, 4])
+        self.assertNotIn("offline-secret", str(output.call_args_list))
+
+    def test_metadata_get_retries_are_bounded(self):
+        api = sync.Api("gitee", "offline-secret")
+        api.opener = Opener([TimeoutError("offline-secret") for _ in range(3)])
+        with patch.object(sync.time, "sleep"), patch("builtins.print"):
+            with self.assertRaises(sync.SyncError) as error:
+                api.request("/repos/cmmuu/leigod-guard")
+        self.assertEqual(len(api.opener.requests), 3)
+        self.assertNotIn("offline-secret", str(error.exception))
+
+    def test_metadata_writes_are_never_replayed_after_uncertain_failure(self):
+        for method in ("POST", "PATCH"):
+            api = sync.Api("gitee", "offline-secret")
+            api.opener = Opener([TimeoutError("offline-secret")])
+            with patch.object(sync.time, "sleep") as sleep:
+                with self.assertRaises(sync.SyncError):
+                    api.request("/repos/cmmuu/leigod-guard/releases", method, {"name": "test"})
+            self.assertEqual(len(api.opener.requests), 1)
+            sleep.assert_not_called()
+
+    def test_metadata_permission_and_rate_errors_are_not_retried(self):
+        for code in (401, 403, 404, 429):
+            api = sync.Api("gitee", "offline-secret")
+            api.opener = Opener([HTTPError("https://gitee.com/api", code, "offline-secret", {}, None)])
+            with patch.object(sync.time, "sleep") as sleep:
+                with self.assertRaises(sync.SyncError) as error:
+                    api.request("/repos/cmmuu/leigod-guard")
+            self.assertEqual(len(api.opener.requests), 1)
+            self.assertNotIn("offline-secret", str(error.exception))
+            sleep.assert_not_called()
+
     def attachment_job(self, existing=None, copies=1):
         root = self.fixture()
         source = root / "package.zip"
