@@ -277,7 +277,7 @@ pub fn render(ui: &mut Ui, state: &HomeState<'_>, enabled: &mut bool) -> HomeAct
         if ui
             .add_enabled(
                 p.can_defer,
-                theme::outline_button("准备游戏，延后10分钟", true)
+                theme::outline_button("准备游戏，保护10分钟", true)
                     .min_size(vec2((width - 20.0) / 2.0, 46.0)),
             )
             .clicked()
@@ -348,7 +348,7 @@ pub fn render(ui: &mut Ui, state: &HomeState<'_>, enabled: &mut bool) -> HomeAct
         ui.spacing_mut().interact_size.y = 22.0;
         ui.collapsing(RichText::new("生效条件与异常处理").size(12.0).color(theme::MUTED), |ui| {
             ui.label("自动暂停须开启总开关，游戏名单非空且进程名有效；启动检查还须开启对应策略。检测失败不会被当作游戏退出，恢复后重新累计等待时间。");
-            ui.label("准备游戏只延后尚未完成的启动检查，至少等到最后一次点击满10分钟；重复点击不累加，也不会开启或恢复加速。检查完成或跳过后，本次运行不再补做。");
+            ui.label("准备游戏可保护首次启动和重新启动，至少等到最后一次点击满10分钟；重复点击不累加，检测到主进程后转入正常守护，不会开启或恢复加速。");
             ui.label("暂停失败后冷却60秒并重新复核。关机暂停是独立开关，断电或强制退出不能保证；已消耗的时长无法追回。");
             ui.label(format!("当前后台状态：{}", state.status));
         });

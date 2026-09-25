@@ -16,17 +16,29 @@ struct MonitorState {
     last: Observation,
     valid_for: Duration,
     manual_until: Option<Instant>,
+    enabled: bool,
 }
 
 pub struct GameMonitor(Mutex<MonitorState>);
 
 impl GameMonitor {
+    #[cfg(test)]
+    pub fn fixture(observation: Observation) -> Arc<Self> {
+        Arc::new(Self(Mutex::new(MonitorState {
+            tracker: Tracker::default(),
+            last: observation,
+            valid_for: Duration::from_secs(7),
+            manual_until: None,
+            enabled: true,
+        })))
+    }
     pub fn start(config: Arc<Mutex<crate::config::Config>>) -> Arc<Self> {
         let monitor = Arc::new(Self(Mutex::new(MonitorState {
             tracker: Tracker::default(),
             last: Observation::unknown(Instant::now()),
             valid_for: Duration::from_secs(7),
             manual_until: None,
+            enabled: false,
         })));
         let bg = monitor.clone();
         if std::thread::Builder::new()
@@ -63,7 +75,7 @@ impl GameMonitor {
 
     pub fn defer(&self, clicked: Instant) -> bool {
         if let Ok(mut s) = self.0.lock() {
-            if s.last.phase == Phase::Running {
+            if !s.enabled || s.last.phase == Phase::Running {
                 return false;
             }
             s.manual_until = Some(clicked + Duration::from_secs(600));
@@ -88,6 +100,7 @@ impl GameMonitor {
     pub fn observe_now(&self, cfg: &crate::config::Config) -> Result<Observation, String> {
         // Serialize only process observation. Never hold this mutex over HTTP.
         let mut s = self.0.lock().map_err(|_| "游戏观察状态不可用")?;
+        s.enabled = cfg.strategy.enabled;
         let watch: Vec<_> = cfg
             .games
             .iter()
@@ -275,6 +288,20 @@ pub fn match_games(processes: &[String], watch_exes: &[(String, String)]) -> Vec
 #[cfg(test)]
 mod tests {
     use super::match_games;
+
+    #[test]
+    fn stale_observation_becomes_unknown_without_hiding_its_failure() {
+        let mut observation = crate::game_lifecycle::Observation::unknown(
+            std::time::Instant::now() - std::time::Duration::from_secs(30),
+        );
+        observation.phase = crate::game_lifecycle::Phase::Absent;
+        assert_eq!(
+            super::GameMonitor::fixture(observation)
+                .latest()
+                .game_running(),
+            None
+        );
+    }
 
     #[test]
     fn matches_whole_executable_names_case_insensitively() {

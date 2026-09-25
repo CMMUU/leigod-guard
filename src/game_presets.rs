@@ -1,5 +1,7 @@
 //! Small, editable defaults for real game processes, never launcher/anti-cheat
 //! processes. References identify executable names, not compatibility guarantees.
+//! PUBG preparation signals live in game_lifecycle::launchers; they receive a
+//! bounded window and must never become ordinary always-running game entries.
 //! Checked 2026-09-03; regions and future game versions may use different names.
 
 #[derive(Clone, Copy, Debug)]

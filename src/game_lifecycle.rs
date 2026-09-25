@@ -9,6 +9,14 @@ pub struct ProcessId {
     pub exe: String,
 }
 
+impl ProcessId {
+    fn same_instance(&self, other: &Self) -> bool {
+        self.pid == other.pid
+            && self.exe.eq_ignore_ascii_case(&other.exe)
+            && (self.created == other.created || self.created.is_none() || other.created.is_none())
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Process {
     pub id: ProcessId,
@@ -135,7 +143,7 @@ impl Tracker {
             } else {
                 let new_budget = related
                     .iter()
-                    .filter(|p| !game.known.contains(&p.id))
+                    .filter(|p| !game.known.iter().any(|old| old.same_instance(&p.id)))
                     .map(|p| budget.saturating_sub(p.age.unwrap_or(Duration::ZERO)))
                     .max()
                     .unwrap_or(Duration::ZERO);
@@ -311,6 +319,34 @@ mod tests {
                 .observe(t, &[p(2, "steam.exe")], &watch(), 600)
                 .phase,
             Phase::Absent
+        );
+    }
+
+    #[test]
+    fn metadata_denial_does_not_turn_leftovers_into_a_new_launch() {
+        let t = Instant::now();
+        let mut state = Tracker::default();
+        let mut root = p(1, "ExecPubg.exe");
+        state.observe(t, &[root.clone(), p(2, "TslGame.exe")], &watch(), 600);
+        root.id.created = None;
+        root.age = None;
+        assert_eq!(
+            state.observe(t, &[root], &watch(), 600).phase,
+            Phase::Absent
+        );
+    }
+
+    #[test]
+    fn pid_reuse_with_a_new_creation_time_is_a_new_instance() {
+        let t = Instant::now();
+        let mut state = Tracker::default();
+        let mut root = p(1, "ExecPubg.exe");
+        state.observe(t, &[root.clone(), p(2, "TslGame.exe")], &watch(), 600);
+        state.observe(t, &[root.clone()], &watch(), 600);
+        root.id.created = Some(1000);
+        assert_eq!(
+            state.observe(t, &[root], &watch(), 600).phase,
+            Phase::Launching
         );
     }
 

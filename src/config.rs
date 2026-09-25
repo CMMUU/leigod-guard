@@ -12,7 +12,7 @@ fn default_startup_grace_secs() -> u64 {
 }
 
 /// 监控的游戏条目
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GameEntry {
     /// 显示名称，如 PUBG
     pub name: String,
@@ -33,7 +33,7 @@ pub struct AccelPlan {
     pub note: String,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Strategy {
     /// 自动启停总开关
     pub enabled: bool,
@@ -168,6 +168,16 @@ pub struct Config {
 #[cfg(test)]
 mod tests {
     use super::{valid_game_executable, Config};
+
+    #[test]
+    fn old_settings_gain_launch_protection_without_changing_existing_waits() {
+        let cfg: Config = toml::from_str("games=[]\nplans=[]\n[strategy]\nenabled=true\ncheck_interval_secs=3\ngrace_secs=123\nmin_run_secs=300\nautostart=false\nstartup_grace_secs=456\n").unwrap();
+        assert_eq!(cfg.strategy.grace_secs, 123);
+        assert_eq!(cfg.strategy.startup_grace_secs, 456);
+        assert_eq!(cfg.strategy.launch_grace_secs, 600);
+        let round_trip: Config = toml::from_str(&toml::to_string(&cfg).unwrap()).unwrap();
+        assert_eq!(round_trip.strategy.launch_grace_secs, 600);
+    }
 
     #[test]
     fn providers_do_not_enable_one_another() {

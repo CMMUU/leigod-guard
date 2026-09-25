@@ -604,9 +604,9 @@ impl App {
         // 托盘
         let menu = Menu::new();
         let menu_open = MenuItem::new("打开面板", true, None);
-        let menu_defer_startup = MenuItem::new("准备游戏：延后启动检查10分钟", true, None);
+        let menu_defer_startup = MenuItem::new("准备游戏：保护启动／重启10分钟", true, None);
         let menu_pause = MenuItem::new("立即暂停已启用的加速器", true, None);
-        // 延后入口只保护待处理的启动检查，不会开启或恢复加速。
+        // Explicit preparation protects a startup/restart, never starts billing.
         let menu_quit = MenuItem::new("退出", true, None);
         let _ = menu.append_items(&[
             &menu_open,
@@ -1525,7 +1525,7 @@ impl App {
                     self.account_provider = 1;
                     self.page = Page::Account;
                 }
-                if ui.button("准备游戏：延后外星仔启动检查").clicked() {
+                if ui.button("准备游戏：保护启动／重启").clicked() {
                     if let Ok(mut s) = self.etalien.shared.lock() {
                         request_startup_defer(&mut s, Instant::now());
                     }
