@@ -290,6 +290,24 @@ mod tests {
     use super::match_games;
 
     #[test]
+    fn windows_snapshot_reads_the_isolated_test_process_identity() {
+        let exe = std::env::current_exe()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let snapshot = super::process_snapshot(&[("Test process".into(), exe.clone())]).unwrap();
+        let current = snapshot
+            .iter()
+            .find(|process| process.id.pid == std::process::id())
+            .expect("a complete Windows snapshot must include the test process");
+        assert!(current.id.exe.eq_ignore_ascii_case(&exe));
+        assert!(current.id.created.is_some_and(|created| created > 0));
+        assert!(current.age.is_some());
+    }
+
+    #[test]
     fn stale_observation_becomes_unknown_without_hiding_its_failure() {
         let mut observation = crate::game_lifecycle::Observation::unknown(
             std::time::Instant::now() - std::time::Duration::from_secs(30),
