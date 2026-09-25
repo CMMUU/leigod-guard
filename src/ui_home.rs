@@ -5,6 +5,7 @@ use crate::ui_theme::{self as theme, Icon};
 use egui::{vec2, Color32, Rect, RichText, Stroke, Ui};
 
 pub struct HomeState<'a> {
+    pub observation: Option<&'a crate::game_lifecycle::Observation>,
     pub startup: Option<(StartupPauseStatus, bool)>,
     pub strategy: &'a Strategy,
     pub games: &'a [GameEntry],
@@ -91,6 +92,16 @@ fn presentation(state: &HomeState<'_>) -> Presentation {
             .startup
             .is_some_and(|(s, requested)| s.pending && !requested);
     } else if state
+        .observation
+        .is_some_and(|o| o.phase == crate::game_lifecycle::Phase::Launching)
+    {
+        let o = state.observation.unwrap();
+        p.title = "游戏正在启动／准备中".into();
+        p.detail = "本轮启动受到保护；检测到游戏后继续守护，旧的退出倒计时已取消。".into();
+        p.value = format!("{} 秒", o.remaining(std::time::Instant::now()));
+        p.caption = "启动保护剩余";
+        p.can_defer = true;
+    } else if state
         .games
         .iter()
         .any(|g| game_running(state.processes, &g.exe) == Some(true))
@@ -142,6 +153,14 @@ fn presentation(state: &HomeState<'_>) -> Presentation {
         p.detail = "请在雷神官方微信小程序下拉刷新，核对实际计时状态。".into();
         p.value = "待核对".into();
         p.caption = "以小程序状态为准";
+    }
+    if state
+        .observation
+        .is_some_and(|o| o.phase == crate::game_lifecycle::Phase::Absent)
+        && state.strategy.enabled
+        && state.processes.is_some()
+    {
+        p.can_defer = true;
     }
     p
 }
@@ -293,7 +312,7 @@ pub fn render(ui: &mut Ui, state: &HomeState<'_>, enabled: &mut bool) -> HomeAct
             }
         });
     });
-    if let Some(index) = game_list(ui, state.games, state.processes) {
+    if let Some(index) = game_list(ui, state.games, state.processes, state.observation) {
         action = HomeAction::RemoveGame(index);
     }
     ui.add_space(4.0);
@@ -434,7 +453,12 @@ fn wait_label(seconds: u64) -> String {
     }
 }
 
-fn game_list(ui: &mut Ui, games: &[GameEntry], processes: Option<&[String]>) -> Option<usize> {
+fn game_list(
+    ui: &mut Ui,
+    games: &[GameEntry],
+    processes: Option<&[String]>,
+    observation: Option<&crate::game_lifecycle::Observation>,
+) -> Option<usize> {
     let mut remove = None;
     theme::card()
         .inner_margin(egui::Margin::symmetric(16, 4))
@@ -506,6 +530,9 @@ fn game_list(ui: &mut Ui, games: &[GameEntry], processes: Option<&[String]>) -> 
                             menu.response.on_hover_text("更多操作");
                             let (text, color) = if !valid_game_executable(&game.exe) {
                                 ("进程无效", theme::AMBER)
+                            } else if observation.is_some_and(|o| o.launching.contains(&game.name))
+                            {
+                                ("启动中", theme::AMBER)
                             } else {
                                 match game_running(processes, &game.exe) {
                                     Some(true) => ("运行中", theme::GREEN),
@@ -572,6 +599,7 @@ mod tests {
             plan: String::new(),
         }];
         let mut state = HomeState {
+            observation: None,
             startup: Some((StartupPauseStatus::default(), false)),
             strategy: &strategy,
             games: &games,

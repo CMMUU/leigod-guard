@@ -8,6 +8,7 @@ mod captcha;
 mod config;
 mod dpapi;
 mod etalien_api;
+mod game_lifecycle;
 mod game_presets;
 mod instance;
 mod leigod_api;
@@ -116,6 +117,10 @@ fn main() {
     let config = Arc::new(Mutex::new(loaded_config));
     let shared = Arc::new(Mutex::new(shared::Shared::default()));
     let etalien = Arc::new(Mutex::new(shared::Shared::default()));
+    let game_monitor = crate::monitor::GameMonitor::start(Arc::clone(&config));
+    shared.lock().unwrap().game_monitor = Some(game_monitor.clone());
+    etalien.lock().unwrap().game_monitor = Some(game_monitor);
+    etalien.lock().unwrap().provider = "etalien";
     if let Some(message) = startup_warning {
         shared.lock().unwrap().alert = Some(message);
     }

@@ -653,6 +653,13 @@ fn snapshot(
                 .max(et.startup_pause_status.remaining_secs.unwrap_or(0).min(600) as u32);
         }
     }
+    // A single fresh game observation overrides provider-local cached snapshots.
+    // Automatic launch protection must not silently extend cloud offline timeouts.
+    let observer = shared.lock().ok().and_then(|s| s.game_monitor.clone());
+    if let Some(observer) = observer {
+        value.game_running = observer.latest().game_running();
+        value.prepare_seconds = observer.manual_remaining() as u32;
+    }
     value
 }
 fn account_link(username: &str, info: &serde_json::Value) -> Option<AccountLink> {

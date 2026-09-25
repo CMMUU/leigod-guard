@@ -41,6 +41,9 @@ impl ExitGraceCountdown {
 }
 
 pub struct Shared {
+    pub provider: &'static str,
+    /// Same observer for both providers, the UI, and platform heartbeat.
+    pub game_monitor: Option<std::sync::Arc<crate::monitor::GameMonitor>>,
     /// 当前状态描述：空闲 / 加速中 / 宽限期倒计时 等
     pub status: String,
     pub exit_grace_countdown: Option<ExitGraceCountdown>,
@@ -79,6 +82,8 @@ pub struct Shared {
 impl Default for Shared {
     fn default() -> Self {
         Self {
+            provider: "leigod",
+            game_monitor: None,
             status: "初始化…".into(),
             exit_grace_countdown: None,
             running_games: Vec::new(),
