@@ -197,7 +197,15 @@ fn load_cjk_fonts(ctx: &egui::Context) {
     theme::install(ctx);
 }
 
+// Unit/UI fixtures must not create a real app-data directory before isolated
+// installation tests, or write into a developer's existing configuration.
+#[cfg(test)]
+pub fn dbglog(msg: &str) {
+    eprintln!("[test diagnostic] {msg}");
+}
+
 /// 追加写运行日志，单文件上限约 1 MiB，保留一份历史日志。
+#[cfg(not(test))]
 pub fn dbglog(msg: &str) {
     static LOG_LOCK: Mutex<()> = Mutex::new(());
     let Ok(_guard) = LOG_LOCK.lock() else { return };
