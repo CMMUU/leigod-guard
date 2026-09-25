@@ -5,6 +5,7 @@ use crate::ui_theme::{self as theme, Icon};
 use egui::{vec2, Color32, Rect, RichText, Stroke, Ui};
 
 pub struct HomeState<'a> {
+    pub observation: Option<&'a crate::game_lifecycle::Observation>,
     pub startup: Option<(StartupPauseStatus, bool)>,
     pub strategy: &'a Strategy,
     pub games: &'a [GameEntry],
@@ -91,6 +92,16 @@ fn presentation(state: &HomeState<'_>) -> Presentation {
             .startup
             .is_some_and(|(s, requested)| s.pending && !requested);
     } else if state
+        .observation
+        .is_some_and(|o| o.phase == crate::game_lifecycle::Phase::Launching)
+    {
+        let o = state.observation.unwrap();
+        p.title = "游戏正在启动／准备中".into();
+        p.detail = "本轮启动受到保护；检测到游戏后继续守护，旧的退出倒计时已取消。".into();
+        p.value = format!("{} 秒", o.remaining(std::time::Instant::now()));
+        p.caption = "启动保护剩余";
+        p.can_defer = true;
+    } else if state
         .games
         .iter()
         .any(|g| game_running(state.processes, &g.exe) == Some(true))
@@ -142,6 +153,14 @@ fn presentation(state: &HomeState<'_>) -> Presentation {
         p.detail = "请在雷神官方微信小程序下拉刷新，核对实际计时状态。".into();
         p.value = "待核对".into();
         p.caption = "以小程序状态为准";
+    }
+    if state
+        .observation
+        .is_some_and(|o| o.phase == crate::game_lifecycle::Phase::Absent)
+        && state.strategy.enabled
+        && state.processes.is_some()
+    {
+        p.can_defer = true;
     }
     p
 }
@@ -258,7 +277,7 @@ pub fn render(ui: &mut Ui, state: &HomeState<'_>, enabled: &mut bool) -> HomeAct
         if ui
             .add_enabled(
                 p.can_defer,
-                theme::outline_button("准备游戏，延后10分钟", true)
+                theme::outline_button("准备游戏，保护10分钟", true)
                     .min_size(vec2((width - 20.0) / 2.0, 46.0)),
             )
             .clicked()
@@ -293,7 +312,7 @@ pub fn render(ui: &mut Ui, state: &HomeState<'_>, enabled: &mut bool) -> HomeAct
             }
         });
     });
-    if let Some(index) = game_list(ui, state.games, state.processes) {
+    if let Some(index) = game_list(ui, state.games, state.processes, state.observation) {
         action = HomeAction::RemoveGame(index);
     }
     ui.add_space(4.0);
@@ -329,7 +348,7 @@ pub fn render(ui: &mut Ui, state: &HomeState<'_>, enabled: &mut bool) -> HomeAct
         ui.spacing_mut().interact_size.y = 22.0;
         ui.collapsing(RichText::new("生效条件与异常处理").size(12.0).color(theme::MUTED), |ui| {
             ui.label("自动暂停须开启总开关，游戏名单非空且进程名有效；启动检查还须开启对应策略。检测失败不会被当作游戏退出，恢复后重新累计等待时间。");
-            ui.label("准备游戏只延后尚未完成的启动检查，至少等到最后一次点击满10分钟；重复点击不累加，也不会开启或恢复加速。检查完成或跳过后，本次运行不再补做。");
+            ui.label("准备游戏可保护首次启动和重新启动，至少等到最后一次点击满10分钟；重复点击不累加，检测到主进程后转入正常守护，不会开启或恢复加速。");
             ui.label("暂停失败后冷却60秒并重新复核。关机暂停是独立开关，断电或强制退出不能保证；已消耗的时长无法追回。");
             ui.label(format!("当前后台状态：{}", state.status));
         });
@@ -434,7 +453,12 @@ fn wait_label(seconds: u64) -> String {
     }
 }
 
-fn game_list(ui: &mut Ui, games: &[GameEntry], processes: Option<&[String]>) -> Option<usize> {
+fn game_list(
+    ui: &mut Ui,
+    games: &[GameEntry],
+    processes: Option<&[String]>,
+    observation: Option<&crate::game_lifecycle::Observation>,
+) -> Option<usize> {
     let mut remove = None;
     theme::card()
         .inner_margin(egui::Margin::symmetric(16, 4))
@@ -506,6 +530,9 @@ fn game_list(ui: &mut Ui, games: &[GameEntry], processes: Option<&[String]>) -> 
                             menu.response.on_hover_text("更多操作");
                             let (text, color) = if !valid_game_executable(&game.exe) {
                                 ("进程无效", theme::AMBER)
+                            } else if observation.is_some_and(|o| o.launching.contains(&game.name))
+                            {
+                                ("启动中", theme::AMBER)
                             } else {
                                 match game_running(processes, &game.exe) {
                                     Some(true) => ("运行中", theme::GREEN),
@@ -572,6 +599,7 @@ mod tests {
             plan: String::new(),
         }];
         let mut state = HomeState {
+            observation: None,
             startup: Some((StartupPauseStatus::default(), false)),
             strategy: &strategy,
             games: &games,

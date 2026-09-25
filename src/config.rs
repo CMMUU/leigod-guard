@@ -3,12 +3,16 @@ use std::path::PathBuf;
 
 pub const DEFAULT_STARTUP_GRACE_SECS: u64 = 180;
 
+fn default_launch_grace_secs() -> u64 {
+    600
+}
+
 fn default_startup_grace_secs() -> u64 {
     DEFAULT_STARTUP_GRACE_SECS
 }
 
 /// 监控的游戏条目
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GameEntry {
     /// 显示名称，如 PUBG
     pub name: String,
@@ -29,7 +33,7 @@ pub struct AccelPlan {
     pub note: String,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Strategy {
     /// 自动启停总开关
     pub enabled: bool,
@@ -50,6 +54,9 @@ pub struct Strategy {
     /// 启动后连续确认没有名单游戏的宽限时间，与游戏退出宽限期独立。
     #[serde(default = "default_startup_grace_secs")]
     pub startup_grace_secs: u64,
+    /// Bounded protection for a newly observed game launch chain.
+    #[serde(default = "default_launch_grace_secs")]
+    pub launch_grace_secs: u64,
     /// 阻止游戏加加等不属于 Microsoft、Store 或 WHQL 信任范围的 DLL 注入本工具。
     #[serde(default)]
     pub block_gamepp_injection: bool,
@@ -70,6 +77,7 @@ impl Default for Strategy {
             pause_on_shutdown: true,
             pause_on_startup: true,
             startup_grace_secs: DEFAULT_STARTUP_GRACE_SECS,
+            launch_grace_secs: default_launch_grace_secs(),
             block_gamepp_injection: false,
         }
     }
@@ -160,6 +168,16 @@ pub struct Config {
 #[cfg(test)]
 mod tests {
     use super::{valid_game_executable, Config};
+
+    #[test]
+    fn old_settings_gain_launch_protection_without_changing_existing_waits() {
+        let cfg: Config = toml::from_str("games=[]\nplans=[]\n[strategy]\nenabled=true\ncheck_interval_secs=3\ngrace_secs=123\nmin_run_secs=300\nautostart=false\nstartup_grace_secs=456\n").unwrap();
+        assert_eq!(cfg.strategy.grace_secs, 123);
+        assert_eq!(cfg.strategy.startup_grace_secs, 456);
+        assert_eq!(cfg.strategy.launch_grace_secs, 600);
+        let round_trip: Config = toml::from_str(&toml::to_string(&cfg).unwrap()).unwrap();
+        assert_eq!(round_trip.strategy.launch_grace_secs, 600);
+    }
 
     #[test]
     fn providers_do_not_enable_one_another() {

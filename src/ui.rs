@@ -197,7 +197,15 @@ fn load_cjk_fonts(ctx: &egui::Context) {
     theme::install(ctx);
 }
 
+// Unit/UI fixtures must not create a real app-data directory before isolated
+// installation tests, or write into a developer's existing configuration.
+#[cfg(test)]
+pub fn dbglog(msg: &str) {
+    eprintln!("[test diagnostic] {msg}");
+}
+
 /// 追加写运行日志，单文件上限约 1 MiB，保留一份历史日志。
+#[cfg(not(test))]
 pub fn dbglog(msg: &str) {
     static LOG_LOCK: Mutex<()> = Mutex::new(());
     let Ok(_guard) = LOG_LOCK.lock() else { return };
@@ -318,11 +326,15 @@ struct TrayIds {
 
 /// Both entry points only queue a request. The worker owns timing and account actions.
 fn request_startup_defer(shared: &mut Shared, requested_at: Instant) -> bool {
-    if !shared.startup_pause_status.pending {
+    if let Some(observer) = &shared.game_monitor {
+        if !observer.defer(requested_at) {
+            return false;
+        }
+    } else if !shared.startup_pause_status.pending {
         return false;
     }
     shared.startup_defer_requested_at = Some(requested_at);
-    shared.log("准备游戏：请求将启动检查延后至至少10分钟后");
+    shared.log("准备游戏：已请求保护本轮启动／重启10分钟");
     true
 }
 
@@ -600,9 +612,9 @@ impl App {
         // 托盘
         let menu = Menu::new();
         let menu_open = MenuItem::new("打开面板", true, None);
-        let menu_defer_startup = MenuItem::new("准备游戏：延后启动检查10分钟", true, None);
+        let menu_defer_startup = MenuItem::new("准备游戏：保护启动／重启10分钟", true, None);
         let menu_pause = MenuItem::new("立即暂停已启用的加速器", true, None);
-        // 延后入口只保护待处理的启动检查，不会开启或恢复加速。
+        // Explicit preparation protects a startup/restart, never starts billing.
         let menu_quit = MenuItem::new("退出", true, None);
         let _ = menu.append_items(&[
             &menu_open,
@@ -1521,7 +1533,7 @@ impl App {
                     self.account_provider = 1;
                     self.page = Page::Account;
                 }
-                if ui.button("准备游戏：延后外星仔启动检查").clicked() {
+                if ui.button("准备游戏：保护启动／重启").clicked() {
                     if let Ok(mut s) = self.etalien.shared.lock() {
                         request_startup_defer(&mut s, Instant::now());
                     }
@@ -1556,11 +1568,25 @@ impl App {
                 },
             )
         });
+        let observation = self
+            .shared
+            .lock()
+            .ok()
+            .and_then(|s| s.game_monitor.clone())
+            .map(|m| m.latest());
+        let observed_processes = observation.as_ref().and_then(|o| {
+            (o.phase != crate::game_lifecycle::Phase::Unknown).then_some(o.processes.as_slice())
+        });
         let state = HomeState {
+            observation: observation.as_ref(),
             startup: snapshot.as_ref().map(|s| (s.0, s.1)),
             strategy: &config.strategy,
             games: &config.games,
-            processes: snapshot.as_ref().and_then(|s| s.2.as_deref()),
+            processes: if observation.is_some() {
+                observed_processes
+            } else {
+                snapshot.as_ref().and_then(|s| s.2.as_deref())
+            },
             status: snapshot
                 .as_ref()
                 .map(|s| s.3.as_str())
@@ -2508,6 +2534,16 @@ impl App {
                 }
             });
             ui.label(egui::RichText::new("默认180秒（3分钟），调整会影响尚未完成的启动等待。正在准备游戏时，可在首页或托盘延后10分钟；检测到游戏就结束本次启动检查。").color(theme::MUTED).small());
+            ui.horizontal_wrapped(|ui| {
+                ui.label("游戏启动保护（秒）:");
+                if ui
+                    .add(egui::DragValue::new(&mut c.strategy.launch_grace_secs).range(30..=3600))
+                    .changed()
+                {
+                    self.dirty = true;
+                }
+            });
+            ui.label(egui::RichText::new("识别 PUBG 启动链后保护一轮启动／重启，默认600秒。新设置从下一轮启动生效，旧启动器不会反复续期。保护到期仍无游戏时，重新经过退出宽限期再复查。").color(theme::MUTED).small());
             ui.add_space(8.0);
             ui.horizontal_wrapped(|ui| {
                 ui.label("游戏退出宽限期（秒）:");
