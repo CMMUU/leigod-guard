@@ -1008,6 +1008,36 @@ fn clear_disable_marker(expected: Option<&str>, kind: Provider) {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn launch_heartbeat_is_unknown_without_automatically_extending_cloud_grace() {
+        use crate::game_lifecycle::{Observation, Phase};
+        use crate::shared::Shared;
+        use std::sync::{Arc, Mutex};
+        let mut observation = Observation::unknown(std::time::Instant::now());
+        observation.phase = Phase::Launching;
+        observation.launch_until =
+            Some(std::time::Instant::now() + std::time::Duration::from_secs(600));
+        let shared = Arc::new(Mutex::new(Shared::default()));
+        let et = Arc::new(Mutex::new(Shared::default()));
+        shared.lock().unwrap().game_monitor =
+            Some(crate::monitor::GameMonitor::fixture(observation));
+        // Stale provider-local caches must never overrule the common observer.
+        et.lock().unwrap().process_snapshot = Some(vec!["TslGame.exe".into()]);
+        et.lock().unwrap().running_games = vec!["PUBG".into()];
+        let config = Arc::new(Mutex::new(crate::config::Config::default()));
+        let heartbeat = super::snapshot(&shared, &et, &config, 1);
+        assert_eq!(heartbeat.game_running, None);
+        assert_eq!(heartbeat.prepare_seconds, 0);
+        shared
+            .lock()
+            .unwrap()
+            .game_monitor
+            .as_ref()
+            .unwrap()
+            .defer(std::time::Instant::now());
+        let heartbeat = super::snapshot(&shared, &et, &config, 2);
+        assert!(heartbeat.prepare_seconds >= 598);
+    }
     use super::*;
     #[test]
     fn legacy_consent_migrates_without_enabling_etalien_and_roundtrips_independently() {

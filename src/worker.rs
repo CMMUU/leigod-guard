@@ -202,18 +202,22 @@ impl AutoPauseWatch {
         observation: &Observation,
         grace_secs: u64,
     ) -> PauseDecision {
+        if observation.phase == Phase::Unknown {
+            self.observation_failed();
+            return PauseDecision::Idle;
+        }
         let changed = self
             .observed_generation
             .replace(observation.generation)
             .is_some_and(|old| old != observation.generation);
-        if changed && self.active && observation.activity_seen {
+        if changed && self.active {
             // Even a complete new game cycle during slow login invalidates the
             // old exit countdown. It must receive a fresh confirmation period.
             let explicit_preparation = self.startup_deferred_at;
             self.disable_startup();
             self.startup_deferred_at = explicit_preparation;
             self.exit.reset();
-            self.exit.observed_running = true;
+            self.exit.observed_running = observation.activity_seen;
             self.next_retry = None;
         }
         match observation.phase {

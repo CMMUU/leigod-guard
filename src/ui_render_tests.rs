@@ -106,7 +106,7 @@ fn click(ctx: &egui::Context, app: &mut App, label: &str) {
 #[test]
 fn home_controls_update_real_in_memory_strategy_and_commands() {
     let (ctx, mut app) = fixture();
-    click(&ctx, &mut app, "准备游戏，延后10分钟");
+    click(&ctx, &mut app, "准备游戏，保护10分钟");
     assert!(app
         .shared
         .lock()
@@ -142,6 +142,34 @@ fn navigation_and_custom_game_submission_use_the_live_form() {
     let config = app.config.lock().unwrap();
     assert_eq!(config.games.len(), 4);
     assert_eq!(config.games[3].exe, "custom-game.exe");
+}
+
+fn set_launch_observation(app: &mut App) {
+    let now = Instant::now();
+    let mut observation = crate::game_lifecycle::Observation::unknown(now);
+    observation.phase = crate::game_lifecycle::Phase::Launching;
+    observation.launching = vec!["绝地求生".into()];
+    observation.launch_until = Some(now + Duration::from_secs(300));
+    observation.processes = vec!["ExecPubg.exe".into()];
+    app.shared.lock().unwrap().game_monitor =
+        Some(crate::monitor::GameMonitor::fixture(observation));
+}
+
+#[test]
+fn launch_protection_is_visible_and_preparation_works_after_initial_check() {
+    let (ctx, mut app) = fixture();
+    app.shared.lock().unwrap().startup_pause_status.pending = false;
+    set_launch_observation(&mut app);
+    for size in [[680.0, 460.0], [1180.0, 780.0]] {
+        frame(&ctx, &mut app, size, vec![]);
+        let output = frame(&ctx, &mut app, size, vec![]);
+        text_rect(&output.shapes, "游戏正在启动／准备中");
+    }
+    click(&ctx, &mut app, "准备游戏，保护10分钟");
+    let state = app.shared.lock().unwrap();
+    assert!(state.startup_defer_requested_at.is_some());
+    assert!(state.game_monitor.as_ref().unwrap().manual_remaining() >= 598);
+    assert!(state.manual_cmd.is_none());
 }
 
 #[test]
@@ -784,6 +812,17 @@ fn render_apple_preview() {
         .unwrap_or_else(|| std::path::PathBuf::from("target/ui-preview"));
     std::fs::create_dir_all(&output).unwrap();
     let gpu = Offscreen::new();
+    for (suffix, size) in [("", [1180.0, 780.0]), ("-narrow", [680.0, 460.0])] {
+        let (ctx, mut app) = fixture();
+        set_launch_observation(&mut app);
+        gpu.save(
+            &ctx,
+            &mut app,
+            size,
+            1.0,
+            &output.join(format!("home-launch{suffix}.png")),
+        );
+    }
     for (suffix, size) in [("", [1180.0, 780.0]), ("-narrow", [680.0, 460.0])] {
         let (ctx, mut app) = fixture();
         app.page = Page::Account;
