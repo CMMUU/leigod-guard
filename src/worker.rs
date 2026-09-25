@@ -1303,6 +1303,42 @@ mod tests {
     }
 
     #[test]
+    fn unknown_observation_restarts_confirmation_without_consuming_startup() {
+        let t = Instant::now();
+        let (mut tracker, games, mut policy) = lifecycle_fixture();
+        let empty = tracker.observe(t, &[], &games, 600);
+        assert_eq!(policy.observe_game(t, &empty, 90), startup_wait(180, false));
+        let now = t + Duration::from_secs(180);
+        let unknown = crate::game_lifecycle::Observation::unknown(now);
+        assert_eq!(policy.observe_game(now, &unknown, 90), PauseDecision::Idle);
+        let empty = tracker.observe(now, &[], &games, 600);
+        assert_eq!(
+            policy.observe_game(now, &empty, 90),
+            startup_wait(180, false)
+        );
+    }
+
+    #[test]
+    fn changing_watch_list_drops_the_previous_games_exit_candidate() {
+        let t = Instant::now();
+        let (mut tracker, games, mut policy) = lifecycle_fixture();
+        let running = tracker.observe(t, &[process(1, "TslGame.exe")], &games, 600);
+        policy.observe_game(t, &running, 90);
+        let empty = tracker.observe(t, &[], &games, 600);
+        assert_eq!(
+            policy.observe_game(t, &empty, 90),
+            PauseDecision::GraceStarted
+        );
+        let now = t + Duration::from_secs(90);
+        let replacement = vec![("Other".into(), "other.exe".into())];
+        let observation = tracker.observe(now, &[], &replacement, 600);
+        assert_eq!(
+            policy.observe_game(now, &observation, 90),
+            PauseDecision::Idle
+        );
+    }
+
+    #[test]
     fn launch_seen_only_in_final_guard_blocks_both_provider_pause_paths() {
         let t = Instant::now();
         for provider in ["leigod", "etalien"] {
