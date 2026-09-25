@@ -12,6 +12,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urljoin, urlsplit
 from urllib.request import Request, HTTPRedirectHandler, build_opener
@@ -124,17 +125,29 @@ class Api:
             body = urlencode(fields).encode("utf-8")
             headers["Content-Type"] = "application/x-www-form-urlencoded"
         req = Request(self.base + path, data=body, headers=headers, method=method)
-        try:
-            with self.opener.open(req, timeout=45) as response:
-                raw = response.read(MAX_JSON + 1)
-                if len(raw) > MAX_JSON:
-                    raise SyncError("API response exceeds the metadata limit")
-                return json.loads(raw)
-        except HTTPError as error:
-            # Never print response bodies, full URLs or signed query strings.
-            raise SyncError(f"{self.service} API returned HTTP {error.code}; no write was retried") from None
-        except (URLError, TimeoutError, OSError, ValueError, http.client.HTTPException):
-            raise SyncError(f"{self.service} API request failed; details suppressed to protect credentials") from None
+        attempts = 3 if method == "GET" else 1
+        for attempt in range(1, attempts + 1):
+            try:
+                with self.opener.open(req, timeout=45) as response:
+                    raw = response.read(MAX_JSON + 1)
+                    if len(raw) > MAX_JSON:
+                        raise SyncError("API response exceeds the metadata limit")
+                    return json.loads(raw)
+            except HTTPError as error:
+                # Never print response bodies, full URLs or signed query strings.
+                message = f"{self.service} API returned HTTP {error.code}; no write was retried"
+                retryable = error.code in (500, 502, 503, 504)
+                error.close()
+            except (URLError, TimeoutError, OSError, http.client.RemoteDisconnected, http.client.IncompleteRead):
+                message = f"{self.service} API transport failed; details suppressed to protect credentials"
+                retryable = True
+            except (ValueError, http.client.HTTPException):
+                message = f"{self.service} API metadata or protocol invalid; details suppressed to protect credentials"
+                retryable = False
+            if not retryable or attempt == attempts:
+                raise SyncError(message) from None
+            print(f"{self.service} metadata GET temporarily unavailable; retry {attempt + 1}/{attempts}", flush=True)
+            time.sleep(2 * attempt)
 
     def pages(self, path):
         rows = []
