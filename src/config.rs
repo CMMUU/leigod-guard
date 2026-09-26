@@ -244,6 +244,15 @@ mod tests {
         assert!(c.permit(Provider::Leigod).is_none());
         assert!(c.permit(Provider::Etalien).is_some());
         assert!(!old_snapshot.is_active(Provider::Leigod));
+        c.guard_gate.block();
+        c.commit_selection(Provider::Leigod);
+        c.guard_gate.resume(c.selection_generation);
+        assert!(c
+            .permit_at(Provider::Leigod, old_snapshot.selection_generation)
+            .is_none());
+        assert!(c
+            .permit_at(Provider::Leigod, c.selection_generation)
+            .is_some());
     }
 
     #[test]
@@ -409,6 +418,12 @@ impl Config {
             return None;
         }
         self.guard_gate.enter(self.selection_generation)
+    }
+
+    pub fn permit_at(&self, provider: Provider, generation: u64) -> Option<crate::guard::Permit> {
+        (self.selection_generation == generation)
+            .then(|| self.permit(provider))
+            .flatten()
     }
 
     pub fn request_selection(&mut self, provider: Provider) -> Result<(), String> {

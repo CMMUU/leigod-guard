@@ -658,8 +658,9 @@ pub fn run(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
         // 处理 UI 手动指令
         let cmd = shared.lock().ok().and_then(|mut s| s.manual_cmd.take());
         if let Some(cmd) = cmd {
-            let Some(_publish_permit) = cfg.lock().ok().and_then(|c| c.permit(Provider::Leigod))
-            else {
+            let Some(_publish_permit) = cfg.lock().ok().and_then(|c| {
+                generation.and_then(|generation| c.permit_at(Provider::Leigod, generation))
+            }) else {
                 continue;
             };
             match cmd {
@@ -782,9 +783,9 @@ pub fn run(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
                 set_startup_waiting_status(&shared, remaining_secs, preparing_game);
             }
             decision @ (PauseDecision::Pause | PauseDecision::StartupPause) => {
-                let Some(_publish_permit) =
-                    cfg.lock().ok().and_then(|c| c.permit(Provider::Leigod))
-                else {
+                let Some(_publish_permit) = cfg.lock().ok().and_then(|c| {
+                    generation.and_then(|generation| c.permit_at(Provider::Leigod, generation))
+                }) else {
                     continue;
                 };
                 let startup = decision == PauseDecision::StartupPause;
@@ -965,7 +966,11 @@ pub fn run_etalien(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
         };
         publish_startup_status(&shared, &pause_watch, Instant::now());
         if manual || matches!(decision, PauseDecision::Pause | PauseDecision::StartupPause) {
-            let Some(_permit) = cfg.lock().ok().and_then(|c| c.permit(Provider::Etalien)) else {
+            let Some(_permit) = cfg
+                .lock()
+                .ok()
+                .and_then(|c| c.permit_at(Provider::Etalien, config.selection_generation))
+            else {
                 continue;
             };
             let token = shared.lock().ok().and_then(|s| s.token.clone());
