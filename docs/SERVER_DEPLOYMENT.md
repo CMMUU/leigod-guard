@@ -37,7 +37,7 @@ docker compose --env-file server.env ps
 curl --fail http://127.0.0.1:3088/api/health
 ```
 
-健康响应包含 `status: "ok"`、`version: "0.3.2"`、`remote_execution: false`。Compose 等数据库通过健康检查才启动应用；应用启动时自动执行内嵌迁移并提供网页。这里从公开源码本地构建镜像，没有假定已存在公开的 GHCR/Docker Hub 成品镜像。
+健康响应包含 `status: "ok"`、`version: "0.6.0"`、`remote_execution: false`。Compose 等数据库通过健康检查才启动应用；应用启动时自动执行内嵌迁移并提供网页。这里从公开源码本地构建镜像，没有假定已存在公开的 GHCR/Docker Hub 成品镜像。
 
 服务器上没有浏览器时，在自己的电脑执行以下命令，再用浏览器打开 `http://127.0.0.1:3088`：
 
