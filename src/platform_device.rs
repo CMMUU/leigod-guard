@@ -610,8 +610,13 @@ fn run(
                     &saved,
                     if !saved.active {
                         "设备授权失效，已停止上报。请手动重新绑定。"
-                    } else {
+                    } else if config
+                        .lock()
+                        .is_ok_and(|c| c.is_active(c.selected_provider))
+                    {
                         "设备上报失败，将自动重试；本地守护继续运行。"
+                    } else {
+                        "设备上报失败，守护对象仍待确认；正在自动重试。"
                     },
                     false,
                 );
@@ -769,12 +774,17 @@ fn snapshot(
         leigod_account: None,
     };
     // Copy configuration first; never hold both state locks or perform HTTP under a lock.
-    let username = config
+    let (username, selected) = config
         .lock()
         .ok()
-        .map(|c| c.account.username.clone())
+        .map(|c| (c.account.username.clone(), c.selected_provider))
         .unwrap_or_default();
-    if let Ok(s) = shared.lock() {
+    let target = if selected == Provider::Etalien {
+        etalien_shared
+    } else {
+        shared
+    };
+    if let Ok(s) = target.lock() {
         value.game_running = s
             .process_snapshot
             .as_ref()
@@ -783,29 +793,20 @@ fn snapshot(
             value.prepare_seconds =
                 s.startup_pause_status.remaining_secs.unwrap_or(0).min(600) as u32;
         }
-        if s.token.is_none() {
-            value.account_action = "clear".into();
-        } else if let Some(info) = s.account_info.as_ref() {
-            if let Some(link) = account_link(&username, info) {
-                value.account_action = "link".into();
-                value.leigod_account = Some(link);
+        if selected == Provider::Leigod {
+            if s.token.is_none() {
+                value.account_action = "clear".into();
+            } else if let Some(info) = &s.account_info {
+                if let Some(link) = account_link(&username, info) {
+                    value.account_action = "link".into();
+                    value.leigod_account = Some(link);
+                }
             }
         }
     }
-    if let Ok(et) = etalien_shared.lock() {
-        if et.process_snapshot.is_some() {
-            value.game_running =
-                Some(value.game_running.unwrap_or(false) || !et.running_games.is_empty());
-        }
-        if et.startup_pause_status.preparing_game {
-            value.prepare_seconds = value
-                .prepare_seconds
-                .max(et.startup_pause_status.remaining_secs.unwrap_or(0).min(600) as u32);
-        }
-    }
-    // A single fresh game observation overrides provider-local cached snapshots.
-    // Automatic launch protection must not silently extend cloud offline timeouts.
-    let observer = shared.lock().ok().and_then(|s| s.game_monitor.clone());
+    // Only the selected provider's fresh observation feeds the device heartbeat.
+    // Automatic launch protection does not extend cloud offline timeouts.
+    let observer = target.lock().ok().and_then(|s| s.game_monitor.clone());
     if let Some(observer) = observer {
         value.game_running = observer.latest().game_running();
         value.prepare_seconds = observer.manual_remaining() as u32;
@@ -1161,6 +1162,22 @@ fn clear_disable_marker(expected: Option<&str>, kind: Provider) {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn heartbeat_ignores_inactive_provider_cache_and_account_link() {
+        let shared = Arc::new(Mutex::new(crate::shared::Shared::default()));
+        let et = Arc::new(Mutex::new(crate::shared::Shared::default()));
+        shared.lock().unwrap().process_snapshot = Some(vec!["TslGame.exe".into()]);
+        shared.lock().unwrap().running_games = vec!["PUBG".into()];
+        et.lock().unwrap().process_snapshot = Some(vec![]);
+        let mut c = crate::config::Config::default();
+        c.selected_provider = Provider::Etalien;
+        let config = Arc::new(Mutex::new(c));
+        let payload = snapshot(&shared, &et, &config, 1);
+        assert_eq!(payload.game_running, Some(false));
+        assert_eq!(payload.account_action, "keep");
+        assert!(payload.leigod_account.is_none());
+    }
+
     #[test]
     fn launch_heartbeat_is_unknown_without_automatically_extending_cloud_grace() {
         use crate::game_lifecycle::{Observation, Phase};

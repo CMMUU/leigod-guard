@@ -1173,7 +1173,14 @@ impl App {
                                 );
                                 theme::card().show(ui, |ui| {
                                     ui.set_min_width(ui.available_width());
-                                    self.platform.render_for(ui, self.selected_provider());
+                                    let (selected, ready) = self
+                                        .config
+                                        .lock()
+                                        .map(|c| {
+                                            (c.selected_provider, c.is_active(c.selected_provider))
+                                        })
+                                        .unwrap_or_default();
+                                    self.platform.render_for(ui, selected, ready);
                                 });
                             }
                             Page::Strategy => {
