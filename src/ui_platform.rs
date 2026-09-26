@@ -141,6 +141,25 @@ impl Panel {
         ));
     }
 
+    pub(crate) fn selection_changed(&self) {
+        if let Some(agent) = &self.agent {
+            agent.selection();
+        }
+    }
+    pub(crate) fn selection_message(&self) -> String {
+        self.agent
+            .as_ref()
+            .and_then(|a| {
+                a.view.lock().ok().map(|v| {
+                    if v.selection_message.is_empty() {
+                        v.message.clone()
+                    } else {
+                        v.selection_message.clone()
+                    }
+                })
+            })
+            .unwrap_or_default()
+    }
     pub(crate) fn revoke_remote(&self) {
         if let Some(agent) = &self.agent {
             agent.remote(Provider::Leigod, false);
@@ -554,7 +573,11 @@ impl Panel {
             self.dispatch(Action::Refresh, store, ctx);
         }
     }
+    #[cfg(test)]
     pub(crate) fn render(&mut self, ui: &mut egui::Ui) {
+        self.render_for(ui, Provider::Leigod, true);
+    }
+    pub(crate) fn render_for(&mut self, ui: &mut egui::Ui, selected: Provider, guard_ready: bool) {
         let busy = self.pending.is_some();
         ui.label(theme::title("守护平台账号", 20.0));
         ui.label(
@@ -730,7 +753,7 @@ impl Panel {
         if !view.device_id.is_empty() {
             ui.label(format!("设备 ID：{}", view.device_id));
         }
-        if !view.account.is_empty() {
+        if selected == Provider::Leigod && !view.account.is_empty() {
             ui.label(format!("已关联：{}", view.account));
         }
         ui.label(if view.message.is_empty() {
@@ -740,7 +763,10 @@ impl Panel {
         });
         ui.add_space(10.0);
         ui.label(theme::title("服务器失联保护", 16.0));
-        for provider in Provider::ALL {
+        if !guard_ready {
+            ui.label("守护对象正在确认，远程授权暂不可用。请在守护概览查看进度。");
+        }
+        for provider in [selected] {
             ui.push_id(provider.index(), |ui| {
         let remote = &view.remote[provider.index()];
         ui.label(egui::RichText::new(format!("{}账号", provider.name())).strong());
@@ -785,7 +811,7 @@ impl Panel {
             ui.label(egui::RichText::new("此凭据具有对应加速器账号权限。全部受保护设备连续失联 120 秒且准备期结束后，服务器尝试暂停；服务异常时可能延迟。关闭确认前仍可能暂停，已发送的请求无法撤回。").size(12.0).color(theme::MUTED));
             if ui
                 .add_enabled(
-                    view.active && remote.status.available && self.remote_consent[provider.index()] && !view.busy,
+                    guard_ready && view.active && remote.status.available && self.remote_consent[provider.index()] && !view.busy,
                     egui::Button::new("授权并开启远程保护"),
                 )
                 .clicked()

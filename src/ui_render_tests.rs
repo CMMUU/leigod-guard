@@ -10,6 +10,7 @@ fn fixture() -> (egui::Context, App) {
     ctx.style_mut(|style| style.animation_time = 0.0);
     let mut config = Config::default();
     config.strategy = crate::config::Strategy::default();
+    config.account.token_enc = "not-used-by-in-memory-render".into();
     config.games = [
         ("Counter-Strike 2", "cs2.exe"),
         ("绝地求生", "TslGame.exe"),
@@ -57,6 +58,17 @@ fn frame(ctx: &egui::Context, app: &mut App, size: [f32; 2], events: Vec<Event>)
     )
 }
 
+fn has_text(shapes: &[egui::epaint::ClippedShape], wanted: &str) -> bool {
+    fn contains(shape: &egui::Shape, wanted: &str) -> bool {
+        match shape {
+            egui::Shape::Text(text) => text.galley.job.text == wanted,
+            egui::Shape::Vec(shapes) => shapes.iter().any(|s| contains(s, wanted)),
+            _ => false,
+        }
+    }
+    shapes.iter().any(|s| contains(&s.shape, wanted))
+}
+
 fn text_rect(shapes: &[egui::epaint::ClippedShape], wanted: &str) -> Rect {
     fn find(shape: &egui::Shape, wanted: &str) -> Option<Rect> {
         match shape {
@@ -101,6 +113,107 @@ fn click(ctx: &egui::Context, app: &mut App, label: &str) {
             ],
         );
     }
+}
+
+#[test]
+fn home_dropdown_emits_one_selected_provider_action() {
+    let ctx = egui::Context::default();
+    load_cjk_fonts(&ctx);
+    ctx.style_mut(|style| style.animation_time = 0.0);
+    let config = Config::default();
+    let state = HomeState {
+        provider: Provider::Leigod,
+        guard_ready: true,
+        account_ready: false,
+        observation: None,
+        startup: None,
+        strategy: &config.strategy,
+        games: &[],
+        processes: None,
+        status: "",
+        balance: None,
+    };
+    let render = |events| {
+        let mut action = HomeAction::None;
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(900.0, 700.0))),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    action = crate::ui_home::render(ui, &state, &mut true);
+                });
+            },
+        );
+        (output, action)
+    };
+    let _ = render(vec![]);
+    let output = render(vec![]).0;
+    let initial = text_rect(&output.shapes, "雷神加速器").center();
+    let events = |point, pressed| {
+        vec![
+            Event::PointerMoved(point),
+            Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]
+    };
+    render(events(initial, true));
+    render(events(initial, false));
+    let output = render(vec![]).0;
+    let target = text_rect(&output.shapes, "外星仔加速器").center();
+    render(events(target, true));
+    assert_eq!(
+        render(events(target, false)).1,
+        HomeAction::Select(Provider::Etalien)
+    );
+}
+
+#[test]
+fn selected_accelerator_controls_home_actions_account_and_logs() {
+    let (ctx, mut app) = fixture();
+    {
+        let mut c = app.config.lock().unwrap();
+        c.commit_selection(Provider::Etalien);
+        c.guard_gate.resume(c.selection_generation);
+        c.etalien.enabled = true;
+        c.etalien.token_enc = "fixture".into();
+        c.etalien.device_id = "fixture".into();
+        c.etalien.paused_state = Some(1);
+    }
+    {
+        let mut s = app.etalien.shared.lock().unwrap();
+        s.set_token(Some("fixture".into()));
+        s.set_etalien_info(
+            "fixture",
+            crate::etalien_api::AccountInfo {
+                vip_duration_second: 7200,
+                ..Default::default()
+            },
+        );
+        s.log("ET selected log");
+    }
+    let output = frame(&ctx, &mut app, [1180.0, 780.0], vec![]);
+    assert!(text_rect(&output.shapes, "外星仔加速器").is_positive());
+    assert!(text_rect(&output.shapes, "外星仔账户剩余时长").is_positive());
+    assert!(text_rect(&output.shapes, "立即暂停外星仔").is_positive());
+    assert!(!has_text(&output.shapes, "雷神账户剩余时长"));
+    assert!(!has_text(&output.shapes, "外星仔账号"));
+    app.request_manual_pause();
+    assert!(matches!(
+        app.etalien.shared.lock().unwrap().manual_cmd,
+        Some(ManualCmd::Pause)
+    ));
+    assert!(app.shared.lock().unwrap().manual_cmd.is_none());
+    app.page = Page::Account;
+    let output = frame(&ctx, &mut app, [1180.0, 780.0], vec![]);
+    assert!(text_rect(&output.shapes, "当前守护：外星仔加速器").is_positive());
+    assert!(!has_text(&output.shapes, "雷神加速器"));
 }
 
 #[test]
@@ -825,8 +938,48 @@ fn render_apple_preview() {
     }
     for (suffix, size) in [("", [1180.0, 780.0]), ("-narrow", [680.0, 460.0])] {
         let (ctx, mut app) = fixture();
+        {
+            let mut c = app.config.lock().unwrap();
+            c.commit_selection(Provider::Etalien);
+            c.guard_gate.resume(c.selection_generation);
+            c.etalien.enabled = true;
+            c.etalien.token_enc = "fixture".into();
+            c.etalien.device_id = "fixture".into();
+            c.etalien.paused_state = Some(1);
+        }
+        {
+            let mut s = app.etalien.shared.lock().unwrap();
+            s.set_token(Some("fixture".into()));
+            s.set_etalien_info(
+                "fixture",
+                crate::etalien_api::AccountInfo {
+                    vip_duration_second: 7200,
+                    free_duration_second: 1200,
+                    pause_state: Some(1),
+                    ..Default::default()
+                },
+            );
+            s.process_snapshot = Some(vec!["TslGame.exe".into()]);
+        }
+        gpu.save(
+            &ctx,
+            &mut app,
+            size,
+            1.0,
+            &output.join(format!("etalien-home{suffix}.png")),
+        );
+        // Each offscreen renderer owns fresh GPU textures; do not reuse an
+        // egui context whose initial texture delta was consumed by another save.
+        let (ctx, mut app) = fixture();
         app.page = Page::Account;
-        app.account_provider = 1;
+        app.config
+            .lock()
+            .unwrap()
+            .commit_selection(crate::platform_api::Provider::Etalien);
+        {
+            let c = app.config.lock().unwrap();
+            c.guard_gate.resume(c.selection_generation);
+        }
         gpu.save(
             &ctx,
             &mut app,

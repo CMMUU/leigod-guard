@@ -64,7 +64,7 @@ const application = {
   screenshot: site.origin + '/' + screenshot,
   image: site.origin + '/' + icon,
   sameAs: ['https://github.com/CMMUU/leigod-guard', 'https://gitee.com/cmmuu/leigod-guard'],
-  featureList: ['按游戏进程自动暂停账户计时', '本次启动无游戏检查与准备游戏延后', '查询账户剩余时长', '雷神与外星仔分别授权服务器失联保护', '安装版与绿色版', 'Gitee 与 GitHub 应用内更新'],
+  featureList: ['按游戏进程自动暂停账户计时', '本次启动无游戏检查与准备游戏延后', '查询账户剩余时长', '下拉选择雷神或外星仔，仅守护当前对象', '当前对象单独授权服务器失联保护', '安装版与绿色版', 'Gitee 与 GitHub 应用内更新'],
   isAccessibleForFree: true
 };
 const structuredData = JSON.stringify({

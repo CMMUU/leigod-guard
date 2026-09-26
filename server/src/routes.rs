@@ -330,6 +330,10 @@ pub async fn pair_device(
 #[derive(Deserialize)]
 pub struct Heartbeat {
     #[serde(default)]
+    guard_provider: Option<provider::Kind>,
+    #[serde(default)]
+    guard_revision: Option<i64>,
+    #[serde(default)]
     run_generation: i64,
     #[serde(default)]
     remote_revision: Option<i64>,
@@ -385,8 +389,15 @@ pub async fn heartbeat(
         return Err(ApiError(StatusCode::BAD_REQUEST, "雷神账号关联参数无效"));
     }
     let mut tx = s.db.begin().await?;
-    let row=sqlx::query("SELECT d.id,d.user_id,d.sequence,d.run_generation,d.last_seen,d.observed_offline,d.leigod_account_key FROM devices d JOIN users u ON u.id=d.user_id WHERE d.token_hash=$1 AND NOT d.revoked AND NOT u.disabled FOR UPDATE OF d")
+    let row=sqlx::query("SELECT d.id,d.user_id,d.guard_provider,d.guard_revision,d.sequence,d.run_generation,d.last_seen,d.observed_offline,d.leigod_account_key FROM devices d JOIN users u ON u.id=d.user_id WHERE d.token_hash=$1 AND NOT d.revoked AND NOT u.disabled FOR UPDATE OF d")
         .bind(auth::digest(token)).fetch_optional(&mut *tx).await?.ok_or(ApiError(StatusCode::UNAUTHORIZED,"设备已撤销或账号已停用"))?;
+    if let Some(selected) = row.get::<Option<String>, _>("guard_provider") {
+        if p.guard_provider.map(|k| k.as_str()) != Some(selected.as_str())
+            || p.guard_revision != Some(row.get("guard_revision"))
+        {
+            return Err(ApiError(StatusCode::CONFLICT, "守护选择已变化，请重新同步"));
+        }
+    }
     if p.sequence <= row.get::<i64, _>("sequence")
         || p.run_generation < row.get::<i64, _>("run_generation")
     {

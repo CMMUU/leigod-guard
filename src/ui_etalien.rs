@@ -35,6 +35,7 @@ pub struct Panel {
     events: Option<Receiver<Result<Event, String>>>,
     started: Instant,
     message: String,
+    query_failed: bool,
 }
 
 impl Default for Panel {
@@ -48,6 +49,7 @@ impl Default for Panel {
             events: None,
             started: Instant::now(),
             message: String::new(),
+            query_failed: false,
         }
     }
 }
@@ -147,10 +149,9 @@ impl Panel {
                     // Calibration is read-only and never enables automation itself.
                     save(config, account.clone())?;
                 }
-                self.shared
-                    .lock()
-                    .map_err(|_| "无法读取账号")?
-                    .account_status = describe(&info, account.paused_state);
+                let mut state = self.shared.lock().map_err(|_| "无法读取账号")?;
+                state.account_status = describe(&info, account.paused_state);
+                state.set_etalien_info(&token, info);
                 Ok(if calibrate {
                     "暂停状态已校准，可以开启外星仔自动暂停。"
                 } else {
@@ -159,7 +160,60 @@ impl Panel {
                 .into())
             }
         });
+        self.query_failed = outcome.is_err();
         self.message = outcome.unwrap_or_else(|error| error);
+    }
+
+    pub fn balance(&self, s: &Shared) -> crate::ui_home::TimeBalance {
+        crate::ui_home::TimeBalance {
+            free_seconds: s
+                .etalien_info
+                .as_ref()
+                .map(|info| info.free_duration_second.max(0) as u64),
+            seconds: s
+                .etalien_info
+                .as_ref()
+                .map(|info| info.vip_duration_second.max(0) as u64),
+            checked_at: s
+                .account_info_updated_at
+                .map(|t| t.format("%H:%M:%S").to_string()),
+            logged_in: s.token.is_some(),
+            refreshing: self.events.is_some(),
+            query_failed: self.query_failed,
+        }
+    }
+    pub fn refresh(&mut self, config: &Arc<Mutex<Config>>, ctx: &egui::Context) {
+        if self.events.is_some() {
+            return;
+        }
+        let Some(token) = self.shared.lock().ok().and_then(|s| s.token.clone()) else {
+            return;
+        };
+        let device = config
+            .lock()
+            .map(|c| c.etalien.device_id.clone())
+            .unwrap_or_default();
+        self.start(ctx.clone(), move || {
+            Ok(Event::Info {
+                info: api::info(&token, &device)?,
+                token,
+                calibrate: false,
+            })
+        });
+    }
+    pub fn auto_refresh(&mut self, config: &Arc<Mutex<Config>>, ctx: &egui::Context, active: bool) {
+        if config
+            .lock()
+            .is_ok_and(|c| c.is_active(crate::platform_api::Provider::Etalien))
+            && self.events.is_none()
+            && self.started.elapsed() >= Duration::from_secs(60)
+            && self
+                .shared
+                .lock()
+                .is_ok_and(|s| s.token.is_some() && (active || s.etalien_info.is_none()))
+        {
+            self.refresh(config, ctx);
+        }
     }
 
     pub fn show(

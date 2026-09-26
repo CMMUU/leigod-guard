@@ -1,3 +1,4 @@
+use crate::platform_api::Provider;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -152,7 +153,25 @@ pub struct Updates {
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
+pub struct GuardProfile {
+    pub games: Vec<GameEntry>,
+    pub strategy: Strategy,
+}
+
+#[derive(Clone, Serialize, Deserialize, Default)]
 pub struct Config {
+    #[serde(default)]
+    pub selected_provider: Provider,
+    #[serde(default)]
+    pub pending_provider: Option<Provider>,
+    #[serde(skip)]
+    pub selection_generation: u64,
+    #[serde(default)]
+    pub profiles: [GuardProfile; 2],
+    #[serde(default)]
+    pub profile_schema: u8,
+    #[serde(skip)]
+    pub guard_gate: crate::guard::Gate,
     pub games: Vec<GameEntry>,
     pub plans: Vec<AccelPlan>,
     #[serde(default)]
@@ -168,6 +187,84 @@ pub struct Config {
 #[cfg(test)]
 mod tests {
     use super::{valid_game_executable, Config};
+
+    use crate::platform_api::Provider;
+
+    #[test]
+    fn selection_defaults_and_profiles_survive_restart_without_enabling_remote_control() {
+        let mut c: Config = toml::from_str("games=[]\nplans=[]\n").unwrap();
+        assert_eq!(c.selected_provider, Provider::Leigod);
+        c.games.push(super::GameEntry {
+            name: "A".into(),
+            exe: "a.exe".into(),
+            plan: String::new(),
+        });
+        c.strategy.grace_secs = 91;
+        c.account.username = "retained".into();
+        c.etalien.token_enc = "retained-et".into();
+        c.request_selection_with(Provider::Etalien, |_| Ok(()))
+            .unwrap();
+        let persisted: Config = toml::from_str(&toml::to_string(&c).unwrap()).unwrap();
+        assert_eq!(persisted.pending_provider, Some(Provider::Etalien));
+        assert!(!persisted.is_active(Provider::Leigod));
+        c.commit_selection(Provider::Etalien);
+        assert_eq!(c.games[0].exe, "a.exe", "legacy shared games copied once");
+        c.games[0].exe = "b.exe".into();
+        c.strategy.grace_secs = 123;
+        c.strategy.autostart = true;
+        let c: Config = toml::from_str(&toml::to_string(&c).unwrap()).unwrap();
+        assert_eq!(c.selected_provider, Provider::Etalien);
+        assert_eq!(c.games[0].exe, "b.exe");
+        let mut c = c;
+        c.commit_selection(Provider::Leigod);
+        assert_eq!(c.games[0].exe, "a.exe");
+        assert_eq!(c.strategy.grace_secs, 91);
+        assert!(c.strategy.autostart);
+        c.commit_selection(Provider::Etalien);
+        assert_eq!(c.games[0].exe, "b.exe");
+        assert_eq!(c.strategy.grace_secs, 123);
+        assert_eq!(c.account.username, "retained");
+        assert_eq!(c.etalien.token_enc, "retained-et");
+        assert!(!c.etalien.enabled);
+    }
+
+    #[test]
+    fn pending_switch_excludes_both_providers_and_same_selection_is_noop() {
+        let mut c = Config::default();
+        let old_snapshot = c.clone();
+        assert!(c.permit(Provider::Etalien).is_none());
+        c.request_selection_with(Provider::Leigod, |_| panic!("same selection must not save"))
+            .unwrap();
+        c.request_selection_with(Provider::Etalien, |_| Ok(()))
+            .unwrap();
+        assert!(c.permit(Provider::Leigod).is_none());
+        assert!(c.permit(Provider::Etalien).is_none());
+        c.commit_selection(Provider::Etalien);
+        assert!(c.guard_gate.resume(c.selection_generation));
+        assert!(c.permit(Provider::Leigod).is_none());
+        assert!(c.permit(Provider::Etalien).is_some());
+        assert!(!old_snapshot.is_active(Provider::Leigod));
+        c.guard_gate.block();
+        c.commit_selection(Provider::Leigod);
+        c.guard_gate.resume(c.selection_generation);
+        assert!(c
+            .permit_at(Provider::Leigod, old_snapshot.selection_generation)
+            .is_none());
+        assert!(c
+            .permit_at(Provider::Leigod, c.selection_generation)
+            .is_some());
+    }
+
+    #[test]
+    fn failed_persistence_keeps_old_selection_and_admission() {
+        let mut c = Config::default();
+        let _in_flight = c.permit(Provider::Leigod).unwrap();
+        assert!(c
+            .request_selection_with(Provider::Etalien, |_| Err("disk full".into()))
+            .is_err());
+        assert!(c.is_active(Provider::Leigod));
+        assert!(c.pending_provider.is_none());
+    }
 
     #[test]
     fn old_settings_gain_launch_protection_without_changing_existing_waits() {
@@ -310,6 +407,79 @@ mod tests {
 }
 
 impl Config {
+    pub fn is_active(&self, provider: Provider) -> bool {
+        self.selected_provider == provider
+            && self.pending_provider.is_none()
+            && self.guard_gate.ready(self.selection_generation)
+    }
+
+    pub fn permit(&self, provider: Provider) -> Option<crate::guard::Permit> {
+        if self.selected_provider != provider || self.pending_provider.is_some() {
+            return None;
+        }
+        self.guard_gate.enter(self.selection_generation)
+    }
+
+    pub fn permit_at(&self, provider: Provider, generation: u64) -> Option<crate::guard::Permit> {
+        (self.selection_generation == generation)
+            .then(|| self.permit(provider))
+            .flatten()
+    }
+
+    pub fn request_selection(&mut self, provider: Provider) -> Result<(), String> {
+        self.request_selection_with(provider, Self::save)
+    }
+
+    fn request_selection_with(
+        &mut self,
+        provider: Provider,
+        save: impl FnOnce(&Self) -> Result<(), String>,
+    ) -> Result<(), String> {
+        if self.pending_provider.is_some() || provider == self.selected_provider {
+            return Ok(());
+        }
+        if !self.guard_gate.ready(self.selection_generation) {
+            return Err("守护对象尚在确认中，请稍候".into());
+        }
+        self.guard_gate.block();
+        self.pending_provider = Some(provider);
+        if let Err(e) = save(self) {
+            self.pending_provider = None;
+            self.guard_gate.cancel_block(self.selection_generation);
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    /// Caller holds the config lock and has confirmed cloud revocation. Root
+    /// games/strategy always represent the selected profile for legacy readers.
+    pub fn commit_selection(&mut self, provider: Provider) {
+        if self.profile_schema == 0 {
+            let legacy = GuardProfile {
+                games: self.games.clone(),
+                strategy: self.strategy.clone(),
+            };
+            self.profiles = [legacy.clone(), legacy];
+            self.profile_schema = 1;
+        }
+        if self.selected_provider != provider {
+            self.profiles[self.selected_provider.index()] = GuardProfile {
+                games: self.games.clone(),
+                strategy: self.strategy.clone(),
+            };
+            let profile = self.profiles[provider.index()].clone();
+            let autostart = self.strategy.autostart;
+            let injection = self.strategy.block_gamepp_injection;
+            self.games = profile.games;
+            self.strategy = profile.strategy;
+            self.strategy.autostart = autostart;
+            self.strategy.block_gamepp_injection = injection;
+            self.selected_provider = provider;
+        }
+        self.pending_provider = None;
+        self.selection_generation = self.selection_generation.saturating_add(1);
+    }
+
     pub fn path() -> PathBuf {
         let base = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
         base.join("leigod-guard").join("config.toml")
@@ -343,6 +513,12 @@ impl Config {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         let text = toml::to_string_pretty(self).map_err(|e| e.to_string())?;
-        std::fs::write(&path, text).map_err(|e| e.to_string())
+        use std::io::Write;
+        let temp = path.with_extension("toml.tmp");
+        let mut file = std::fs::File::create(&temp).map_err(|e| e.to_string())?;
+        file.write_all(text.as_bytes()).map_err(|e| e.to_string())?;
+        file.sync_all().map_err(|e| e.to_string())?;
+        drop(file);
+        std::fs::rename(&temp, &path).map_err(|e| e.to_string())
     }
 }

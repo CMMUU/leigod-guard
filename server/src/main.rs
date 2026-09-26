@@ -3,6 +3,7 @@ mod cafe;
 mod devices;
 mod email;
 mod etalien;
+mod guard_selection;
 mod provider;
 mod remote;
 mod remote_worker;
@@ -130,6 +131,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let api = Router::new()
         .route("/health", get(routes::health))
+        .route(
+            "/device/guard",
+            get(guard_selection::status).post(guard_selection::change),
+        )
         .route("/device/remote", get(remote::status))
         .route("/device/remote/etalien", get(remote::status))
         .route("/device/remote/etalien/authorize", post(remote::authorize))

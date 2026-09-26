@@ -1,4 +1,5 @@
 //! Best-effort shutdown pause with a main-window handler and a fallback window.
+use crate::platform_api::Provider;
 use crate::{config::Config, leigod_api as api, session_end::SessionEnd, shared::Shared};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::sync::{mpsc, Arc, Mutex, OnceLock, TryLockError};
@@ -28,19 +29,21 @@ pub fn start(shared: Arc<Mutex<Shared>>, etalien: Arc<Mutex<Shared>>, config: Ar
         });
     let handler = SessionEnd::new(
         move |deadline| {
-            let etalien = etalien.clone();
-            let et_config = config.clone();
-            // Both providers share the same outer deadline, not sequential budgets.
-            let et = std::thread::spawn(move || {
-                pause_etalien_before_deadline(&etalien, &et_config, deadline)
-            });
-            let result = pause_before_deadline(&shared, &config, deadline, api::pause_for_shutdown);
-            // Finish writing the outcome before releasing the waiting windows.
-            // A slow disk writer is still bounded by SessionEnd's outer deadline.
+            let selected = snapshot(
+                &config,
+                deadline.min(Instant::now() + Duration::from_millis(250)),
+                |c| c.selected_provider,
+            );
+            let result = match selected {
+                Some(Provider::Leigod) => {
+                    pause_before_deadline(&shared, &config, deadline, api::pause_for_shutdown)
+                }
+                Some(Provider::Etalien) => {
+                    pause_etalien_before_deadline(&etalien, &config, deadline)
+                }
+                None => "无法读取当前守护对象，未执行关机暂停".into(),
+            };
             crate::ui::dbglog(&format!("[shutdown] {result}"));
-            if let Ok(result) = et.join() {
-                crate::ui::dbglog(&format!("[shutdown][etalien] {result}"));
-            }
         },
         trace,
     );
@@ -69,6 +72,11 @@ fn pause_etalien_before_deadline(
     deadline: Instant,
 ) -> String {
     let snapshot_deadline = deadline.min(Instant::now() + Duration::from_millis(250));
+    let Some(_permit) =
+        snapshot(config, snapshot_deadline, |c| c.permit(Provider::Etalien)).flatten()
+    else {
+        return "外星仔不是当前守护对象或正在切换".into();
+    };
     let Some(account) = snapshot(config, snapshot_deadline, |c| {
         (c.strategy.pause_on_shutdown && c.etalien.ready()).then(|| c.etalien.clone())
     })
@@ -92,7 +100,8 @@ fn pause_etalien_before_deadline(
                 config,
                 deadline.min(Instant::now() + Duration::from_millis(50)),
                 |c| {
-                    c.strategy.pause_on_shutdown
+                    c.is_active(Provider::Etalien)
+                        && c.strategy.pause_on_shutdown
                         && c.etalien.ready()
                         && c.etalien.token_enc == account.token_enc
                         && c.etalien.paused_state == account.paused_state
@@ -149,6 +158,11 @@ fn pause_before_deadline(
         None => return "无法及时读取关机策略，暂停未确认".into(),
         Some(true) => {}
     }
+    let Some(_permit) =
+        snapshot(config, snapshot_deadline, |c| c.permit(Provider::Leigod)).flatten()
+    else {
+        return "雷神不是当前守护对象或正在切换".into();
+    };
     let token = match snapshot(shared, snapshot_deadline, |s| s.token.clone()) {
         Some(Some(token)) if !token.is_empty() => token,
         Some(_) => return "未登录，关机暂停未确认".into(),
@@ -233,6 +247,31 @@ unsafe fn window_thread() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inactive_provider_and_switching_never_send_shutdown_pause() {
+        let mut c = Config::default();
+        c.commit_selection(crate::platform_api::Provider::Etalien);
+        c.guard_gate.resume(c.selection_generation);
+        let config = Mutex::new(c);
+        let shared = Mutex::new(Shared::default());
+        let result = pause_before_deadline(
+            &shared,
+            &config,
+            Instant::now() + Duration::from_secs(4),
+            |_, _| panic!("inactive provider must not send"),
+        );
+        assert!(result.contains("不是当前"));
+        config.lock().unwrap().selected_provider = crate::platform_api::Provider::Leigod;
+        config.lock().unwrap().guard_gate.block();
+        let result = pause_before_deadline(
+            &shared,
+            &config,
+            Instant::now() + Duration::from_secs(4),
+            |_, _| panic!("switching must not send"),
+        );
+        assert!(result.contains("正在切换"));
+    }
 
     #[test]
     fn opt_out_and_missing_login_never_send_a_pause() {

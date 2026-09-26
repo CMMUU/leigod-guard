@@ -12,6 +12,7 @@ INSERT INTO remote_accounts(id,user_id,provider_key,label,credential) VALUES('00
 INSERT INTO remote_grants(device_id,account_id,revision,armed_at,last_seen) VALUES('00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000003',7,now(),now());
 \ir ../migrations/0004_provider_grants.sql
 \ir ../migrations/0005_cafe_mode.sql
+\ir ../migrations/0006_guard_selection.sql
 DO $$ BEGIN
  IF NOT EXISTS(SELECT 1 FROM remote_grants g JOIN remote_accounts a ON a.id=g.account_id WHERE g.enabled AND g.provider='leigod' AND a.provider='leigod' AND g.revision=7 AND g.armed_at IS NOT NULL AND a.credential=decode('aabbcc','hex')) THEN
   RAISE EXCEPTION 'existing Lei grant or ciphertext changed during upgrade';
@@ -22,6 +23,7 @@ DO $$ BEGIN
  IF EXISTS(SELECT 1 FROM remote_grants WHERE enabled) OR EXISTS(SELECT 1 FROM remote_accounts WHERE credential IS NOT NULL) THEN RAISE EXCEPTION 'whole-device revoke did not clear legacy credential'; END IF;
 END $$;
 DO $$ BEGIN
+ IF EXISTS(SELECT 1 FROM devices WHERE guard_provider IS NOT NULL OR guard_revision<>0) THEN RAISE EXCEPTION 'upgrade silently changed device selection'; END IF;
  IF EXISTS(SELECT 1 FROM cafe_policies) THEN RAISE EXCEPTION 'upgrade silently enabled cafe policy'; END IF;
  UPDATE remote_accounts SET credential=decode('aabbcc','hex'),credential_state='valid';
  INSERT INTO cafe_policies(account_id,enabled) VALUES('00000000-0000-0000-0000-000000000003',true);
@@ -31,4 +33,4 @@ DO $$ BEGIN
  IF EXISTS(SELECT 1 FROM cafe_policies WHERE enabled) OR EXISTS(SELECT 1 FROM remote_accounts WHERE credential IS NOT NULL) THEN RAISE EXCEPTION 'disabled user retained cloud control'; END IF;
 END $$;
 ROLLBACK;
-\echo PASS migrations 0003 through 0005 preserve grants and respect independent cloud consent
+\echo PASS migrations 0003 through 0006 preserve grants and respect independent cloud consent

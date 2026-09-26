@@ -232,6 +232,8 @@ fn email_login_thirty_day_cookie_and_device_headers() {
     api.heartbeat(
         &device,
         &Heartbeat {
+            guard_provider: None,
+            guard_revision: None,
             run_generation: 1,
             etalien_revision: None,
             remote_revision: None,

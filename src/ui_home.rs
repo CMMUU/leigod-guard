@@ -1,10 +1,14 @@
 //! Pure presentation: actions are applied by App, never by the renderer.
 use crate::config::{valid_game_executable, GameEntry, Strategy};
+use crate::platform_api::Provider;
 use crate::shared::StartupPauseStatus;
 use crate::ui_theme::{self as theme, Icon};
 use egui::{vec2, Color32, Rect, RichText, Stroke, Ui};
 
 pub struct HomeState<'a> {
+    pub provider: Provider,
+    pub guard_ready: bool,
+    pub account_ready: bool,
     pub observation: Option<&'a crate::game_lifecycle::Observation>,
     pub startup: Option<(StartupPauseStatus, bool)>,
     pub strategy: &'a Strategy,
@@ -17,6 +21,7 @@ pub struct HomeState<'a> {
 #[derive(Default)]
 pub struct TimeBalance {
     pub seconds: Option<u64>,
+    pub free_seconds: Option<u64>,
     pub checked_at: Option<String>,
     pub logged_in: bool,
     pub refreshing: bool,
@@ -36,6 +41,7 @@ fn duration_label(seconds: u64) -> String {
 pub enum HomeAction {
     #[default]
     None,
+    Select(Provider),
     Defer,
     Pause,
     Strategy,
@@ -63,6 +69,27 @@ fn presentation(state: &HomeState<'_>) -> Presentation {
         can_defer: false,
         color: theme::TEAL,
     };
+    if !state.guard_ready {
+        p.title = "正在确认守护对象…".into();
+        p.detail = "本机操作已暂缓；云端确认旧保护关闭后继续。".into();
+        p.value = "切换中".into();
+        p.caption = "等待确认";
+        p.color = theme::AMBER;
+        return p;
+    }
+    if !state.account_ready {
+        p.title = format!("请先配置{}账号", state.provider.name());
+        p.detail = if state.provider == Provider::Etalien {
+            "请在账户页登录、读取并校准暂停状态，然后启用。"
+        } else {
+            "请在账户页登录当前加速器。"
+        }
+        .into();
+        p.value = "待配置".into();
+        p.caption = "尚未开始守护";
+        p.color = theme::MUTED;
+        return p;
+    }
     if !state.strategy.enabled {
         p.title = "自动暂停已停用".into();
         p.detail =
@@ -148,6 +175,11 @@ fn presentation(state: &HomeState<'_>) -> Presentation {
         p.value = "待核对".into();
         p.caption = "请查看日志";
         p.color = theme::AMBER;
+    } else if state.provider == Provider::Etalien && state.status.contains("已确认暂停") {
+        p.title = "计时已暂停".into();
+        p.detail = "外星仔官方状态查询已确认暂停。".into();
+        p.value = "已暂停".into();
+        p.caption = "官方状态已确认";
     } else if state.status.starts_with("暂停请求返回成功") {
         p.title = "暂停请求返回成功".into();
         p.detail = "请在雷神官方微信小程序下拉刷新，核对实际计时状态。".into();
@@ -175,7 +207,31 @@ pub fn game_running(processes: Option<&[String]>, exe: &str) -> Option<bool> {
 pub fn render(ui: &mut Ui, state: &HomeState<'_>, enabled: &mut bool) -> HomeAction {
     ui.spacing_mut().item_spacing.y = 8.0;
     let mut action = HomeAction::None;
-    ui.label(theme::title("守护概览", 30.0));
+    ui.horizontal_wrapped(|ui| {
+        ui.label(theme::title("守护概览", 30.0));
+        ui.add_space(12.0);
+        ui.add_enabled_ui(state.guard_ready, |ui| {
+            let mut selected = state.provider;
+            egui::ComboBox::from_id_salt("guard-provider")
+                .selected_text(format!("{}加速器", selected.name()))
+                .width(150.0)
+                .show_ui(ui, |ui| {
+                    for provider in Provider::ALL {
+                        ui.selectable_value(
+                            &mut selected,
+                            provider,
+                            format!("{}加速器", provider.name()),
+                        );
+                    }
+                });
+            if selected != state.provider {
+                action = HomeAction::Select(selected);
+            }
+        });
+    });
+    if !state.guard_ready {
+        ui.disable();
+    }
     ui.label(RichText::new("让加速时长，留给真正开玩的时刻。").color(theme::MUTED));
     ui.add_space(12.0);
     let p = presentation(state);
@@ -192,10 +248,16 @@ pub fn render(ui: &mut Ui, state: &HomeState<'_>, enabled: &mut bool) -> HomeAct
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let ready = *enabled
+                        && state.guard_ready
+                        && state.account_ready
                         && state.processes.is_some()
                         && !state.games.is_empty()
                         && state.games.iter().all(|g| valid_game_executable(&g.exe));
-                    let text = if !*enabled {
+                    let text = if !state.guard_ready {
+                        "切换中"
+                    } else if !state.account_ready {
+                        "待配置"
+                    } else if !*enabled {
                         "已停用"
                     } else if ready {
                         "监控中"
@@ -218,7 +280,10 @@ pub fn render(ui: &mut Ui, state: &HomeState<'_>, enabled: &mut bool) -> HomeAct
                         |ui| {
                             ui.set_min_width(155.0);
                             ui.add_space(3.0);
-                            ui.label(theme::title("雷神账户剩余时长", 16.0));
+                            ui.label(theme::title(
+                                &format!("{}账户剩余时长", state.provider.name()),
+                                16.0,
+                            ));
                         },
                     );
                     ui.allocate_ui_with_layout(
@@ -226,17 +291,23 @@ pub fn render(ui: &mut Ui, state: &HomeState<'_>, enabled: &mut bool) -> HomeAct
                         egui::Layout::top_down(egui::Align::Max),
                         |ui| {
                             ui.set_min_width(width - 165.0);
-                            action = time_balance(ui, state.balance);
+                            let next = time_balance(ui, state.balance);
+                            if next != HomeAction::None {
+                                action = next;
+                            }
                         },
                     );
                 });
             } else {
                 ui.label(
-                    RichText::new("雷神账户剩余时长")
+                    RichText::new(format!("{}账户剩余时长", state.provider.name()))
                         .size(13.0)
                         .color(theme::MUTED),
                 );
-                action = time_balance(ui, state.balance);
+                let next = time_balance(ui, state.balance);
+                if next != HomeAction::None {
+                    action = next;
+                }
             }
         });
         group_separator(ui);
@@ -285,8 +356,9 @@ pub fn render(ui: &mut Ui, state: &HomeState<'_>, enabled: &mut bool) -> HomeAct
             action = HomeAction::Defer;
         }
         if ui
-            .add(
-                theme::outline_button("立即暂停雷神", false)
+            .add_enabled(
+                state.account_ready,
+                theme::outline_button(&format!("立即暂停{}", state.provider.name()), false)
                     .min_size(vec2((width - 20.0) / 2.0, 46.0)),
             )
             .clicked()
@@ -395,6 +467,13 @@ fn time_balance(ui: &mut Ui, balance: Option<&TimeBalance>) -> HomeAction {
         22.0
     };
     ui.label(theme::title(value, size));
+    if let Some(free) = balance.free_seconds.filter(|_| balance.logged_in) {
+        ui.label(
+            RichText::new(format!("免费时长 {}（单独计）", duration_label(free)))
+                .size(11.0)
+                .color(theme::MUTED),
+        );
+    }
     ui.spacing_mut().interact_size.y = 19.0;
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 7.0;
@@ -599,6 +678,9 @@ mod tests {
             plan: String::new(),
         }];
         let mut state = HomeState {
+            provider: Provider::Leigod,
+            guard_ready: true,
+            account_ready: true,
             observation: None,
             startup: Some((StartupPauseStatus::default(), false)),
             strategy: &strategy,

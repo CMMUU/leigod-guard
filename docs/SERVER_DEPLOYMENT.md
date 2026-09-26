@@ -1,6 +1,6 @@
 # 服务端自行部署：Docker 与 Linux 可执行文件
 
-服务端源码已公开在 [GitHub server/](https://github.com/CMMUU/leigod-guard/tree/main/server)，部署配置在 [deploy/server/](https://github.com/CMMUU/leigod-guard/tree/main/deploy/server)。本文适用于含自部署支持的后台 0.3.2；上海现有部署无需迁移，15 秒心跳、120 秒失联规则不变。
+服务端源码已公开在 [GitHub server/](https://github.com/CMMUU/leigod-guard/tree/main/server)，部署配置在 [deploy/server/](https://github.com/CMMUU/leigod-guard/tree/main/deploy/server)。本文适用于后台 0.6.0；支持客户端 0.19.0 的单一守护选择，15 秒心跳、120 秒失联规则不变。已绑定设备应先升级后台，再升级客户端。
 
 ## 先选择运行方式
 
@@ -13,7 +13,7 @@
 
 以下安装命令使用 **Linux Bash**；创建系统目录、修改密钥所有权和安装 systemd 服务的步骤按 root 执行。Docker Engine 与 Compose 插件按 [Docker 官方安装说明](https://docs.docker.com/engine/install/ubuntu/) 安装。准备 Git、Python 3 和 curl。首次从源码编译需要联网和较多临时内存/磁盘；小服务器可在构建机生成镜像或下载 CI 成品。
 
-**客户端连接限制：** 现有 Windows 正式版 v0.15.1 固定连接维护者的上海后台。自建后台可直接通过网页使用，但现有客户端不会自动改连你的服务器；见文末“Windows 客户端连接自建后台”。部署自己的服务无需、也不应复制维护者的数据库、密钥或 Resend 账号。
+**客户端连接限制：** 现有 Windows 正式版 v0.19.0 固定连接维护者的上海后台。自建后台可直接通过网页使用，但现有客户端不会自动改连你的服务器；见文末“Windows 客户端连接自建后台”。部署自己的服务无需、也不应复制维护者的数据库、密钥或 Resend 账号。
 
 ## 方式一：Docker Compose
 
@@ -37,7 +37,7 @@ docker compose --env-file server.env ps
 curl --fail http://127.0.0.1:3088/api/health
 ```
 
-健康响应包含 `status: "ok"`、`version: "0.3.2"`、`remote_execution: false`。Compose 等数据库通过健康检查才启动应用；应用启动时自动执行内嵌迁移并提供网页。这里从公开源码本地构建镜像，没有假定已存在公开的 GHCR/Docker Hub 成品镜像。
+健康响应包含 `status: "ok"`、`version: "0.6.0"`、`remote_execution: false`。Compose 等数据库通过健康检查才启动应用；应用启动时自动执行内嵌迁移并提供网页。这里从公开源码本地构建镜像，没有假定已存在公开的 GHCR/Docker Hub 成品镜像。
 
 服务器上没有浏览器时，在自己的电脑执行以下命令，再用浏览器打开 `http://127.0.0.1:3088`：
 
@@ -256,6 +256,14 @@ docker compose --env-file server.env exec -T postgres pg_restore --list < "$guar
 | 能登录但不会远程暂停 | 服务器执行开关、设备授权、首次心跳、凭据有效性、观察期及服务异常状态 |
 
 CI 验证范围包括：构建 Dockerfile、真实 Compose 网络、PostgreSQL 迁移、静态网页、非 root 应用、私有密钥挂载、管理员登录、容器重建后的数据保留、数据库导出/隔离恢复，以及打包后的 musl 可执行文件启动。CI 使用一次性数据，没有验证你的域名证书签发、邮箱收信或真实雷神暂停；这些需要在你自己的环境验收。
+
+## 0.6.0：单一守护选择
+
+保留原 PostgreSQL 数据、环境文件与远程加密密钥，按上文备份后升级。新程序自动执行 `0006_guard_selection.sql`；无需 Redis、新端口或新增环境变量。Docker 仍使用同一 Compose 项目和数据卷，可执行文件仍按 release 目录切换。
+
+升级顺序为后台 0.6.0 → 本地与公网 `/api/health` 确认版本 → 客户端 0.19.0。客户端首次连接会同步当前选择，确认前暂缓本机动作；服务器保存选择版本，只接受当前对象的授权和匹配心跳。未启用协议的旧设备保持兼容；启用后旧客户端缺少选择版本会被拒绝，不能直接降级继续上报。
+
+切换不会替用户开启新授权，不撤销其他电脑。旧账号的独立网吧模式仍开启时，用户必须先在网页关闭；已发送请求需要等待结束。故障时保留数据库和当前密钥，采用包含全部迁移的修复版本，不删除迁移记录或用旧备份覆盖新数据。
 
 ## 0.5.0：云端网吧模式
 

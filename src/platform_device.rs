@@ -146,6 +146,7 @@ pub(crate) struct View {
     pub active: bool,
     pub busy: bool,
     pub remote: [RemoteView; 2],
+    pub selection_message: String,
 }
 #[derive(Clone, Default)]
 pub(crate) struct RemoteView {
@@ -155,6 +156,7 @@ pub(crate) struct RemoteView {
     pub pending_disable: bool,
 }
 enum Command {
+    Selection,
     Session(Session, bool),
     Bind(Session),
     Pair(String, Option<Session>),
@@ -196,6 +198,9 @@ impl Agent {
             }
         }
         Self { sender, view }
+    }
+    pub fn selection(&self) {
+        let _ = self.sender.send(Command::Selection);
     }
     pub fn session(&self, session: Session, fresh_login: bool) {
         let _ = self.sender.send(Command::Session(session, fresh_login));
@@ -286,6 +291,8 @@ fn run(
     saved.reserved_until = run_generation.saturating_add(256);
     let mut enable_requested = [false; 2];
     let mut run_confirmed = false;
+    let mut cloud_selection = None;
+    let mut selection_synced = false;
     // Persist a new run generation before emitting any heartbeat. Older instances cannot report.
     // Persist the installation identity before the first registration request.
     if let Err(e) = store.save(&saved) {
@@ -316,7 +323,10 @@ fn run(
         false,
     );
     loop {
-        let wait = if saved.active || Provider::ALL.into_iter().any(|p| saved[p].pending_disable) {
+        let wait = if !selection_synced {
+            next.saturating_duration_since(Instant::now())
+                .min(Duration::from_secs(1))
+        } else if saved.active || Provider::ALL.into_iter().any(|p| saved[p].pending_disable) {
             next.saturating_duration_since(Instant::now())
                 .min(Duration::from_secs(15))
         } else {
@@ -334,7 +344,21 @@ fn run(
         }
         if let Some(command) = command {
             match command {
+                Command::Selection => {
+                    selection_synced = false;
+                    enable_requested = [false; 2];
+                }
                 Command::Remote(kind, enabled) => {
+                    if enabled && !config.lock().is_ok_and(|c| c.is_active(kind)) {
+                        publish(
+                            &view,
+                            &ctx,
+                            &saved,
+                            "请先完成守护对象切换，再授权当前加速器。",
+                            false,
+                        );
+                        continue;
+                    }
                     if enabled && !saved.active {
                         publish(
                             &view,
@@ -410,6 +434,10 @@ fn run(
                         continue;
                     }
                     publish(&view, &ctx, &saved, "正在自动绑定本机…", true);
+                    selection_synced = false;
+                    if let Ok(c) = config.lock() {
+                        c.guard_gate.block();
+                    }
                     apply_binding(
                         &api,
                         &store,
@@ -424,6 +452,10 @@ fn run(
                 Command::Bind(session) => {
                     saved.paused = false;
                     publish(&view, &ctx, &saved, "正在重新绑定本机…", true);
+                    selection_synced = false;
+                    if let Ok(c) = config.lock() {
+                        c.guard_gate.block();
+                    }
                     apply_binding(
                         &api,
                         &store,
@@ -438,6 +470,10 @@ fn run(
                 Command::Pair(code, session) => {
                     saved.paused = false;
                     publish(&view, &ctx, &saved, "正在手动配对设备…", true);
+                    selection_synced = false;
+                    if let Ok(c) = config.lock() {
+                        c.guard_gate.block();
+                    }
                     apply_binding(
                         &api,
                         &store,
@@ -453,6 +489,20 @@ fn run(
                 }
             }
             next = Instant::now();
+        }
+        if !selection_synced && Instant::now() >= next {
+            selection_synced = reconcile_selection(
+                &api,
+                &store,
+                &mut saved,
+                &config,
+                &shared,
+                &etalien_shared,
+                &view,
+                &ctx,
+                run_generation,
+                &mut cloud_selection,
+            );
         }
         if Instant::now() >= next
             && (saved.active || Provider::ALL.into_iter().any(|p| saved[p].pending_disable))
@@ -483,6 +533,9 @@ fn run(
             }
         }
         if !saved.active || Instant::now() < next {
+            if !saved.active {
+                next = Instant::now() + Duration::from_secs(15);
+            }
             continue;
         }
         next = Instant::now() + Duration::from_secs(15);
@@ -502,6 +555,10 @@ fn run(
         }
         let mut payload = snapshot(&shared, &etalien_shared, &config, sequence);
         payload.run_generation = run_generation;
+        if let Some(selection) = &cloud_selection {
+            payload.guard_provider = selection.provider;
+            payload.guard_revision = Some(selection.revision);
+        }
         payload.remote_revision = Some(saved[Provider::Leigod].remote_revision);
         payload.etalien_revision = Some(saved[Provider::Etalien].remote_revision);
         // During startup/re-login, missing local credentials do not silently revoke
@@ -514,7 +571,7 @@ fn run(
             Ok(()) => {
                 run_confirmed = true;
                 for kind in Provider::ALL {
-                    if enable_requested[kind.index()] {
+                    if selection_synced && enable_requested[kind.index()] {
                         enable_requested[kind.index()] = false;
                         enable_remote(
                             &api,
@@ -553,8 +610,13 @@ fn run(
                     &saved,
                     if !saved.active {
                         "设备授权失效，已停止上报。请手动重新绑定。"
-                    } else {
+                    } else if config
+                        .lock()
+                        .is_ok_and(|c| c.is_active(c.selected_provider))
+                    {
                         "设备上报失败，将自动重试；本地守护继续运行。"
+                    } else {
+                        "设备上报失败，守护对象仍待确认；正在自动重试。"
                     },
                     false,
                 );
@@ -562,6 +624,97 @@ fn run(
         }
     }
 }
+#[allow(clippy::too_many_arguments)]
+fn reconcile_selection(
+    api: &Api,
+    store: &Store,
+    saved: &mut Saved,
+    config: &Arc<Mutex<crate::config::Config>>,
+    shared: &Arc<Mutex<crate::shared::Shared>>,
+    etalien: &Arc<Mutex<crate::shared::Shared>>,
+    view: &Arc<Mutex<View>>,
+    ctx: &egui::Context,
+    run: i64,
+    cloud: &mut Option<crate::platform_api::GuardSelection>,
+) -> bool {
+    let Some(target) = config.lock().ok().and_then(|c| {
+        c.guard_gate.block();
+        c.guard_gate
+            .drained()
+            .then_some(c.pending_provider.unwrap_or(c.selected_provider))
+    }) else {
+        return false;
+    };
+    let mut notice = String::new();
+    let outcome = (|| -> Result<(), String> {
+        if let Some(binding) = &saved.binding {
+            let current = api
+                .guard_selection(binding)
+                .map_err(|_| "云端切换待确认：请检查连接及服务器版本；旧保护可能仍生效。")?;
+            *cloud = Some(current.clone());
+            let next = api
+                .select_guard(binding, target, current.revision, run)
+                .map_err(|_| "云端切换未确认，正在重试；旧保护可能仍生效。")?;
+            *cloud = Some(next.clone());
+            if next.committed && (next.provider != Some(target) || next.revision < current.revision)
+            {
+                return Err("服务器守护选择响应不一致，尚未完成切换。".into());
+            }
+            if next.other_devices > 0 {
+                notice = format!(
+                    "本机已切换；旧加速器账号仍由其他 {} 台设备守护。",
+                    next.other_devices
+                );
+            }
+            if !next.committed {
+                return Err(if next.reason == "cafe_mode" {
+                    "旧加速器的网吧模式仍开启。请登录网页关闭该账号的网吧模式，切换会自动继续；其他设备授权保持不变。"
+                } else { "旧加速器的云端请求正在结束，确认后自动完成切换。" }.into());
+            }
+        }
+        for kind in Provider::ALL {
+            if kind != target {
+                saved[kind].remote_consent = false;
+                saved[kind].pending_disable = false;
+                saved[kind].remote_token_digest.clear();
+            }
+        }
+        store.save(saved)?;
+        let mut c = config.lock().map_err(|_| "无法读取守护选择")?;
+        let previous = c.clone();
+        c.commit_selection(target);
+        if let Err(error) = c.save() {
+            *c = previous;
+            return Err(error);
+        }
+        for state in [shared, etalien] {
+            if let Ok(mut s) = state.lock() {
+                s.manual_cmd = None;
+                s.manual_pause_result = None;
+                s.startup_defer_requested_at = None;
+                s.startup_pause_status = crate::shared::StartupPauseStatus::default();
+                s.exit_grace_countdown = None;
+                s.process_snapshot = None;
+                s.running_games.clear();
+                s.set_status("守护对象已切换，等待新一轮检测");
+                if let Some(observer) = &s.game_monitor {
+                    observer.reset();
+                }
+            }
+        }
+        if !c.guard_gate.resume(c.selection_generation) {
+            return Err("本机请求尚未结束，正在等待".into());
+        }
+        Ok(())
+    })();
+    let success = outcome.is_ok();
+    if let Ok(mut v) = view.lock() {
+        v.selection_message = outcome.err().unwrap_or(notice);
+    }
+    ctx.request_repaint();
+    success
+}
+
 #[allow(clippy::too_many_arguments)]
 fn apply_binding(
     api: &Api,
@@ -608,6 +761,8 @@ fn snapshot(
     sequence: i64,
 ) -> Heartbeat {
     let mut value = Heartbeat {
+        guard_provider: None,
+        guard_revision: None,
         run_generation: 0,
         remote_revision: None,
         etalien_revision: None,
@@ -619,12 +774,17 @@ fn snapshot(
         leigod_account: None,
     };
     // Copy configuration first; never hold both state locks or perform HTTP under a lock.
-    let username = config
+    let (username, selected) = config
         .lock()
         .ok()
-        .map(|c| c.account.username.clone())
+        .map(|c| (c.account.username.clone(), c.selected_provider))
         .unwrap_or_default();
-    if let Ok(s) = shared.lock() {
+    let target = if selected == Provider::Etalien {
+        etalien_shared
+    } else {
+        shared
+    };
+    if let Ok(s) = target.lock() {
         value.game_running = s
             .process_snapshot
             .as_ref()
@@ -633,29 +793,20 @@ fn snapshot(
             value.prepare_seconds =
                 s.startup_pause_status.remaining_secs.unwrap_or(0).min(600) as u32;
         }
-        if s.token.is_none() {
-            value.account_action = "clear".into();
-        } else if let Some(info) = s.account_info.as_ref() {
-            if let Some(link) = account_link(&username, info) {
-                value.account_action = "link".into();
-                value.leigod_account = Some(link);
+        if selected == Provider::Leigod {
+            if s.token.is_none() {
+                value.account_action = "clear".into();
+            } else if let Some(info) = &s.account_info {
+                if let Some(link) = account_link(&username, info) {
+                    value.account_action = "link".into();
+                    value.leigod_account = Some(link);
+                }
             }
         }
     }
-    if let Ok(et) = etalien_shared.lock() {
-        if et.process_snapshot.is_some() {
-            value.game_running =
-                Some(value.game_running.unwrap_or(false) || !et.running_games.is_empty());
-        }
-        if et.startup_pause_status.preparing_game {
-            value.prepare_seconds = value
-                .prepare_seconds
-                .max(et.startup_pause_status.remaining_secs.unwrap_or(0).min(600) as u32);
-        }
-    }
-    // A single fresh game observation overrides provider-local cached snapshots.
-    // Automatic launch protection must not silently extend cloud offline timeouts.
-    let observer = shared.lock().ok().and_then(|s| s.game_monitor.clone());
+    // Only the selected provider's fresh observation feeds the device heartbeat.
+    // Automatic launch protection does not extend cloud offline timeouts.
+    let observer = target.lock().ok().and_then(|s| s.game_monitor.clone());
     if let Some(observer) = observer {
         value.game_running = observer.latest().game_running();
         value.prepare_seconds = observer.manual_remaining() as u32;
@@ -814,7 +965,7 @@ fn sync_remote(
                         return;
                     }
                 }
-            } else if saved[kind].remote_consent {
+            } else if saved[kind].remote_consent && config.lock().is_ok_and(|c| c.is_active(kind)) {
                 if !status.enabled {
                     saved[kind].remote_consent = false;
                     saved[kind].remote_token_digest.clear();
@@ -908,6 +1059,9 @@ fn enable_remote(
     config: &Arc<Mutex<crate::config::Config>>,
     kind: Provider,
 ) {
+    if !config.lock().is_ok_and(|c| c.is_active(kind)) {
+        return;
+    }
     let Some(token) = token(shared, config, kind) else {
         publish(
             view,
@@ -1008,6 +1162,22 @@ fn clear_disable_marker(expected: Option<&str>, kind: Provider) {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn heartbeat_ignores_inactive_provider_cache_and_account_link() {
+        let shared = Arc::new(Mutex::new(crate::shared::Shared::default()));
+        let et = Arc::new(Mutex::new(crate::shared::Shared::default()));
+        shared.lock().unwrap().process_snapshot = Some(vec!["TslGame.exe".into()]);
+        shared.lock().unwrap().running_games = vec!["PUBG".into()];
+        et.lock().unwrap().process_snapshot = Some(vec![]);
+        let mut c = crate::config::Config::default();
+        c.selected_provider = Provider::Etalien;
+        let config = Arc::new(Mutex::new(c));
+        let payload = snapshot(&shared, &et, &config, 1);
+        assert_eq!(payload.game_running, Some(false));
+        assert_eq!(payload.account_action, "keep");
+        assert!(payload.leigod_account.is_none());
+    }
+
     #[test]
     fn launch_heartbeat_is_unknown_without_automatically_extending_cloud_grace() {
         use crate::game_lifecycle::{Observation, Phase};

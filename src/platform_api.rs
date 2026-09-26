@@ -117,8 +117,10 @@ pub struct AccountLink {
     pub key: String,
     pub label: String,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Provider {
+    #[default]
     Leigod,
     Etalien,
 }
@@ -155,8 +157,19 @@ pub struct RemoteCredential {
     pub device_id: String,
     pub paused_state: i64,
 }
+#[derive(Clone, Default, Deserialize)]
+pub struct GuardSelection {
+    pub provider: Option<Provider>,
+    pub revision: i64,
+    pub committed: bool,
+    pub reason: String,
+    #[serde(default)]
+    pub other_devices: u32,
+}
 #[derive(Serialize)]
 pub struct Heartbeat {
+    pub guard_provider: Option<Provider>,
+    pub guard_revision: Option<i64>,
     pub run_generation: i64,
     pub remote_revision: Option<i64>,
     pub etalien_revision: Option<i64>,
@@ -373,6 +386,33 @@ impl Api {
             return Err(Error::Protocol);
         }
         Ok(binding)
+    }
+    pub fn guard_selection(&self, binding: &DeviceBinding) -> Result<GuardSelection, Error> {
+        let response = self
+            .client
+            .get(format!("{}/api/device/guard", self.origin))
+            .bearer_auth(&binding.device_token)
+            .send()
+            .map_err(|_| Error::Network)?;
+        read_json(successful(response)?)
+    }
+    pub fn select_guard(
+        &self,
+        binding: &DeviceBinding,
+        provider: Provider,
+        revision: i64,
+        run: i64,
+    ) -> Result<GuardSelection, Error> {
+        let response = self
+            .client
+            .post(format!("{}/api/device/guard", self.origin))
+            .bearer_auth(&binding.device_token)
+            .json(
+                &serde_json::json!({"provider":provider,"revision":revision,"run_generation":run}),
+            )
+            .send()
+            .map_err(|_| Error::Network)?;
+        read_json(successful(response)?)
     }
     pub fn heartbeat(&self, binding: &DeviceBinding, payload: &Heartbeat) -> Result<(), Error> {
         if !binding.valid() || payload.sequence < 0 {

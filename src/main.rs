@@ -10,6 +10,7 @@ mod dpapi;
 mod etalien_api;
 mod game_lifecycle;
 mod game_presets;
+mod guard;
 mod instance;
 mod leigod_api;
 mod monitor;
@@ -114,6 +115,8 @@ fn main() {
         }
     };
 
+    // Reconcile any persisted cloud grant before admitting local actions.
+    loaded_config.guard_gate.block();
     let config = Arc::new(Mutex::new(loaded_config));
     let shared = Arc::new(Mutex::new(shared::Shared::default()));
     let etalien = Arc::new(Mutex::new(shared::Shared::default()));
