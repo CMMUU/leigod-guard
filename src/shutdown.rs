@@ -249,6 +249,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn inactive_provider_and_switching_never_send_shutdown_pause() {
+        let mut c = Config::default();
+        c.commit_selection(crate::platform_api::Provider::Etalien);
+        c.guard_gate.resume(c.selection_generation);
+        let config = Mutex::new(c);
+        let shared = Mutex::new(Shared::default());
+        let result = pause_before_deadline(
+            &shared,
+            &config,
+            Instant::now() + Duration::from_secs(4),
+            |_, _| panic!("inactive provider must not send"),
+        );
+        assert!(result.contains("不是当前"));
+        config.lock().unwrap().selected_provider = crate::platform_api::Provider::Leigod;
+        config.lock().unwrap().guard_gate.block();
+        let result = pause_before_deadline(
+            &shared,
+            &config,
+            Instant::now() + Duration::from_secs(4),
+            |_, _| panic!("switching must not send"),
+        );
+        assert!(result.contains("正在切换"));
+    }
+
+    #[test]
     fn opt_out_and_missing_login_never_send_a_pause() {
         let mut config = Config::default();
         config.strategy.pause_on_shutdown = false;

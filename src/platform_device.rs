@@ -640,6 +640,7 @@ fn reconcile_selection(
     }) else {
         return false;
     };
+    let mut notice = String::new();
     let outcome = (|| -> Result<(), String> {
         if let Some(binding) = &saved.binding {
             let current = api
@@ -650,6 +651,12 @@ fn reconcile_selection(
                 .select_guard(binding, target, current.revision, run)
                 .map_err(|_| "云端切换未确认，正在重试；旧保护可能仍生效。")?;
             *cloud = Some(next.clone());
+            if next.other_devices > 0 {
+                notice = format!(
+                    "本机已切换；旧加速器账号仍由其他 {} 台设备守护。",
+                    next.other_devices
+                );
+            }
             if !next.committed {
                 return Err(if next.reason == "cafe_mode" {
                     "旧加速器的网吧模式仍开启。请登录网页关闭该账号的网吧模式，切换会自动继续；其他设备授权保持不变。"
@@ -693,7 +700,7 @@ fn reconcile_selection(
     })();
     let success = outcome.is_ok();
     if let Ok(mut v) = view.lock() {
-        v.selection_message = outcome.err().unwrap_or_default();
+        v.selection_message = outcome.err().unwrap_or(notice);
     }
     ctx.request_repaint();
     success

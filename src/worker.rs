@@ -387,6 +387,19 @@ fn auto_pause_guard_with_observation(
         .lock()
         .map_err(|_| AutoPauseBlock::ConfigUnavailable)?
         .clone();
+    let provider = if shared
+        .lock()
+        .map_err(|_| AutoPauseBlock::ControlUnavailable)?
+        .provider
+        == "etalien"
+    {
+        Provider::Etalien
+    } else {
+        Provider::Leigod
+    };
+    if !cfg.is_active(provider) {
+        return Err(AutoPauseBlock::ConfigUnavailable);
+    }
     let watch = checked_watch(&cfg);
     pause_watch.configure(
         cfg.strategy.enabled,
@@ -418,7 +431,11 @@ fn auto_pause_guard_with_observation(
     let still_current = source_config
         .lock()
         .map_err(|_| AutoPauseBlock::ConfigUnavailable)?;
-    if still_current.games != cfg.games || still_current.strategy != cfg.strategy {
+    if !still_current.is_active(provider)
+        || still_current.selection_generation != cfg.selection_generation
+        || still_current.games != cfg.games
+        || still_current.strategy != cfg.strategy
+    {
         return Err(AutoPauseBlock::ConfigUnavailable);
     }
     drop(still_current);

@@ -66,6 +66,8 @@ pub async fn change(
             .execute(&mut *tx)
             .await?;
     }
+    let peers: i64 = sqlx::query_scalar("SELECT count(DISTINCT g.device_id) FROM remote_grants g WHERE g.enabled AND g.device_id<>$1 AND g.provider=$2 AND g.account_id IN (SELECT account_id FROM remote_grants WHERE device_id=$1 AND provider=$2)")
+        .bind(id).bind(other.as_str()).fetch_one(&mut *tx).await?;
     let revision = revision + i64::from(changed);
     sqlx::query("UPDATE devices SET guard_provider=$2,guard_revision=$3,run_generation=$4,game_running=CASE WHEN $5 THEN NULL ELSE game_running END,prepare_until=CASE WHEN $5 THEN now() ELSE prepare_until END WHERE id=$1")
         .bind(id).bind(p.provider.as_str()).bind(revision).bind(p.run_generation).bind(changed).execute(&mut *tx).await?;
@@ -85,6 +87,6 @@ pub async fn change(
     }
     tx.commit().await?;
     Ok(Json(
-        json!({"provider":p.provider.as_str(),"revision":revision,"committed":true,"reason":""}),
+        json!({"provider":p.provider.as_str(),"revision":revision,"committed":true,"reason":"","other_devices":peers}),
     ))
 }

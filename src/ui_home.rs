@@ -175,6 +175,11 @@ fn presentation(state: &HomeState<'_>) -> Presentation {
         p.value = "待核对".into();
         p.caption = "请查看日志";
         p.color = theme::AMBER;
+    } else if state.provider == Provider::Etalien && state.status.contains("已确认暂停") {
+        p.title = "计时已暂停".into();
+        p.detail = "外星仔官方状态查询已确认暂停。".into();
+        p.value = "已暂停".into();
+        p.caption = "官方状态已确认";
     } else if state.status.starts_with("暂停请求返回成功") {
         p.title = "暂停请求返回成功".into();
         p.detail = "请在雷神官方微信小程序下拉刷新，核对实际计时状态。".into();
@@ -243,10 +248,16 @@ pub fn render(ui: &mut Ui, state: &HomeState<'_>, enabled: &mut bool) -> HomeAct
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let ready = *enabled
+                        && state.guard_ready
+                        && state.account_ready
                         && state.processes.is_some()
                         && !state.games.is_empty()
                         && state.games.iter().all(|g| valid_game_executable(&g.exe));
-                    let text = if !*enabled {
+                    let text = if !state.guard_ready {
+                        "切换中"
+                    } else if !state.account_ready {
+                        "待配置"
+                    } else if !*enabled {
                         "已停用"
                     } else if ready {
                         "监控中"

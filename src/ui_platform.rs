@@ -149,7 +149,15 @@ impl Panel {
     pub(crate) fn selection_message(&self) -> String {
         self.agent
             .as_ref()
-            .and_then(|a| a.view.lock().ok().map(|v| v.selection_message.clone()))
+            .and_then(|a| {
+                a.view.lock().ok().map(|v| {
+                    if v.selection_message.is_empty() {
+                        v.message.clone()
+                    } else {
+                        v.selection_message.clone()
+                    }
+                })
+            })
             .unwrap_or_default()
     }
     pub(crate) fn revoke_remote(&self) {

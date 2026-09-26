@@ -25,6 +25,13 @@ impl Gate {
             .lock()
             .is_ok_and(|s| !s.blocked && s.generation == generation)
     }
+    pub fn cancel_block(&self, generation: u64) {
+        if let Ok(mut s) = self.0.lock() {
+            if s.generation == generation {
+                s.blocked = false;
+            }
+        }
+    }
     pub fn drained(&self) -> bool {
         self.0.lock().is_ok_and(|s| s.in_flight == 0)
     }

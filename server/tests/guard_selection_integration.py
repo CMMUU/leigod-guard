@@ -118,7 +118,7 @@ assert s1['committed'] and s1['revision'] == 1
 assert remote(d, 'leigod')['enabled'] and not remote(d, 'etalien')['enabled']
 heartbeat(d, 1, s1)
 s2 = select(d, 'etalien', s1['revision'])
-assert s2['committed'] and not remote(d, 'leigod')['enabled']
+assert s2['committed'] and s2['other_devices'] == 1 and not remote(d, 'leigod')['enabled']
 assert not remote(d, 'etalien')['enabled'], 'selection must not authorize target'
 assert remote(peer, 'leigod')['enabled'], 'peer device consent must remain intact'
 heartbeat(d, 2, s1, 409)

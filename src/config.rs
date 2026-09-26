@@ -249,6 +249,7 @@ mod tests {
     #[test]
     fn failed_persistence_keeps_old_selection_and_admission() {
         let mut c = Config::default();
+        let _in_flight = c.permit(Provider::Leigod).unwrap();
         assert!(c
             .request_selection_with(Provider::Etalien, |_| Err("disk full".into()))
             .is_err());
@@ -422,11 +423,14 @@ impl Config {
         if self.pending_provider.is_some() || provider == self.selected_provider {
             return Ok(());
         }
+        if !self.guard_gate.ready(self.selection_generation) {
+            return Err("守护对象尚在确认中，请稍候".into());
+        }
         self.guard_gate.block();
         self.pending_provider = Some(provider);
         if let Err(e) = save(self) {
             self.pending_provider = None;
-            let _ = self.guard_gate.resume(self.selection_generation);
+            self.guard_gate.cancel_block(self.selection_generation);
             return Err(e);
         }
         Ok(())

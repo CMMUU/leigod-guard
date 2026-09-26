@@ -10,8 +10,7 @@ fn fixture() -> (egui::Context, App) {
     ctx.style_mut(|style| style.animation_time = 0.0);
     let mut config = Config::default();
     config.strategy = crate::config::Strategy::default();
-    config.account.username = "ui-fixture".into();
-    config.account.cred_enc = "not-used-by-in-memory-render".into();
+    config.account.token_enc = "not-used-by-in-memory-render".into();
     config.games = [
         ("Counter-Strike 2", "cs2.exe"),
         ("绝地求生", "TslGame.exe"),
@@ -114,6 +113,65 @@ fn click(ctx: &egui::Context, app: &mut App, label: &str) {
             ],
         );
     }
+}
+
+#[test]
+fn home_dropdown_emits_one_selected_provider_action() {
+    let ctx = egui::Context::default();
+    load_cjk_fonts(&ctx);
+    ctx.style_mut(|style| style.animation_time = 0.0);
+    let config = Config::default();
+    let state = HomeState {
+        provider: Provider::Leigod,
+        guard_ready: true,
+        account_ready: false,
+        observation: None,
+        startup: None,
+        strategy: &config.strategy,
+        games: &[],
+        processes: None,
+        status: "",
+        balance: None,
+    };
+    let render = |events| {
+        let mut action = HomeAction::None;
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(900.0, 700.0))),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    action = crate::ui_home::render(ui, &state, &mut true);
+                });
+            },
+        );
+        (output, action)
+    };
+    let _ = render(vec![]);
+    let output = render(vec![]).0;
+    let initial = text_rect(&output.shapes, "雷神加速器").center();
+    let events = |point, pressed| {
+        vec![
+            Event::PointerMoved(point),
+            Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]
+    };
+    render(events(initial, true));
+    render(events(initial, false));
+    let output = render(vec![]).0;
+    let target = text_rect(&output.shapes, "外星仔加速器").center();
+    render(events(target, true));
+    assert_eq!(
+        render(events(target, false)).1,
+        HomeAction::Select(Provider::Etalien)
+    );
 }
 
 #[test]
@@ -880,6 +938,36 @@ fn render_apple_preview() {
     }
     for (suffix, size) in [("", [1180.0, 780.0]), ("-narrow", [680.0, 460.0])] {
         let (ctx, mut app) = fixture();
+        {
+            let mut c = app.config.lock().unwrap();
+            c.commit_selection(Provider::Etalien);
+            c.guard_gate.resume(c.selection_generation);
+            c.etalien.enabled = true;
+            c.etalien.token_enc = "fixture".into();
+            c.etalien.device_id = "fixture".into();
+            c.etalien.paused_state = Some(1);
+        }
+        {
+            let mut s = app.etalien.shared.lock().unwrap();
+            s.set_token(Some("fixture".into()));
+            s.set_etalien_info(
+                "fixture",
+                crate::etalien_api::AccountInfo {
+                    vip_duration_second: 7200,
+                    free_duration_second: 1200,
+                    pause_state: Some(1),
+                    ..Default::default()
+                },
+            );
+            s.process_snapshot = Some(vec!["TslGame.exe".into()]);
+        }
+        gpu.save(
+            &ctx,
+            &mut app,
+            size,
+            1.0,
+            &output.join(format!("etalien-home{suffix}.png")),
+        );
         app.page = Page::Account;
         app.config
             .lock()

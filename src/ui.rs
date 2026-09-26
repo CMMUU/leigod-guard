@@ -1159,7 +1159,7 @@ impl App {
                             Page::Games => self.page_games(ui),
                             Page::Plans => self.page_plans(ui),
                             Page::Account => {
-                                page_header(ui, "账户", "分别管理雷神、外星仔账号与本机登录凭据。");
+                                page_header(ui, "账户", "管理当前选择的加速器账号与本机登录凭据。");
                                 theme::card().show(ui, |ui| {
                                     ui.set_min_width(ui.available_width());
                                     self.page_account(ui);
@@ -1639,6 +1639,13 @@ impl App {
             }
         }
         if !state.guard_ready {
+            if let Some(target) = config.pending_provider {
+                ui.label(format!(
+                    "正在从{}切换到{}…",
+                    config.selected_provider.name(),
+                    target.name()
+                ));
+            }
             let message = self.platform.selection_message();
             ui.colored_label(
                 theme::AMBER,
@@ -1649,6 +1656,12 @@ impl App {
                 },
             );
             ui.hyperlink_to("打开网页管理网吧模式", crate::platform_api::ORIGIN_URL);
+        }
+        if state.guard_ready {
+            let notice = self.platform.selection_message();
+            if notice.starts_with("本机已切换") {
+                ui.label(egui::RichText::new(notice).small().color(theme::MUTED));
+            }
         }
         if !self.status_msg.is_empty() {
             ui.add_space(8.0);
@@ -2633,6 +2646,11 @@ impl App {
             });
             // 二期功能：最短运行时间与自动恢复配套，暂时隐藏（字段保留在配置中）
             ui.add_space(8.0);
+            ui.label(
+                egui::RichText::new("以下应用设置对所有加速器共用")
+                    .small()
+                    .color(theme::MUTED),
+            );
             let mut auto = autostart::is_enabled();
             if theme::switch_row(ui, &mut auto, "开机静默启动（仅驻留托盘）").changed()
             {

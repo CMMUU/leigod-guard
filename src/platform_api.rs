@@ -163,6 +163,8 @@ pub struct GuardSelection {
     pub revision: i64,
     pub committed: bool,
     pub reason: String,
+    #[serde(default)]
+    pub other_devices: u32,
 }
 #[derive(Serialize)]
 pub struct Heartbeat {
