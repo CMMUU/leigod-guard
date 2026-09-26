@@ -1433,6 +1433,11 @@ mod tests {
         for provider in ["leigod", "etalien"] {
             let cfg = configured_fixture();
             cfg.lock().unwrap().games[0].exe = "TslGame.exe".into();
+            cfg.lock().unwrap().selected_provider = if provider == "etalien" {
+                crate::platform_api::Provider::Etalien
+            } else {
+                crate::platform_api::Provider::Leigod
+            };
             let shared = Arc::new(Mutex::new(Shared::default()));
             shared.lock().unwrap().provider = provider;
             let (mut tracker, games, mut policy) = lifecycle_fixture();
