@@ -60,6 +60,7 @@ pub struct Shared {
     pub account_status: String,
     /// 最近一次 user_info 查询的原始结果（仅在内存中提取状态与时长）
     pub account_info: Option<serde_json::Value>,
+    pub etalien_info: Option<crate::etalien_api::AccountInfo>,
     pub account_info_updated_at: Option<chrono::DateTime<chrono::Local>>,
     pub account_info_received_at: Option<Instant>,
     /// A tray open can happen while egui is asleep and misses the focus change.
@@ -92,6 +93,7 @@ impl Default for Shared {
             alert: None,
             account_status: "未登录".into(),
             account_info: None,
+            etalien_info: None,
             account_info_updated_at: None,
             account_info_received_at: None,
             account_refresh_requested: false,
@@ -130,6 +132,7 @@ impl Shared {
 
     pub fn clear_account_info(&mut self) {
         self.account_info = None;
+        self.etalien_info = None;
         self.account_info_updated_at = None;
         self.account_info_received_at = None;
     }
@@ -139,6 +142,14 @@ impl Shared {
             self.clear_account_info();
         }
         self.token = token;
+    }
+
+    pub fn set_etalien_info(&mut self, token: &str, info: crate::etalien_api::AccountInfo) {
+        if self.token.as_deref() == Some(token) {
+            self.etalien_info = Some(info);
+            self.account_info_updated_at = Some(chrono::Local::now());
+            self.account_info_received_at = Some(Instant::now());
+        }
     }
 
     pub fn set_account_info(&mut self, token: &str, value: serde_json::Value) {

@@ -14,7 +14,7 @@ pub async fn lock(tx: &mut Transaction<'_, Postgres>) -> ApiResult<()> {
         .await?;
     Ok(())
 }
-async fn device(s: &AppState, h: &HeaderMap) -> ApiResult<(Uuid, Uuid)> {
+pub(crate) async fn device(s: &AppState, h: &HeaderMap) -> ApiResult<(Uuid, Uuid)> {
     let token = h
         .get("authorization")
         .and_then(|v| v.to_str().ok())
@@ -172,8 +172,13 @@ pub async fn authorize(
         .map_err(|_| ApiError(StatusCode::INTERNAL_SERVER_ERROR, "凭据保存失败"))?;
     let mut tx = s.db.begin().await?;
     // Revalidate after the external call; concurrent logout/rebind wins.
-    let d=sqlx::query(&format!("SELECT d.run_generation,d.{} AS remote_revision FROM devices d JOIN users u ON u.id=d.user_id WHERE d.id=$1 AND d.user_id=$2 AND d.token_hash=$3 AND NOT d.revoked AND NOT u.disabled FOR UPDATE OF d", q.provider.revision_column()))
+    let d=sqlx::query(&format!("SELECT d.guard_provider,d.run_generation,d.{} AS remote_revision FROM devices d JOIN users u ON u.id=d.user_id WHERE d.id=$1 AND d.user_id=$2 AND d.token_hash=$3 AND NOT d.revoked AND NOT u.disabled FOR UPDATE OF d", q.provider.revision_column()))
         .bind(id).bind(uid).bind(auth::digest(h.get("authorization").unwrap().to_str().unwrap().strip_prefix("Bearer ").unwrap())).fetch_optional(&mut *tx).await?.ok_or(ApiError(StatusCode::UNAUTHORIZED,"设备授权已失效"))?;
+    if d.get::<Option<String>, _>("guard_provider")
+        .is_some_and(|selected| selected != q.provider.as_str())
+    {
+        return Err(ApiError(StatusCode::CONFLICT, "只能授权当前选择的加速器"));
+    }
     if d.get::<i64, _>("run_generation") != p.run_generation
         || d.get::<i64, _>("remote_revision") != p.revision
     {

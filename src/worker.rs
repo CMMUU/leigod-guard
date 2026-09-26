@@ -4,6 +4,7 @@ use crate::dpapi;
 use crate::game_lifecycle::{Observation, Phase};
 use crate::leigod_api as api;
 use crate::monitor;
+use crate::platform_api::Provider;
 use crate::shared::{ManualCmd, Shared, StartupPauseStatus};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -570,6 +571,18 @@ fn restore_token(shared: &Arc<Mutex<Shared>>, cfg: &Arc<Mutex<Config>>) {
     }
 }
 
+fn clear_inactive(shared: &Arc<Mutex<Shared>>) {
+    if let Ok(mut s) = shared.lock() {
+        s.manual_cmd = None;
+        s.startup_defer_requested_at = None;
+        s.startup_pause_status = StartupPauseStatus::default();
+        s.exit_grace_countdown = None;
+        s.running_games.clear();
+        s.process_snapshot = None;
+        s.set_status("未选择此加速器，自动守护已停止");
+    }
+}
+
 pub fn run(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
     log(&shared, "守护线程已启动");
     restore_token(&shared, &cfg);
@@ -578,6 +591,7 @@ pub fn run(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
     let mut pause_watch = AutoPauseWatch::default();
     let mut monitor_failed = false;
     let mut was_configured = false;
+    let mut generation = None;
 
     loop {
         let (interval, enabled, startup_enabled, startup_grace_secs, grace_secs, watch, configured) = {
@@ -591,6 +605,17 @@ pub fn run(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
                     continue;
                 }
             };
+            if !c.is_active(Provider::Leigod) {
+                pause_watch = AutoPauseWatch::default();
+                was_configured = false;
+                clear_inactive(&shared);
+                std::thread::sleep(Duration::from_secs(1));
+                continue;
+            }
+            if generation != Some(c.selection_generation) {
+                pause_watch = AutoPauseWatch::default();
+                generation = Some(c.selection_generation);
+            }
             let watch = checked_watch(&c);
             let configured = c
                 .account
@@ -849,11 +874,21 @@ pub fn run_etalien(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
     }
     let mut pause_watch = AutoPauseWatch::default();
     let mut previous_session = None;
+    let mut generation = None;
     loop {
         std::thread::sleep(Duration::from_secs(1));
         let Ok(config) = cfg.lock().map(|c| c.clone()) else {
             continue;
         };
+        if !config.is_active(Provider::Etalien) {
+            pause_watch = AutoPauseWatch::default();
+            clear_inactive(&shared);
+            continue;
+        }
+        if generation != Some(config.selection_generation) {
+            pause_watch = AutoPauseWatch::default();
+            generation = Some(config.selection_generation);
+        }
         let account = config.etalien.clone();
         let session = (
             account.enabled,
@@ -904,6 +939,9 @@ pub fn run_etalien(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
         };
         publish_startup_status(&shared, &pause_watch, Instant::now());
         if manual || matches!(decision, PauseDecision::Pause | PauseDecision::StartupPause) {
+            let Some(_permit) = cfg.lock().ok().and_then(|c| c.permit(Provider::Etalien)) else {
+                continue;
+            };
             let token = shared.lock().ok().and_then(|s| s.token.clone());
             let result = token
                 .as_deref()
@@ -915,7 +953,14 @@ pub fn run_etalien(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
                         account.paused_state.unwrap(),
                         Duration::from_secs(18),
                         || {
-                            let latest = cfg.lock().map_err(|_| "无法读取配置")?.etalien.clone();
+                            let c = cfg.lock().map_err(|_| "无法读取配置")?;
+                            if !c.is_active(Provider::Etalien)
+                                || c.selection_generation != config.selection_generation
+                            {
+                                return Err("守护对象已变化，取消旧请求".into());
+                            }
+                            let latest = c.etalien.clone();
+                            drop(c);
                             if !latest.ready()
                                 || latest.token_enc != account.token_enc
                                 || latest.paused_state != account.paused_state
@@ -975,6 +1020,9 @@ pub fn run_etalien(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
                     state.set_status("外星仔官方状态已确认暂停");
                     state.log("暂停状态查询已确认");
                     state.account_status = crate::ui_etalien::describe(&info, account.paused_state);
+                    if let Some(token) = &token {
+                        state.set_etalien_info(token, info);
+                    }
                     state.manual_pause_result = Some(true);
                 }
                 Err(error) => {
@@ -1085,6 +1133,14 @@ fn call_with_retry_checked(
     action: &str,
     mut before_request: impl FnMut() -> Result<(), AutoPauseBlock>,
 ) -> Result<String, CheckedCallError> {
+    let (_permit, generation) = cfg
+        .lock()
+        .ok()
+        .and_then(|c| {
+            c.permit(Provider::Leigod)
+                .map(|p| (p, c.selection_generation))
+        })
+        .ok_or(CheckedCallError::Blocked(AutoPauseBlock::ConfigUnavailable))?;
     let binding = cfg
         .lock()
         .map(|c| (c.account.username.clone(), c.account.cred_enc.clone()))
@@ -1096,8 +1152,10 @@ fn call_with_retry_checked(
             &mut before_request,
             |token| {
                 let same_account = cfg.lock().is_ok_and(|c| {
-                    (c.account.username.as_str(), c.account.cred_enc.as_str())
-                        == (binding.0.as_str(), binding.1.as_str())
+                    c.is_active(Provider::Leigod)
+                        && c.selection_generation == generation
+                        && (c.account.username.as_str(), c.account.cred_enc.as_str())
+                            == (binding.0.as_str(), binding.1.as_str())
                 });
                 let same_token = shared
                     .lock()

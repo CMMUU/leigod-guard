@@ -8,6 +8,7 @@ use crate::dpapi;
 use crate::game_presets::{self, PRESETS};
 use crate::leigod_api as api;
 use crate::osd;
+use crate::platform_api::Provider;
 use crate::shared::{ManualCmd, Shared};
 use crate::ui_home::{HomeAction, HomeState};
 use crate::ui_theme::{self as theme, Icon};
@@ -91,7 +92,6 @@ pub struct App {
 
     platform: crate::ui_platform::Panel,
     etalien: crate::ui_etalien::Panel,
-    account_provider: u8,
 
     // 账户表单
     acc_user: String,
@@ -490,26 +490,25 @@ fn tray_event_loop(
             }
             if id == ids.open {
                 show_window(&ctx, &shared, &mut hwnd);
-            } else if id == ids.defer_startup {
-                if let Ok(mut s) = shared.lock() {
-                    request_startup_defer(&mut s, Instant::now());
-                }
-                if let Ok(mut s) = etalien.lock() {
-                    request_startup_defer(&mut s, Instant::now());
-                }
-                // Keep the current game in the foreground; no window or popup.
-                ctx.request_repaint();
-            } else if id == ids.pause {
-                let account = config.lock().map(|c| c.account.clone()).unwrap_or_default();
-                if let Ok(mut s) = shared.lock() {
-                    if account.configured(s.token.is_some()) {
-                        s.manual_cmd = Some(ManualCmd::Pause);
-                        s.log("托盘指令：立即暂停雷神");
+            } else if id == ids.defer_startup || id == ids.pause {
+                if let Ok(c) = config.lock() {
+                    if c.is_active(c.selected_provider) {
+                        let target = if c.selected_provider == Provider::Etalien {
+                            &etalien
+                        } else {
+                            &shared
+                        };
+                        if let Ok(mut s) = target.lock() {
+                            if id == ids.defer_startup {
+                                request_startup_defer(&mut s, Instant::now());
+                            } else {
+                                s.manual_cmd = Some(ManualCmd::Pause);
+                                s.log("托盘指令：立即暂停当前加速器");
+                            }
+                        }
                     }
                 }
-                if let Ok(mut s) = etalien.lock() {
-                    s.manual_cmd = Some(ManualCmd::Pause);
-                }
+                ctx.request_repaint();
             } else if id == ids.quit {
                 dbglog("tray quit -> direct exit");
                 do_exit(&config);
@@ -613,7 +612,7 @@ impl App {
         let menu = Menu::new();
         let menu_open = MenuItem::new("打开面板", true, None);
         let menu_defer_startup = MenuItem::new("准备游戏：保护启动／重启10分钟", true, None);
-        let menu_pause = MenuItem::new("立即暂停已启用的加速器", true, None);
+        let menu_pause = MenuItem::new("立即暂停当前加速器", true, None);
         // Explicit preparation protects a startup/restart, never starts billing.
         let menu_quit = MenuItem::new("退出", true, None);
         let _ = menu.append_items(&[
@@ -731,7 +730,6 @@ impl App {
             proc_list: Vec::new(),
             platform: crate::ui_platform::Panel::default(),
             etalien: crate::ui_etalien::Panel::default(),
-            account_provider: 0,
             acc_user,
             acc_pwd: if has_saved_pwd {
                 PWD_PLACEHOLDER.to_string()
@@ -1175,7 +1173,7 @@ impl App {
                                 );
                                 theme::card().show(ui, |ui| {
                                     ui.set_min_width(ui.available_width());
-                                    self.platform.render(ui);
+                                    self.platform.render_for(ui, self.selected_provider());
                                 });
                             }
                             Page::Strategy => {
@@ -1300,6 +1298,11 @@ impl eframe::App for App {
         if self.auto_account_refresh_due(Instant::now(), active) {
             self.refresh_account_info();
         }
+        self.etalien.auto_refresh(
+            &self.config,
+            ctx,
+            active && matches!(self.page, Page::Games | Page::Account),
+        );
         let platform_store = crate::platform_store::DiskStore::current_user();
         self.platform
             .tick(&platform_store, ctx, active && self.page == Page::Platform);
@@ -1515,32 +1518,6 @@ mod ui_tests {
 
 impl App {
     fn page_games(&mut self, ui: &mut egui::Ui) {
-        if self
-            .config
-            .lock()
-            .map(|c| c.etalien.enabled)
-            .unwrap_or(false)
-        {
-            let state = self
-                .etalien
-                .shared
-                .lock()
-                .map(|s| s.status_at(Instant::now()))
-                .unwrap_or_default();
-            ui.horizontal_wrapped(|ui| {
-                ui.label(format!("外星仔 · {state}"));
-                if ui.button("外星仔账号").clicked() {
-                    self.account_provider = 1;
-                    self.page = Page::Account;
-                }
-                if ui.button("准备游戏：保护启动／重启").clicked() {
-                    if let Ok(mut s) = self.etalien.shared.lock() {
-                        request_startup_defer(&mut s, Instant::now());
-                    }
-                }
-            });
-            ui.add_space(6.0);
-        }
         let config = match self.config.lock() {
             Ok(config) => config.clone(),
             Err(_) => {
@@ -1548,23 +1525,28 @@ impl App {
                 return;
             }
         };
-        let snapshot = self.shared.lock().ok().map(|s| {
+        let selected_shared = self.selected_shared();
+        let snapshot = selected_shared.lock().ok().map(|s| {
             (
                 s.startup_pause_status,
                 s.startup_defer_requested_at.is_some(),
                 s.process_snapshot.clone(),
                 s.status_at(Instant::now()),
-                crate::ui_home::TimeBalance {
-                    seconds: s
-                        .account_info
-                        .as_ref()
-                        .and_then(api::account_remaining_seconds),
-                    checked_at: s
-                        .account_info_updated_at
-                        .map(|t| t.format("%H:%M:%S").to_string()),
-                    logged_in: s.token.is_some(),
-                    refreshing: self.account_query.is_some(),
-                    query_failed: self.account_query_error && s.account_info.is_none(),
+                if config.selected_provider == Provider::Etalien {
+                    self.etalien.balance(&s)
+                } else {
+                    crate::ui_home::TimeBalance {
+                        seconds: s
+                            .account_info
+                            .as_ref()
+                            .and_then(api::account_remaining_seconds),
+                        checked_at: s
+                            .account_info_updated_at
+                            .map(|t| t.format("%H:%M:%S").to_string()),
+                        logged_in: s.token.is_some(),
+                        refreshing: self.account_query.is_some(),
+                        query_failed: self.account_query_error && s.account_info.is_none(),
+                    }
                 },
             )
         });
@@ -1578,6 +1560,15 @@ impl App {
             (o.phase != crate::game_lifecycle::Phase::Unknown).then_some(o.processes.as_slice())
         });
         let state = HomeState {
+            provider: config.selected_provider,
+            guard_ready: config.is_active(config.selected_provider),
+            account_ready: if config.selected_provider == Provider::Etalien {
+                config.etalien.ready()
+            } else {
+                config
+                    .account
+                    .configured(snapshot.as_ref().is_some_and(|s| s.4.logged_in))
+            },
             observation: observation.as_ref(),
             startup: snapshot.as_ref().map(|s| (s.0, s.1)),
             strategy: &config.strategy,
@@ -1603,11 +1594,23 @@ impl App {
         }
         match action {
             HomeAction::None => {}
-            HomeAction::Defer => {
-                if let Ok(mut shared) = self.shared.lock() {
-                    request_startup_defer(&mut shared, Instant::now());
+            HomeAction::Select(provider) => {
+                let result = self
+                    .config
+                    .lock()
+                    .map_err(|_| "无法读取配置".to_string())
+                    .and_then(|mut c| c.request_selection(provider));
+                if let Err(error) = result {
+                    self.status_msg = error;
+                } else {
+                    self.status_msg.clear();
+                    self.show_add_game = false;
+                    self.show_proc_picker = false;
+                    self.platform.selection_changed();
                 }
-                if let Ok(mut s) = self.etalien.shared.lock() {
+            }
+            HomeAction::Defer => {
+                if let Ok(mut s) = selected_shared.lock() {
                     request_startup_defer(&mut s, Instant::now());
                 }
                 ui.ctx().request_repaint();
@@ -1615,7 +1618,13 @@ impl App {
             HomeAction::Pause => self.request_manual_pause(),
             HomeAction::Strategy => self.page = Page::Strategy,
             HomeAction::Account => self.page = Page::Account,
-            HomeAction::RefreshAccount => self.refresh_account_info(),
+            HomeAction::RefreshAccount => {
+                if config.selected_provider == Provider::Etalien {
+                    self.etalien.refresh(&self.config, ui.ctx());
+                } else {
+                    self.refresh_account_info();
+                }
+            }
             HomeAction::AddGame => self.show_add_game = true,
             HomeAction::RemoveGame(index) => {
                 if let Ok(mut config) = self.config.lock() {
@@ -1625,6 +1634,18 @@ impl App {
                     }
                 }
             }
+        }
+        if !state.guard_ready {
+            let message = self.platform.selection_message();
+            ui.colored_label(
+                theme::AMBER,
+                if message.is_empty() {
+                    "正在确认切换，请稍候…"
+                } else {
+                    &message
+                },
+            );
+            ui.hyperlink_to("打开网页管理网吧模式", crate::platform_api::ORIGIN_URL);
         }
         if !self.status_msg.is_empty() {
             ui.add_space(8.0);
@@ -1636,13 +1657,37 @@ impl App {
         }
     }
 
-    fn request_manual_pause(&mut self) {
-        if let Ok(mut shared) = self.shared.lock() {
-            shared.manual_pause_result = None;
-            shared.manual_cmd = Some(ManualCmd::Pause);
-            shared.log("界面指令：立即暂停计时");
+    fn selected_provider(&self) -> Provider {
+        self.config
+            .lock()
+            .map(|c| c.selected_provider)
+            .unwrap_or_default()
+    }
+    fn selected_shared(&self) -> Arc<Mutex<Shared>> {
+        if self.selected_provider() == Provider::Etalien {
+            self.etalien.shared.clone()
+        } else {
+            self.shared.clone()
         }
-        self.status_msg = "暂停指令已发送，请在雷神官方微信小程序下拉刷新核对计时状态。".into();
+    }
+    fn request_manual_pause(&mut self) {
+        let Ok(c) = self.config.lock() else {
+            return;
+        };
+        if !c.is_active(c.selected_provider) {
+            return;
+        }
+        let shared = if c.selected_provider == Provider::Etalien {
+            &self.etalien.shared
+        } else {
+            &self.shared
+        };
+        if let Ok(mut s) = shared.lock() {
+            s.manual_pause_result = None;
+            s.manual_cmd = Some(ManualCmd::Pause);
+            s.log("界面指令：立即暂停当前加速器");
+        }
+        self.status_msg = format!("已请求暂停{}，等待执行结果。", c.selected_provider.name());
     }
 
     fn game_add_form(&mut self, ui: &mut egui::Ui) {
@@ -1908,6 +1953,9 @@ impl App {
     }
 
     fn auto_account_refresh_due(&mut self, now: Instant, active: bool) -> bool {
+        if self.selected_provider() != Provider::Leigod {
+            return false;
+        }
         let opened = active && !self.account_window_active;
         let entered_account =
             active && self.page == Page::Account && self.last_account_page != Page::Account;
@@ -2080,12 +2128,16 @@ impl App {
     }
 
     fn page_account(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
-            ui.selectable_value(&mut self.account_provider, 0, "雷神加速器");
-            ui.selectable_value(&mut self.account_provider, 1, "外星仔加速器");
-        });
-        ui.separator();
-        if self.account_provider == 1 {
+        let provider = self.selected_provider();
+        ui.label(theme::title(
+            &format!("当前守护：{}加速器", provider.name()),
+            18.0,
+        ));
+        ui.label("在守护概览切换加速器，所有页面和操作同步切换。");
+        if !self.config.lock().is_ok_and(|c| c.is_active(provider)) {
+            ui.disable();
+        }
+        if provider == Provider::Etalien {
             self.etalien.show(ui, &self.config, &self.platform);
             return;
         }
@@ -2501,6 +2553,17 @@ impl App {
     }
 
     fn page_strategy(&mut self, ui: &mut egui::Ui) {
+        ui.label(format!(
+            "当前守护：{}加速器",
+            self.selected_provider().name()
+        ));
+        if !self
+            .config
+            .lock()
+            .is_ok_and(|c| c.is_active(c.selected_provider))
+        {
+            ui.disable();
+        }
         ui.add_space(8.0);
         if let Ok(mut c) = self.config.lock() {
             if theme::switch_row(ui, &mut c.strategy.enabled, "启用自动暂停（总开关）").changed()
@@ -2735,17 +2798,17 @@ impl App {
     }
 
     fn page_logs(&mut self, ui: &mut egui::Ui) {
+        let selected = self.selected_shared();
         ui.horizontal(|ui| {
             ui.label(theme::title("运行记录", 18.0));
             if ui.button("清空").clicked() {
-                if let Ok(mut s) = self.shared.lock() {
+                if let Ok(mut s) = selected.lock() {
                     s.logs.clear();
                 }
             }
         });
         ui.separator();
-        let text = self
-            .shared
+        let text = selected
             .lock()
             .map(|s| s.logs.iter().cloned().collect::<Vec<_>>().join("\n"))
             .unwrap_or_default();

@@ -141,6 +141,17 @@ impl Panel {
         ));
     }
 
+    pub(crate) fn selection_changed(&self) {
+        if let Some(agent) = &self.agent {
+            agent.selection();
+        }
+    }
+    pub(crate) fn selection_message(&self) -> String {
+        self.agent
+            .as_ref()
+            .and_then(|a| a.view.lock().ok().map(|v| v.selection_message.clone()))
+            .unwrap_or_default()
+    }
     pub(crate) fn revoke_remote(&self) {
         if let Some(agent) = &self.agent {
             agent.remote(Provider::Leigod, false);
@@ -554,7 +565,11 @@ impl Panel {
             self.dispatch(Action::Refresh, store, ctx);
         }
     }
+    #[cfg(test)]
     pub(crate) fn render(&mut self, ui: &mut egui::Ui) {
+        self.render_for(ui, Provider::Leigod);
+    }
+    pub(crate) fn render_for(&mut self, ui: &mut egui::Ui, selected: Provider) {
         let busy = self.pending.is_some();
         ui.label(theme::title("守护平台账号", 20.0));
         ui.label(
@@ -740,7 +755,7 @@ impl Panel {
         });
         ui.add_space(10.0);
         ui.label(theme::title("服务器失联保护", 16.0));
-        for provider in Provider::ALL {
+        for provider in [selected] {
             ui.push_id(provider.index(), |ui| {
         let remote = &view.remote[provider.index()];
         ui.label(egui::RichText::new(format!("{}账号", provider.name())).strong());

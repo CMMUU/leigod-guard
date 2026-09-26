@@ -17,6 +17,7 @@ struct MonitorState {
     valid_for: Duration,
     manual_until: Option<Instant>,
     enabled: bool,
+    selection_generation: Option<u64>,
 }
 
 pub struct GameMonitor(Mutex<MonitorState>);
@@ -30,6 +31,7 @@ impl GameMonitor {
             valid_for: Duration::from_secs(7),
             manual_until: None,
             enabled: true,
+            selection_generation: None,
         })))
     }
     pub fn start(config: Arc<Mutex<crate::config::Config>>) -> Arc<Self> {
@@ -39,6 +41,7 @@ impl GameMonitor {
             valid_for: Duration::from_secs(7),
             manual_until: None,
             enabled: false,
+            selection_generation: None,
         })));
         let bg = monitor.clone();
         if std::thread::Builder::new()
@@ -60,6 +63,16 @@ impl GameMonitor {
             );
         }
         monitor
+    }
+
+    pub fn reset(&self) {
+        if let Ok(mut s) = self.0.lock() {
+            s.tracker = Tracker::default();
+            s.last = Observation::unknown(Instant::now());
+            s.manual_until = None;
+            s.selection_generation = None;
+            s.enabled = false;
+        }
     }
 
     pub fn latest(&self) -> Observation {
@@ -100,6 +113,17 @@ impl GameMonitor {
     pub fn observe_now(&self, cfg: &crate::config::Config) -> Result<Observation, String> {
         // Serialize only process observation. Never hold this mutex over HTTP.
         let mut s = self.0.lock().map_err(|_| "游戏观察状态不可用")?;
+        if !cfg.is_active(cfg.selected_provider) {
+            s.last = Observation::unknown(Instant::now());
+            s.enabled = false;
+            return Err("守护对象切换中".into());
+        }
+        if s.selection_generation != Some(cfg.selection_generation) {
+            s.tracker = Tracker::default();
+            s.manual_until = None;
+            s.last = Observation::unknown(Instant::now());
+            s.selection_generation = Some(cfg.selection_generation);
+        }
         s.enabled = cfg.strategy.enabled;
         let watch: Vec<_> = cfg
             .games
