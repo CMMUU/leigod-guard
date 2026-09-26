@@ -658,6 +658,10 @@ pub fn run(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
         // 处理 UI 手动指令
         let cmd = shared.lock().ok().and_then(|mut s| s.manual_cmd.take());
         if let Some(cmd) = cmd {
+            let Some(_publish_permit) = cfg.lock().ok().and_then(|c| c.permit(Provider::Leigod))
+            else {
+                continue;
+            };
             match cmd {
                 ManualCmd::Pause => match call_with_retry(&shared, &cfg, api::pause, "暂停") {
                     Ok(msg) => {
@@ -778,6 +782,11 @@ pub fn run(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
                 set_startup_waiting_status(&shared, remaining_secs, preparing_game);
             }
             decision @ (PauseDecision::Pause | PauseDecision::StartupPause) => {
+                let Some(_publish_permit) =
+                    cfg.lock().ok().and_then(|c| c.permit(Provider::Leigod))
+                else {
+                    continue;
+                };
                 let startup = decision == PauseDecision::StartupPause;
                 let result = call_with_retry_checked(&shared, &cfg, api::pause, "暂停", || {
                     auto_pause_guard(&cfg, &shared, &mut pause_watch, startup)

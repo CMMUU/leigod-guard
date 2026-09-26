@@ -651,6 +651,10 @@ fn reconcile_selection(
                 .select_guard(binding, target, current.revision, run)
                 .map_err(|_| "云端切换未确认，正在重试；旧保护可能仍生效。")?;
             *cloud = Some(next.clone());
+            if next.committed && (next.provider != Some(target) || next.revision < current.revision)
+            {
+                return Err("服务器守护选择响应不一致，尚未完成切换。".into());
+            }
             if next.other_devices > 0 {
                 notice = format!(
                     "本机已切换；旧加速器账号仍由其他 {} 台设备守护。",
