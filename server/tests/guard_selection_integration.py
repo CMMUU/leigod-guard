@@ -112,18 +112,25 @@ mock(et, 'etalien', id=int(nonce, 16) + 1000000000000, state=2)
 authorize(d, 'leigod', lei)
 authorize(d, 'etalien', et)
 authorize(peer, 'leigod', lei)
+heartbeat(d, 1)
+sql(f"UPDATE remote_grants SET last_seen=now()-interval '125 seconds' WHERE device_id='{d['device_id']}';")
 assert request(d, '/device/guard')['provider'] is None
+# A legacy target may have a queued offline episode; retain consent but discard it.
+legacy_aid = sql(f"SELECT account_id FROM remote_grants WHERE device_id='{d['device_id']}' AND provider='leigod';")
+sql(f"INSERT INTO remote_jobs(id,account_id,epoch,credential_version,state) SELECT gen_random_uuid(),id,epoch,credential_version,'queued' FROM remote_accounts WHERE id='{legacy_aid}';")
 s1 = select(d, 'leigod', 0)
+assert sql(f"SELECT count(*) FROM remote_grants WHERE device_id='{d['device_id']}' AND provider='leigod' AND armed_at IS NOT NULL AND last_seen>now()-interval '5 seconds';") == '1'
+assert sql(f"SELECT count(*) FROM remote_jobs WHERE account_id='{legacy_aid}' AND state='queued';") == '0'
 assert s1['committed'] and s1['revision'] == 1
 assert remote(d, 'leigod')['enabled'] and not remote(d, 'etalien')['enabled']
-heartbeat(d, 1, s1)
+heartbeat(d, 2, s1)
 s2 = select(d, 'etalien', s1['revision'])
 assert s2['committed'] and s2['other_devices'] == 1 and not remote(d, 'leigod')['enabled']
 assert not remote(d, 'etalien')['enabled'], 'selection must not authorize target'
 assert remote(peer, 'leigod')['enabled'], 'peer device consent must remain intact'
-heartbeat(d, 2, s1, 409)
-heartbeat(d, 2, None, 409)
-heartbeat(d, 2, s2)
+heartbeat(d, 3, s1, 409)
+heartbeat(d, 3, None, 409)
+heartbeat(d, 3, s2)
 authorize(d, 'leigod', lei, 409)
 select(d, 'leigod', s1['revision'], status=409)
 check('legacy opt-in, selected-only authorization, stale heartbeat/CAS rejected, peer preserved')

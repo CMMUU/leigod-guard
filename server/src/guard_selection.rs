@@ -48,8 +48,8 @@ pub async fn change(
     // device selection must not silently disable it. The web owner can close it.
     let cafe: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM remote_grants g JOIN cafe_policies c ON c.account_id=g.account_id WHERE g.device_id=$1 AND g.provider=$2 AND c.enabled)")
         .bind(id).bind(other.as_str()).fetch_one(&mut *tx).await?;
-    let busy: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM remote_grants g JOIN remote_jobs j ON j.account_id=g.account_id WHERE g.device_id=$1 AND g.provider=$2 AND j.lease_until>now())")
-        .bind(id).bind(other.as_str()).fetch_one(&mut *tx).await?;
+    let busy: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM remote_grants g JOIN remote_jobs j ON j.account_id=g.account_id WHERE g.device_id=$1 AND j.lease_until>now())")
+        .bind(id).fetch_one(&mut *tx).await?;
     if cafe || busy {
         return Ok(Json(
             json!({"provider":d.get::<Option<String>,_>("guard_provider"),"revision":revision,"committed":false,"reason":if cafe {"cafe_mode"} else {"in_flight"}}),
@@ -65,6 +65,18 @@ pub async fn change(
             .bind(other.as_str())
             .execute(&mut *tx)
             .await?;
+    }
+    if changed || p.run_generation > d.get::<i64, _>("run_generation") {
+        // A selected provider may retain a legacy dual-provider grant. This
+        // authenticated, revisioned connection ends its old offline episode.
+        // Keep the existing armed/unarmed state: a previously protected device
+        // must still time out if it crashes before the next heartbeat, while a
+        // never-confirmed grant must still await its first heartbeat.
+        // Independent cafe deadlines are not reset by a device selection.
+        sqlx::query("SELECT remote_cancel(g.account_id) FROM remote_grants g WHERE g.device_id=$1 AND g.provider=$2 AND g.enabled AND NOT EXISTS(SELECT 1 FROM cafe_policies c WHERE c.account_id=g.account_id AND c.enabled)")
+            .bind(id).bind(p.provider.as_str()).execute(&mut *tx).await?;
+        sqlx::query("UPDATE remote_grants SET last_seen=now(),prepare_until=now(),run_generation=$3,updated_at=now() WHERE device_id=$1 AND provider=$2 AND enabled")
+            .bind(id).bind(p.provider.as_str()).bind(p.run_generation).execute(&mut *tx).await?;
     }
     let peers: i64 = sqlx::query_scalar("SELECT count(DISTINCT g.device_id) FROM remote_grants g WHERE g.enabled AND g.device_id<>$1 AND g.provider=$2 AND g.account_id IN (SELECT account_id FROM remote_grants WHERE device_id=$1 AND provider=$2)")
         .bind(id).bind(other.as_str()).fetch_one(&mut *tx).await?;
