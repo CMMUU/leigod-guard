@@ -166,6 +166,10 @@ impl Panel {
 
     pub fn balance(&self, s: &Shared) -> crate::ui_home::TimeBalance {
         crate::ui_home::TimeBalance {
+            free_seconds: s
+                .etalien_info
+                .as_ref()
+                .map(|info| info.free_duration_second.max(0) as u64),
             seconds: s
                 .etalien_info
                 .as_ref()

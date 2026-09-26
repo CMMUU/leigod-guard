@@ -1536,6 +1536,7 @@ impl App {
                     self.etalien.balance(&s)
                 } else {
                     crate::ui_home::TimeBalance {
+                        free_seconds: None,
                         seconds: s
                             .account_info
                             .as_ref()
@@ -1585,7 +1586,9 @@ impl App {
             balance: snapshot.as_ref().map(|s| &s.4),
         };
         let mut enabled = config.strategy.enabled;
-        let action = crate::ui_home::render(ui, &state, &mut enabled);
+        let action = ui
+            .scope(|ui| crate::ui_home::render(ui, &state, &mut enabled))
+            .inner;
         if enabled != config.strategy.enabled {
             if let Ok(mut config) = self.config.lock() {
                 config.strategy.enabled = enabled;

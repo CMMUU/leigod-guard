@@ -21,6 +21,7 @@ pub struct HomeState<'a> {
 #[derive(Default)]
 pub struct TimeBalance {
     pub seconds: Option<u64>,
+    pub free_seconds: Option<u64>,
     pub checked_at: Option<String>,
     pub logged_in: bool,
     pub refreshing: bool,
@@ -455,6 +456,13 @@ fn time_balance(ui: &mut Ui, balance: Option<&TimeBalance>) -> HomeAction {
         22.0
     };
     ui.label(theme::title(value, size));
+    if let Some(free) = balance.free_seconds.filter(|_| balance.logged_in) {
+        ui.label(
+            RichText::new(format!("免费时长 {}（单独计）", duration_label(free)))
+                .size(11.0)
+                .color(theme::MUTED),
+        );
+    }
     ui.spacing_mut().interact_size.y = 19.0;
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 7.0;
