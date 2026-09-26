@@ -968,6 +968,9 @@ fn render_apple_preview() {
             1.0,
             &output.join(format!("etalien-home{suffix}.png")),
         );
+        // Each offscreen renderer owns fresh GPU textures; do not reuse an
+        // egui context whose initial texture delta was consumed by another save.
+        let (ctx, mut app) = fixture();
         app.page = Page::Account;
         app.config
             .lock()
