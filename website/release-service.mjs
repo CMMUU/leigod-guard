@@ -1,7 +1,8 @@
 // Anonymous release discovery only. Never forward visitor headers or credentials.
 const REPOS = { gitee: 'https://gitee.com/cmmuu/leigod-guard', github: 'https://github.com/CMMUU/leigod-guard' };
 const APIS = { gitee: 'https://gitee.com/api/v5/repos/cmmuu/leigod-guard/releases', github: 'https://api.github.com/repos/CMMUU/leigod-guard/releases' };
-const MODES = ['auto', 'gitee', 'github'];
+const MODES = ['center', 'auto', 'gitee', 'github'];
+const CENTER_CATALOG = 'https://downloads.cmmuu.com/api/catalog';
 const TAG = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const HASH = /^[a-f0-9]{64}$/;
 const HEADERS = { 'X-Robots-Tag': 'noindex', 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' };
@@ -14,6 +15,7 @@ export function compareTags(a, b) {
 }
 
 function trustedRedirect(value, source) {
+  if (source === 'center') return false;
   const u = new URL(value);
   if (u.protocol !== 'https:' || u.username || u.password || u.port || u.hash) return false;
   if (source === 'gitee') return (u.hostname === 'foruda.gitee.com' && u.pathname.startsWith('/attach_file/')) ||
@@ -53,6 +55,7 @@ async function readLimited(url, source, signal, fetcher, limit = 1_048_576) {
 }
 
 export async function loadRelease(source, version, signal, fetcher = fetch) {
+  if (source === 'center') return loadCenterRelease(version, signal, fetcher);
   const get = async url => JSON.parse(await readLimited(url, source, signal, fetcher));
   let release;
   if (version || source === 'github') {
@@ -96,6 +99,44 @@ export async function loadRelease(source, version, signal, fetcher = fetch) {
   return { source, version: tag, files, checkedAt: new Date().toISOString() };
 }
 
+// Publication and file URLs belong to the center; the website stores no per-release IDs.
+async function loadCenterRelease(version, signal, fetcher) {
+  const catalog = JSON.parse(await readLimited(CENTER_CATALOG, 'center', signal, fetcher, 4_194_304));
+  if (!Array.isArray(catalog.files)) throw new Error('Invalid download center catalog');
+  const entries = catalog.files.filter(f => f && f.status === 'published' && TAG.test(f.version) &&
+    (f.project === 'leigod-guard' || (f.project == null && f.category === '加速器守护')) &&
+    ['manual', 'release'].includes(f.source));
+  const tag = version || entries.map(f => f.version).sort((a, b) => compareTags(b, a))[0];
+  if (!TAG.test(tag || '')) throw new Error('No published download center version');
+  const names = { installer: `leigod-guard-${tag}-windows-x64-setup.exe`, portable: `leigod-guard-${tag}-windows-x64.zip`, checksums: 'SHA256SUMS.txt' };
+  const files = {};
+  for (const [kind, name] of Object.entries(names)) {
+    const matches = entries.filter(f => f.version === tag && f.filename === name);
+    const f = matches[0];
+    if (matches.length !== 1 || !/^(?:[a-f0-9]{64}|[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/.test(f.id) ||
+        !Number.isSafeInteger(f.size) || f.size <= 0 || f.size > (kind === 'checksums' ? 32768 : 536870912) ||
+        !HASH.test(f.sha256 || '') || (kind !== 'checksums' && (f.platform !== 'windows' || f.architecture !== 'x64')) ||
+        f.downloadUrl !== `https://files.cmmuu.com/d/${f.id}/${encodeURIComponent(name)}`) {
+      throw new Error('Incomplete or invalid download center version');
+    }
+    files[kind] = { name, size: f.size, sha256: f.sha256, url: f.downloadUrl };
+  }
+  const manifest = await readLimited(files.checksums.url, 'center', signal, fetcher, 32768);
+  const bytes = new TextEncoder().encode(manifest);
+  const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(b => b.toString(16).padStart(2, '0')).join('');
+  if (bytes.length !== files.checksums.size || digest !== files.checksums.sha256) throw new Error('Download center checksum file changed');
+  const hashes = new Map();
+  for (const line of manifest.replace(/^\uFEFF/, '').split(/\r?\n/).filter(Boolean)) {
+    const match = /^([a-fA-F0-9]{64}) [ *]([^/\\\0]+)$/.exec(line);
+    if (!match || hashes.has(match[2])) throw new Error('Invalid checksum manifest');
+    hashes.set(match[2], match[1].toLowerCase());
+  }
+  for (const kind of ['installer', 'portable']) {
+    if (hashes.get(files[kind].name) !== files[kind].sha256) throw new Error('Download center file checksum mismatch');
+  }
+  return { source: 'center', version: tag, files, checkedAt: new Date().toISOString() };
+}
+
 export function selectRelease(results, mode = 'auto', pinned) {
   const releases = results.filter(r => r && (mode === 'auto' || r.source === mode));
   const valid = releases.filter(r => !pinned || (r.version === pinned.version && r.files[pinned.edition].size === pinned.size && r.files[pinned.edition].sha256 === pinned.sha256));
@@ -112,11 +153,11 @@ async function discover(request, mode, version, context, cache, fetcher) {
   const sources = mode === 'auto' ? ['gitee', 'github'] : [mode];
   const signal = AbortSignal.timeout(8000);
   const results = await Promise.allSettled(sources.map(async source => {
-    const key = new Request(`${new URL(request.url).origin}/__release-cache/v1/${source}/${version || 'latest'}`);
+    const key = new Request(`${new URL(request.url).origin}/__release-cache/v2/${source}/${version || 'latest'}`);
     const cached = await cache?.match(key);
     if (cached) return cached.json();
     const release = await loadRelease(source, version, signal, fetcher);
-    if (cache) context.waitUntil(cache.put(key, Response.json(release, { headers: { 'Cache-Control': 'public, max-age=300' } })).catch(() => {}));
+    if (cache) context.waitUntil(cache.put(key, Response.json(release, { headers: { 'Cache-Control': `public, max-age=${source === 'center' ? 60 : 300}` } })).catch(() => {}));
     return release;
   }));
   return { releases: results.filter(r => r.status === 'fulfilled').map(r => r.value), partial: results.some(r => r.status === 'rejected') };
@@ -130,7 +171,7 @@ function downloadPath(edition, release, source = release.source) {
 export async function handleDownloadRequest(request, context, cache, fetcher = fetch) {
   const url = new URL(request.url), api = url.pathname === '/api/downloads';
   const edition = url.pathname.split('/')[2];
-  const mode = url.searchParams.get('source') || 'auto';
+  const mode = url.searchParams.get('source') || 'center';
   if (!['GET', 'HEAD'].includes(request.method)) return new Response('Method not allowed', { status: 405, headers: { ...HEADERS, Allow: 'GET, HEAD' } });
   const version = url.searchParams.get('version');
   const sha256 = url.searchParams.get('sha256');
@@ -145,13 +186,13 @@ export async function handleDownloadRequest(request, context, cache, fetcher = f
     const { primary, mirrors } = selectRelease(releases, mode, pinned ? { version, sha256, size, edition } : undefined);
     if (!api) return new Response(null, { status: 302, headers: { ...HEADERS, Location: primary.files[edition].url } });
     const downloads = Object.fromEntries(['installer', 'portable'].map(kind => [kind, {
-      url: downloadPath(kind, primary, mode), size: primary.files[kind].size, sha256: primary.files[kind].sha256,
+      url: primary.source === 'center' ? primary.files[kind].url : downloadPath(kind, primary, mode), size: primary.files[kind].size, sha256: primary.files[kind].sha256,
       sources: Object.fromEntries(mirrors.map(r => [r.source, downloadPath(kind, r)]))
     }]));
     return new Response(request.method === 'HEAD' ? null : JSON.stringify({ version: primary.version, source: primary.source, partial, checkedAt: primary.checkedAt, downloads }), { headers: { ...HEADERS, 'Content-Type': 'application/json; charset=utf-8' } });
   } catch {
     if (api) return Response.json({ error: '暂未查到可用的完整正式版，请稍后重试或前往发布页。' }, { status: 503, headers: HEADERS });
-    const text = '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>下载暂不可用 · 雷神守护</title><h1>暂时无法开始下载</h1><p>下载源暂不可用或文件尚未同步完成，未替换为其他版本。请返回官网重试，或在发布页手动选择。</p><p><a href="/#download">返回官网下载</a> · <a href="https://gitee.com/cmmuu/leigod-guard/releases">Gitee 发布页</a> · <a href="https://github.com/CMMUU/leigod-guard/releases/latest">GitHub 发布页</a></p></html>';
+    const text = '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>下载暂不可用 · 加速器守护</title><h1>暂时无法开始下载</h1><p>下载源暂不可用或文件尚未同步完成，未替换为其他版本。请返回官网重试，或在发布页手动选择。</p><p><a href="/#download">返回官网下载</a> · <a href="https://downloads.cmmuu.com/">下载中心</a> · <a href="https://gitee.com/cmmuu/leigod-guard/releases">Gitee 发布页</a> · <a href="https://github.com/CMMUU/leigod-guard/releases/latest">GitHub 发布页</a></p></html>';
     return new Response(request.method === 'HEAD' ? null : text, { status: 503, headers: { ...HEADERS, 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': "default-src 'none'; base-uri 'none'; frame-ancestors 'none'" } });
   }
 }

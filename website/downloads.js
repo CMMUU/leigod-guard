@@ -24,7 +24,8 @@ async function refresh() {
     if (!response.ok) throw new Error('Release unavailable');
     const release = await response.json();
     if (current !== controller) return;
-    status.textContent = `${release.partial ? '可用版本' : '最新正式版'} ${release.version} · ${release.source === 'gitee' ? 'Gitee 国内下载' : 'GitHub 下载'}${release.partial ? ' · 另一来源暂未完成检查' : ''}`;
+    const labels = { center: '下载中心', gitee: 'Gitee 国内下载', github: 'GitHub 下载' };
+    status.textContent = `${release.source === 'center' ? '下载中心已发布' : release.partial ? '可用版本' : '最新正式版'} ${release.version} · ${labels[release.source]}${release.partial ? ' · 另一来源暂未完成检查' : ''}`;
     for (const link of document.querySelectorAll('[data-edition]')) link.href = release.downloads[link.dataset.edition].url;
     for (const holder of document.querySelectorAll('[data-mirrors]')) {
       const item = release.downloads[holder.dataset.mirrors];

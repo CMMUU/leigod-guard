@@ -4,7 +4,7 @@
 
 ## 项目网站
 
-项目介绍页由 Cloudflare Pages 托管，不提供账户登录，不查询访客的雷神账户，也不发送暂停请求。页面不包含访客统计脚本或广告；应用截图和时长卡片均为演示数据。下载脚本只向本站 `/api/downloads` 请求公开版本信息；本站通过 Pages Functions 匿名检查固定的 GitHub/Gitee 项目公开发布及校验文件，不向上游转发访客请求头或凭据。指定单源时只检查该平台。下载按钮经本站 `/download/installer` 或 `/download/portable` 跳转到对应平台的官方文件分发地址，后续访问遵循该平台的隐私规则。
+项目介绍页由 Cloudflare Pages 托管，不提供账户登录，不查询访客的雷神账户，也不发送暂停请求。页面不包含访客统计脚本或广告；应用截图和时长卡片均为演示数据。下载脚本只向本站 `/api/downloads` 请求公开版本信息；本站通过 Pages Functions 默认匿名读取 `downloads.cmmuu.com` 的公开目录及 `files.cmmuu.com` 的校验文件；手动选择 Gitee/GitHub 时只检查对应项目公开发布，不向上游转发访客请求头或凭据。下载中心模式在校验后直接使用文件域地址；固定入口 `/download/installer`、`/download/portable` 同样解析并跳转到当前来源的文件。文件下载会向对应文件服务发送普通网络请求，不发送应用账户或进程资料。
 
 访问网站仍需向托管服务发送普通 HTTP 请求，Cloudflare 可处理 IP 地址、请求路径等网络元数据；这与 Windows 应用的本地账户数据相互独立。网站不接收应用登录凭据或本机进程名单。
 

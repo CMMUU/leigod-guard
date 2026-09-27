@@ -48,13 +48,22 @@ python -m http.server 8877 --bind 127.0.0.1 --directory website/dist
 
 ## 自动下载入口
 
-首页与下载区域提供安装版 EXE、绿色版 ZIP 两个直接下载按钮。`downloads.js` 请求本站 `/api/downloads`，由 `release-service.mjs` 比较两个来源的完整正式版，同版本优先 Gitee。Gitee 检查最近 100 条公开发布，GitHub 使用正式最新版接口；仅接受标准 `vX.Y.Z`、安装 EXE、绿色 ZIP 和 SHA256SUMS 全部就绪的发布。并行检查共用 8 秒期限，每个来源的成功结果在边缘缓存 5 分钟；来源失败显示检查不完整，不宣称已确认最新版。无需新增 token 或每次改写链接。
+首页与下载区域默认使用 **下载中心**。`downloads.js` 请求本站 `/api/downloads`，`release-service.mjs` 从固定的 `https://downloads.cmmuu.com/api/catalog` 读取“加速器守护”公开条目，按正式版本号选择已发布版本，要求安装 EXE、绿色 ZIP 和 SHA256SUMS 全部就绪，并核对平台、大小、文件域、校验清单本身及两个成品的 SHA-256。下载按钮直接使用目录返回的 `files.cmmuu.com` 文件地址，不在源码保存版本号或文件 ID。
 
-「仅 Gitee」「仅 GitHub」只检查所选平台。两种下载均通过 `/download/installer` 或 `/download/portable` 跳转到官方文件地址；显示版本后固定版本、文件大小和 SHA-256，备用入口只提供相同文件。浏览器开始文件传输后，网页无法可靠检测传输失败，因此保留手动同版本备用入口，不承诺浏览器自动换源或自动安装。服务异常保留发布页；无 JavaScript 时默认下载链接仍可由服务器解析。
+可长期使用两个固定入口：
 
-只代理公开版本和小型校验清单，不代理安装包、不查询访客账户、不转发访客凭据。`functions/` 与 `dist/_routes.json` 只路由下载接口，正文、SEO 文件和图片保持静态服务。网站改版不需要新增 Windows 软件版本或重复发版。
+- 安装版：`https://leigod.cmmuu.com/download/installer`
+- 绿色版：`https://leigod.cmmuu.com/download/portable`
 
-验证：`node --test website/release-service.test.mjs`。包含来源不同步、单源、预发布、附件不完整、超时/离线、篡改地址和固定版本校验。Python 静态预览不运行 Functions；完整本地预览需在 `website` 目录执行 `npx wrangler pages dev dist --port 8877`。
+无 JavaScript 时这两个入口仍由服务端解析并跳转。下载中心成功结果最多缓存 60 秒；未发布、缺件、重复文件、大小/哈希不符时显示不可用，不偷偷换源或把旧版本冒充最新。文件字节由独立文件域传输，官网只查询公开目录和小型校验清单。
+
+维护者在下载中心“加速器守护”分类上传并发布新版本的三个原始成品后，官网会自动跟随，无需修改链接或重新构建网站。版本字段统一为 `vX.Y.Z`，程序包平台为 `windows`、架构为 `x64`，保留原始文件名及 SHA256SUMS；同版同文件只保留一个公开条目。若将来接入正式发行导入，项目标识使用 `leigod-guard`。本次仅实现官网自动解析，未配置 GitHub 到下载中心的自动上传。
+
+用户仍可手动选择「仅 Gitee」「仅 GitHub」，这两种模式只检查所选平台。旧分享链接 `source=auto` 保留 GitHub/Gitee 两源比较、同版本优先 Gitee 的行为；成功元数据缓存 5 分钟，检查期限 8 秒。备用来源的固定版本请求保留版本、文件大小和 SHA-256 约束。Windows 客户端的自动更新策略未改变。
+
+不代理安装包、不查询访客账户、不转发访客凭据。`functions/` 与 `dist/_routes.json` 只路由下载接口，正文、SEO 文件和图片保持静态服务。网站修改无需新增 Windows 软件版本或重复发版。
+
+验证：`node --test website/release-service.test.mjs`。覆盖下载中心版本推进、固定入口、直接文件链接、缺件/重复/草稿/错误平台/校验错误/异常跳转拒绝、60 秒缓存及原有严格单源和同版本备用逻辑。Python 静态预览不运行 Functions；完整本地预览可在 `website` 目录执行 `npx wrangler pages dev dist --port 8877`。
 
 ## 搜索与 AI 资料维护
 
