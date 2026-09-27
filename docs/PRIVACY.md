@@ -1,6 +1,6 @@
 # 隐私与本地数据说明
 
-本说明适用于 0.19.0。加速器守护由个人维护，是第三方工具；雷神、外星仔账户服务及验证码服务分别由对应提供方运营。
+本说明适用于 0.20.0。加速器守护由个人维护，是第三方工具；雷神、外星仔账户服务及验证码服务分别由对应提供方运营。
 
 ## 项目网站
 
@@ -76,8 +76,8 @@ Windows 默认配置目录为 `%APPDATA%\leigod-guard\`。
 
 ## 网络访问
 
-- 在「关于与更新」点击「检查更新」，或启用默认关闭的「启动时自动检查更新」后启动应用，会匿名检查公开版本信息。0.10.0 起默认「自动选择（国内优先）」并行访问 GitHub 和 Gitee；「仅 GitHub」或「仅 Gitee」只访问指定来源，旧配置保存的明确选择会保留。GitHub 使用 `https://api.github.com/repos/CMMUU/leigod-guard/releases/latest`；Gitee 使用 `https://gitee.com/api/v5/repos/cmmuu/leigod-guard/releases` 列表及相应版本的附件列表。切换本身不发起检查。请求包含当前应用版本的 User-Agent，服务会接收到普通网络请求中的 IP 地址等连接信息。不发送雷神账户名、密码、token、游戏名单或本地配置，不需要 GitHub 或 Gitee 凭据。
-- 只有点击「下载并自动更新」才下载校验文件和对应安装 EXE / 绿色 ZIP。自动模式下载失败时，会尝试另一来源的同一版本并显示切换状态；必要时使用 GitHub `releases/tags/指定标签` 或 Gitee 列表查询精确版本。单源模式不会回退至另一服务。GitHub 使用本仓库的 Release 资产 API 和官方分发地址；Gitee 使用本仓库的附件 API，允许跳转至 `foruda.gitee.com/attach_file/`。各次下载核对文件名、大小及 SHA-256，备用源不得更改已确认的校验值或混用残片；完整性校验不是独立的发布者签名。关闭启动检查后，仍可手动检查和下载。完整说明见 [自动更新规则](https://github.com/CMMUU/leigod-guard/blob/v0.10.1/docs/UPDATES.md)。
+- 在「关于与更新」点击「检查更新」，或启用默认关闭的「启动时自动检查更新」后启动应用，会匿名检查公开版本信息。0.20.0 起默认「下载中心（推荐）」访问 `https://downloads.cmmuu.com/api/catalog`，下载校验表和程序包访问 `https://files.cmmuu.com/d/…`。新配置、缺省来源及旧 `auto` 迁移至下载中心；已保存的「仅 GitHub」或「仅 Gitee」保留，严格只访问指定来源。手动选择「自动选择（Gitee/GitHub）」才并行检查这两个来源。GitHub 使用 `https://api.github.com/repos/CMMUU/leigod-guard/releases/latest`；Gitee 使用 `https://gitee.com/api/v5/repos/cmmuu/leigod-guard/releases` 列表及相应版本的附件列表。切换本身不发起检查。请求包含当前应用版本的 User-Agent，服务会接收到普通网络请求中的 IP 地址等连接信息。不发送雷神账户名、密码、token、游戏名单或本地配置，不需要 GitHub 或 Gitee 凭据。
+- 只有点击「下载并自动更新」才下载校验文件和对应安装 EXE / 绿色 ZIP。仅可选的 Gitee/GitHub 自动模式下载失败时，会尝试另一来源的同一版本并显示切换状态；必要时使用 GitHub `releases/tags/指定标签` 或 Gitee 列表查询精确版本。单源模式不会回退至另一服务。GitHub 使用本仓库的 Release 资产 API 和官方分发地址；Gitee 使用本仓库的附件 API，允许跳转至 `foruda.gitee.com/attach_file/`。各次下载核对文件名、大小及 SHA-256，备用源不得更改已确认的校验值或混用残片；完整性校验不是独立的发布者签名。关闭启动检查后，仍可手动检查和下载。完整说明见 [自动更新规则](https://github.com/CMMUU/leigod-guard/blob/v0.10.1/docs/UPDATES.md)。
 - 安装版检测到 WebView2 Runtime 缺失时，会运行随包的微软安装引导程序，由它联网下载并安装运行时。此过程访问微软的下载服务，运行时及其更新按微软自身的许可和隐私政策处理。
 - 登录、短信、验证码配置、账户查询和暂停操作会访问 `https://webapi.leigod.com` 及雷神服务使用的验证接口。
 - 恢复已保存的登录态后，通过既有 `/api/user/info` 接口自动查询一次账户状态和剩余时长；重新打开面板、从托盘打开或进入账户页时也会刷新，快速重复打开按最短 5 秒间隔合并。首页和账户页在前台停留期间每 60 秒查询一次；切到其他页面、失去焦点或隐藏到托盘后不发起这种定时查询。用户仍可手动刷新，登录及暂停后的查询也会更新首页。查询不会调用暂停或恢复接口，不引入额外服务；使用本次响应的服务器时间处理活动时长。失败后有间隔限制，退出或更换账号清除原来的时长与查询时间。

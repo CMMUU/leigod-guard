@@ -1,9 +1,11 @@
-//! Anonymous, bounded GitHub/Gitee release checks and verified downloads.
+//! Anonymous, bounded download-center/GitHub/Gitee checks and verified downloads.
 //!
 //! This module never reads account configuration or executes an update. The UI
 //! decides when to call it; the separate helper applies a verified package only
 //! after an explicit user action.
 
+#[path = "update_center.rs"]
+mod update_center;
 #[path = "update_sources.rs"]
 mod update_sources;
 pub use update_sources::{
@@ -26,6 +28,7 @@ use windows::Win32::Storage::FileSystem::MoveFileW;
 
 pub const RELEASES_PAGE: &str = "https://github.com/CMMUU/leigod-guard/releases/latest";
 pub const GITEE_RELEASES_PAGE: &str = "https://gitee.com/cmmuu/leigod-guard/releases";
+pub const CENTER_RELEASES_PAGE: &str = "https://downloads.cmmuu.com/";
 const LATEST_API: &str = "https://api.github.com/repos/CMMUU/leigod-guard/releases/latest";
 const TAG_API_PREFIX: &str = "https://api.github.com/repos/CMMUU/leigod-guard/releases/tags/";
 const ASSET_API_PREFIX: &str = "https://api.github.com/repos/CMMUU/leigod-guard/releases/assets/";
@@ -46,6 +49,7 @@ const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600);
 #[serde(rename_all = "lowercase")]
 pub enum UpdateSource {
     #[default]
+    Center,
     GitHub,
     Gitee,
 }
@@ -53,6 +57,7 @@ pub enum UpdateSource {
 impl UpdateSource {
     pub fn label(self) -> &'static str {
         match self {
+            Self::Center => "下载中心",
             Self::GitHub => "GitHub",
             Self::Gitee => "Gitee",
         }
@@ -60,6 +65,7 @@ impl UpdateSource {
 
     pub fn releases_page(self) -> &'static str {
         match self {
+            Self::Center => CENTER_RELEASES_PAGE,
             Self::GitHub => RELEASES_PAGE,
             Self::Gitee => GITEE_RELEASES_PAGE,
         }
@@ -173,6 +179,9 @@ fn check_latest_before(
 ) -> Result<Option<ReleaseInfo>, String> {
     (|| {
         parse_version(current_version)?;
+        if source == UpdateSource::Center {
+            return update_center::check(current_version, None, deadline);
+        }
         if source == UpdateSource::Gitee {
             return check_gitee(current_version, None, deadline);
         }
@@ -246,7 +255,9 @@ fn check_gitee(
 fn check_tag(tag: &str, source: UpdateSource) -> Result<Option<ReleaseInfo>, String> {
     parse_version(tag.strip_prefix('v').ok_or("目标版本格式异常。")?)?;
     let deadline = Instant::now() + update_sources::CHECK_TIMEOUT;
-    let found = if source == UpdateSource::Gitee {
+    let found = if source == UpdateSource::Center {
+        update_center::check("0.0.0", Some(tag), deadline)?
+    } else if source == UpdateSource::Gitee {
         check_gitee("0.0.0", Some(tag), deadline)?
     } else {
         let response = client(source)?
@@ -608,6 +619,12 @@ fn asset_response(
     source: UpdateSource,
     timeout: Duration,
 ) -> Result<Response, String> {
+    if source == UpdateSource::Center {
+        update_center::validate(asset, &asset.name, MAX_PACKAGE_BYTES)?;
+        return bounded_asset_request(client.get(&asset.url), timeout)
+            .send()
+            .map_err(network_error);
+    }
     if source == UpdateSource::Gitee {
         let url = Url::parse(&asset.url).map_err(|_| "Gitee 附件地址异常。")?;
         if !trusted_source_redirect(source, &url) {
@@ -843,6 +860,9 @@ fn validate_source_asset(
     name: &str,
     limit: u64,
 ) -> Result<(), String> {
+    if source == UpdateSource::Center {
+        return update_center::validate(asset, name, limit);
+    }
     if source == UpdateSource::GitHub {
         return validate_asset(asset, tag, name, limit);
     }
@@ -862,6 +882,10 @@ fn validate_source_asset(
 }
 
 fn trusted_source_redirect(source: UpdateSource, url: &Url) -> bool {
+    // Center catalog and immutable file URLs are direct HTTPS endpoints.
+    if source == UpdateSource::Center {
+        return false;
+    }
     if source == UpdateSource::GitHub {
         return trusted_redirect(url);
     }

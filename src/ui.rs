@@ -2487,7 +2487,7 @@ impl App {
                         egui::ComboBox::from_id_salt("update_source")
                             .selected_text(config.updates.source.label())
                             .show_ui(ui, |ui| {
-                                for mode in [UpdateMode::Auto, UpdateMode::Gitee, UpdateMode::GitHub] {
+                                for mode in [UpdateMode::Center, UpdateMode::Auto, UpdateMode::Gitee, UpdateMode::GitHub] {
                                     ui.selectable_value(&mut config.updates.source, mode, mode.label());
                                 }
                             });
@@ -2505,7 +2505,7 @@ impl App {
                 }
             }
             ui.label(egui::RichText::new(
-                "自动选择会检查两个来源，选择可用的新版本，同版本优先 Gitee，下载失败后尝试备用源。选择“仅 Gitee”或“仅 GitHub”时，只连接该来源。启动检查默认关闭，点击更新后才会下载并安装。"
+                "默认从下载中心检查和下载。也可手动选择 Gitee、GitHub，或自动比较这两个来源。下载中心和单源模式失败时请重试或切换来源。启动检查默认关闭，点击更新后才会下载并安装。"
             ).color(theme::MUTED).small());
             ui.add_space(8.0);
             ui.horizontal_wrapped(|ui| {
@@ -2567,6 +2567,7 @@ impl App {
             ui.collapsing("手动下载备用入口（网页）", |ui| {
                 ui.label(egui::RichText::new("应用内更新失败，或需要给另一台电脑下载安装包时，可打开发布页手动下载。").size(12.0).color(theme::MUTED));
                 ui.horizontal_wrapped(|ui| {
+                    ui.hyperlink_to("下载中心（推荐）", crate::updater::CENTER_RELEASES_PAGE);
                     ui.hyperlink_to("Gitee 发布页（国内）", crate::updater::GITEE_RELEASES_PAGE);
                     ui.hyperlink_to("GitHub 发布页", crate::updater::RELEASES_PAGE);
                     ui.hyperlink_to("项目使用说明", "https://github.com/CMMUU/leigod-guard#readme");
