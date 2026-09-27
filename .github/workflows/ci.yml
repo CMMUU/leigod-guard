@@ -59,6 +59,9 @@ jobs:
         run: cargo fetch --locked --target $env:RUST_TARGET
       - name: Run offline unit tests
         run: cargo test --locked --offline --target $env:RUST_TARGET
+      - name: Verify public download-center packages without executing them
+        if: github.event_name == 'workflow_dispatch'
+        run: cargo test --locked --offline --target $env:RUST_TARGET public_center_packages_download_and_verify -- --ignored --nocapture
       - name: Verify silent and manual startup with actual eframe
         run: ./scripts/test-silent-start.ps1 -Target $env:RUST_TARGET
       - name: Verify normal session end on isolated eframe windows

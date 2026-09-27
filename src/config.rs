@@ -148,7 +148,7 @@ impl Etalien {
 pub struct Updates {
     /// 仅检查公开版本信息；下载安装仍需用户点击。
     pub check_on_startup: bool,
-    /// 缺省为国内优先的自动选择；保留旧配置中明确保存的来源。
+    /// 缺省及旧 auto 迁移为下载中心；保留明确选择的 GitHub / Gitee。
     pub source: crate::updater::UpdateMode,
 }
 
@@ -299,7 +299,7 @@ mod tests {
     fn older_config_does_not_enable_update_requests() {
         let cfg: Config = toml::from_str("games = []\nplans = []\n").unwrap();
         assert!(!cfg.updates.check_on_startup);
-        assert_eq!(cfg.updates.source, crate::updater::UpdateMode::Auto);
+        assert_eq!(cfg.updates.source, crate::updater::UpdateMode::Center);
         assert!(cfg.strategy.enabled);
         assert!(!cfg.etalien.ready());
         assert!(cfg.etalien.token_enc.is_empty());
@@ -317,15 +317,17 @@ mod tests {
         let legacy: Config =
             toml::from_str("games = []\nplans = []\n[updates]\ncheck_on_startup = true\n").unwrap();
         assert!(legacy.updates.check_on_startup);
-        assert_eq!(legacy.updates.source, crate::updater::UpdateMode::Auto);
+        assert_eq!(legacy.updates.source, crate::updater::UpdateMode::Center);
     }
 
     #[test]
-    fn saved_sources_remain_explicit_and_auto_round_trips() {
+    fn saved_sources_remain_explicit_and_legacy_auto_migrates_to_center() {
         for (value, expected) in [
             ("github", crate::updater::UpdateMode::GitHub),
             ("gitee", crate::updater::UpdateMode::Gitee),
-            ("auto", crate::updater::UpdateMode::Auto),
+            ("auto", crate::updater::UpdateMode::Center),
+            ("center", crate::updater::UpdateMode::Center),
+            ("mirrors", crate::updater::UpdateMode::Auto),
         ] {
             let text = format!("games = []\nplans = []\n[updates]\nsource = '{value}'\n");
             let config: Config = toml::from_str(&text).unwrap();
@@ -333,6 +335,11 @@ mod tests {
             assert!(!config.updates.check_on_startup);
             let restored: Config = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
             assert_eq!(restored.updates.source, expected);
+            if value == "auto" {
+                assert!(toml::to_string(&config)
+                    .unwrap()
+                    .contains("source = \"center\""));
+            }
         }
     }
 

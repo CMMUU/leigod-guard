@@ -292,9 +292,15 @@ fn game_menu_and_update_source_preserve_existing_actions() {
     click(&ctx, &mut app, "从名单移除");
     assert_eq!(app.config.lock().unwrap().games[0].exe, "TslGame.exe");
     click(&ctx, &mut app, "关于与更新");
-    click(&ctx, &mut app, "自动选择（国内优先）");
+    click(&ctx, &mut app, "下载中心（推荐）");
     click(&ctx, &mut app, "仅 Gitee（国内）");
     assert_eq!(app.config.lock().unwrap().updates.source, UpdateMode::Gitee);
+    click(&ctx, &mut app, "仅 Gitee（国内）");
+    click(&ctx, &mut app, "下载中心（推荐）");
+    assert_eq!(
+        app.config.lock().unwrap().updates.source,
+        UpdateMode::Center
+    );
     assert!(
         !app.update_busy,
         "source changes must not start network requests"

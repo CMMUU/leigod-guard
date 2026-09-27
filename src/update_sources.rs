@@ -1,5 +1,5 @@
-//! User-approved update policy: complete stable versions first, domestic source
-//! first on a tie, and a single verified fallback for the exact selected release.
+//! Download center by default. Optional two-mirror mode prefers complete stable
+//! versions and allows a single verified fallback for the exact selected release.
 use super::*;
 
 pub(super) const CHECK_TIMEOUT: Duration = Duration::from_secs(8);
@@ -8,6 +8,9 @@ pub(super) const CHECK_TIMEOUT: Duration = Duration::from_secs(8);
 #[serde(rename_all = "lowercase")]
 pub enum UpdateMode {
     #[default]
+    #[serde(alias = "auto")]
+    Center,
+    #[serde(rename = "mirrors")]
     Auto,
     GitHub,
     Gitee,
@@ -16,7 +19,8 @@ pub enum UpdateMode {
 impl UpdateMode {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Auto => "自动选择（国内优先）",
+            Self::Center => "下载中心（推荐）",
+            Self::Auto => "自动选择（Gitee/GitHub）",
             Self::Gitee => "仅 Gitee（国内）",
             Self::GitHub => "仅 GitHub",
         }
@@ -24,6 +28,7 @@ impl UpdateMode {
 
     fn source(self) -> Option<UpdateSource> {
         match self {
+            Self::Center => Some(UpdateSource::Center),
             Self::Auto => None,
             Self::Gitee => Some(UpdateSource::Gitee),
             Self::GitHub => Some(UpdateSource::GitHub),
@@ -177,10 +182,11 @@ fn select_update(
     })
 }
 
-fn other_source(source: UpdateSource) -> UpdateSource {
+fn other_source(source: UpdateSource) -> Option<UpdateSource> {
     match source {
-        UpdateSource::Gitee => UpdateSource::GitHub,
-        UpdateSource::GitHub => UpdateSource::Gitee,
+        UpdateSource::Center => None,
+        UpdateSource::Gitee => Some(UpdateSource::GitHub),
+        UpdateSource::GitHub => Some(UpdateSource::Gitee),
     }
 }
 
@@ -198,7 +204,7 @@ fn validate_backup(
 ) -> Result<(), String> {
     let original = package_asset(primary, kind);
     let alternate = package_asset(backup, kind);
-    if backup.source != other_source(primary.source)
+    if Some(backup.source) != other_source(primary.source)
         || primary.tag != format!("v{}", primary.version)
         || backup.tag != primary.tag
         || backup.version != primary.version
@@ -251,7 +257,8 @@ fn download_using(
         }
         Err(message) => message,
     };
-    let source = other_source(plan.release.source);
+    let source =
+        other_source(plan.release.source).ok_or("下载中心下载失败，请重试或手动切换来源。")?;
     source_changed(source, true);
     let backup = match &plan.backup {
         Some(backup) => backup.clone(),
@@ -273,7 +280,11 @@ mod tests {
     use std::sync::{Condvar, Mutex};
 
     fn release(source: UpdateSource, tag: &str) -> ReleaseInfo {
-        if source == UpdateSource::GitHub {
+        if source == UpdateSource::Center {
+            update_center::catalog_release(&update_center::tests::fixture(tag), "0.0.0", None)
+                .unwrap()
+                .unwrap()
+        } else if source == UpdateSource::GitHub {
             super::super::tests::parse_fixture(&super::super::tests::fixture_release(tag), "0.0.0")
                 .unwrap()
                 .unwrap()
@@ -383,7 +394,7 @@ mod tests {
 
     #[test]
     fn manual_modes_query_and_download_only_the_requested_source() {
-        for mode in [UpdateMode::Gitee, UpdateMode::GitHub] {
+        for mode in [UpdateMode::Center, UpdateMode::Gitee, UpdateMode::GitHub] {
             let calls = Mutex::new(Vec::new());
             let report = check_using("0.8.0", mode, |source, _| {
                 calls.lock().unwrap().push(source);
@@ -404,6 +415,7 @@ mod tests {
             )
             .is_err());
             assert_eq!(attempts, 1);
+            assert!(check_using("0.8.0", mode, |_, _| Err("offline".into())).is_err());
         }
     }
 
