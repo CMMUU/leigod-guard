@@ -2567,7 +2567,7 @@ impl App {
             ui.collapsing("手动下载备用入口（网页）", |ui| {
                 ui.label(egui::RichText::new("应用内更新失败，或需要给另一台电脑下载安装包时，可打开发布页手动下载。").size(12.0).color(theme::MUTED));
                 ui.horizontal_wrapped(|ui| {
-                    ui.hyperlink_to("下载中心（推荐）", crate::updater::CENTER_RELEASES_PAGE);
+                    ui.hyperlink_to("前往下载中心", crate::updater::CENTER_RELEASES_PAGE);
                     ui.hyperlink_to("Gitee 发布页（国内）", crate::updater::GITEE_RELEASES_PAGE);
                     ui.hyperlink_to("GitHub 发布页", crate::updater::RELEASES_PAGE);
                     ui.hyperlink_to("项目使用说明", "https://github.com/CMMUU/leigod-guard#readme");
