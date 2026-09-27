@@ -125,10 +125,10 @@
       <div class="download-panel">
         <div class="download-controls" id="download-controls" hidden>
           <label for="download-source">下载来源</label>
-          <select id="download-source"><option value="auto">自动选择（国内优先）</option><option value="gitee">仅 Gitee（国内）</option><option value="github">仅 GitHub</option></select>
+          <select id="download-source"><option value="center">下载中心（推荐）</option><option value="gitee">仅 Gitee（国内）</option><option value="github">仅 GitHub</option></select>
           <button type="button" id="download-retry">重新检查</button>
         </div>
-        <p class="download-status" id="download-status" role="status">点击下载时自动选择可用正式版，同版本优先 Gitee。</p>
+        <p class="download-status" id="download-status" role="status">从下载中心获取已发布版本，安装版与绿色版均无需登录下载。</p>
         <div class="providers">
           <div class="provider">
             <h3>安装版 EXE</h3>
@@ -143,8 +143,8 @@
             <div class="download-mirrors" data-mirrors="portable"></div>
           </div>
         </div>
-        <p class="release-pages">查看版本说明与校验文件：<a href="https://gitee.com/cmmuu/leigod-guard/releases">Gitee 发布页</a><span aria-hidden="true"> · </span><a href="https://github.com/CMMUU/leigod-guard/releases/latest">GitHub 发布页</a></p>
-        <p class="download-note">点击后由浏览器下载。如未开始，可使用同版本备用入口；新版本同步可能稍有延迟。</p>
+        <p class="release-pages">全部文件与校验值：<a href="https://downloads.cmmuu.com/">下载中心</a> · 版本说明与备用下载：<a href="https://gitee.com/cmmuu/leigod-guard/releases">Gitee 发布页</a><span aria-hidden="true"> · </span><a href="https://github.com/CMMUU/leigod-guard/releases/latest">GitHub 发布页</a></p>
+        <p class="download-note">点击后由浏览器下载。如未开始，可重新检查或手动选择 Gitee、GitHub 来源。</p>
         <p class="update-hint"><span class="info-icon" aria-hidden="true">i</span><span>已有用户：<span class="update-path">关于与更新 <b aria-hidden="true">→</b> 检查更新 <b aria-hidden="true">→</b> 下载并自动更新</span></span></p>
       </div>
     </section>

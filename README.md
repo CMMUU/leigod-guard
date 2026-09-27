@@ -224,23 +224,23 @@ Windows 10 / 11 x64 是当前支持目标，并不表示所有系统版本、驱
 
 ## 下载与首次使用
 
-每次发布同时提供两种 Windows x64 成品。国内下载可前往 [Gitee 发布页](https://gitee.com/cmmuu/leigod-guard/releases)，也可使用下表的 GitHub 下载入口。请在发布页选择最新的**正式版**，下载附件里的 EXE 或 ZIP：
+每次发布同时提供两种 Windows x64 成品。下表使用固定官网下载入口，自动解析 [下载中心](https://downloads.cmmuu.com/) 已发布版本；后续无需替换链接。也可前往 [Gitee 发布页](https://gitee.com/cmmuu/leigod-guard/releases) 或 [GitHub 发布页](https://github.com/CMMUU/leigod-guard/releases/latest) 手动选择正式版。
 
 | 版本 | 下载后怎样使用 | 适合谁 |
 | --- | --- | --- |
-| [安装版 EXE](https://github.com/CMMUU/leigod-guard/releases/download/v0.19.0/leigod-guard-v0.19.0-windows-x64-setup.exe) | 双击安装，按需自动补装 WebView2，提供快捷方式和卸载入口 | 普通用户，推荐 |
-| [绿色免安装版 ZIP](https://github.com/CMMUU/leigod-guard/releases/download/v0.19.0/leigod-guard-v0.19.0-windows-x64.zip) | 解压到固定且可写的目录，运行 `leigod-guard.exe`；验证码需要已有 WebView2 Runtime | 希望自行管理程序目录的用户 |
+| [安装版 EXE](https://leigod.cmmuu.com/download/installer) | 双击安装，按需自动补装 WebView2，提供快捷方式和卸载入口 | 普通用户，推荐 |
+| [绿色免安装版 ZIP](https://leigod.cmmuu.com/download/portable) | 解压到固定且可写的目录，运行 `leigod-guard.exe`；验证码需要已有 WebView2 Runtime | 希望自行管理程序目录的用户 |
 
 两种版本功能相同，都支持应用内更新。这里的「绿色免安装」指不需要安装向导：配置和日志仍保存在 `%APPDATA%\leigod-guard\`；若主动开启开机自启，也会写入当前用户的 Windows 自启注册表项。它不是将所有数据保存到程序目录、完全不写注册表的移动应用。
 
-1. 下载 [Windows x64 安装包](https://github.com/CMMUU/leigod-guard/releases/download/v0.19.0/leigod-guard-v0.19.0-windows-x64-setup.exe)：`leigod-guard-v0.19.0-windows-x64-setup.exe`。页面中的 `Source code` 是源码，不是安装程序。
+1. 下载 [Windows x64 安装包](https://leigod.cmmuu.com/download/installer)。文件名包含实际版本号；发布页中的 `Source code` 是源码，不是安装程序。
 2. 双击安装包，按向导完成安装，然后从开始菜单或桌面快捷方式打开「加速器守护」。**不需要解压或手动配置运行库。** 安装器会在需要时自动安装验证码窗口所需的 WebView2 Runtime；首次补装运行时需要联网。
 3. 打开「账户」页，用自己的雷神账户登录。提供密码、短信验证码和已有 token 三种方式；遇到人机验证时按窗口提示完成。不要把密码、短信验证码或 token 发到 Issues。
 4. 打开「游戏名单」，从「常用游戏」下拉列表选择游戏；未列出的游戏可选择「自定义 / 手动填写」，或先启动一次游戏，再用「从运行进程选择…」选择真正的游戏进程。请核对预设文件名与本机实际进程是否一致；自定义时填写例如 `ExampleGame.exe` 的文件名，不填完整路径、桌面快捷方式名称或 `*.exe`。
 5. 在「策略」中确认「启用自动暂停」、默认开启的「启动时无游戏运行则暂停计时」、启动等待（默认 180 秒）和退出宽限期（默认 90 秒）。随后在雷神官方客户端中手动开启所需加速；准备首次启动或重新启动游戏时，可用首页或托盘的「准备游戏，保护10分钟」。常用游戏预设只帮助填写名单，不代表已逐款通过实际游戏、账户暂停或反作弊测试。
 6. 首次使用请按上方「如何确认暂停生效」检查：等待工具完成暂停，再打开雷神官方微信小程序，登录同一账号并下拉刷新，核对计时是否已暂停。
 
-安装版默认安装到当前用户的 `%LOCALAPPDATA%\Programs\LeigodGuard\`，无需管理员权限，创建开始菜单快捷方式，并可选择是否创建桌面快捷方式。安装程序与应用尚未进行 Windows 代码签名，系统可能显示未知发布者；请从本仓库的 Release 下载并按下文校验文件。
+安装版默认安装到当前用户的 `%LOCALAPPDATA%\Programs\LeigodGuard\`，无需管理员权限，创建开始菜单快捷方式，并可选择是否创建桌面快捷方式。安装程序与应用尚未进行 Windows 代码签名，系统可能显示未知发布者；请从官网下载入口、下载中心或本仓库 Release 下载，并按下文校验文件。
 
 程序需要可访问雷神服务的网络连接和有效登录状态。安装器包含微软的 [WebView2 Runtime 安装引导程序](https://developer.microsoft.com/en-us/microsoft-edge/webview2/)，检测到运行时缺失时自动联网补装；它不是包含全部运行时的离线安装包。当前 MSVC 发布构建静态链接 C/C++ 运行库，不需要另行安装 Visual C++ 运行库。安装失败时按提示检查网络后重试，不必手动寻找 DLL。
 
