@@ -6,6 +6,8 @@
 
 #[path = "update_center.rs"]
 mod update_center;
+#[path = "update_network.rs"]
+mod update_network;
 #[path = "update_sources.rs"]
 mod update_sources;
 pub use update_sources::{
@@ -594,10 +596,10 @@ fn rename_new(from: &Path, to: &Path) -> std::io::Result<()> {
 }
 
 fn client(source: UpdateSource) -> Result<Client, String> {
-    Client::builder()
+    update_network::configure(Client::builder())?
         .user_agent(concat!("LeigodGuard/", env!("CARGO_PKG_VERSION")))
         .https_only(true)
-        .connect_timeout(Duration::from_secs(5))
+        .connect_timeout(Duration::from_secs(15))
         .timeout(METADATA_TIMEOUT)
         .redirect(Policy::custom(move |attempt| {
             if attempt.previous().len() >= 5 {
