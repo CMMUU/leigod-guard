@@ -2,7 +2,7 @@
 //! versions and allows a single verified fallback for the exact selected release.
 use super::*;
 
-pub(super) const CHECK_TIMEOUT: Duration = Duration::from_secs(8);
+pub(super) const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]

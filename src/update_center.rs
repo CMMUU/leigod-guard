@@ -163,22 +163,83 @@ pub(super) fn check(
     tag: Option<&str>,
     deadline: Instant,
 ) -> Result<Option<ReleaseInfo>, String> {
-    let response = client(UpdateSource::Center)?
-        .get(CATALOG)
+    let bytes = fetch_catalog(&client(UpdateSource::Center)?, CATALOG, deadline)?;
+    catalog_release(&bytes, current, tag)
+}
+
+fn fetch_catalog(client: &Client, url: &str, deadline: Instant) -> Result<Vec<u8>, String> {
+    let response = client
+        .get(url)
         .timeout(remaining(deadline)?)
         .send()
         .map_err(network_error)?;
-    catalog_release(
-        &read_response(response, MAX_CATALOG_BYTES, None)?,
-        current,
-        tag,
-    )
+    read_response(response, MAX_CATALOG_BYTES, None)
 }
 
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
     use serde_json::{json, Value};
+
+    #[test]
+    fn slow_catalog_survives_old_eight_second_limit_but_remains_bounded() {
+        use std::net::TcpListener;
+        for expires in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/catalog", listener.local_addr().unwrap());
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    let mut byte = [0];
+                    stream.read_exact(&mut byte).unwrap();
+                    request.push(byte[0]);
+                    assert!(request.len() < 8192);
+                }
+                std::thread::sleep(if expires {
+                    Duration::from_millis(400)
+                } else {
+                    Duration::from_secs(9)
+                });
+                let body = fixture("v99.0.0");
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream
+                    .write_all(header.as_bytes())
+                    .and_then(|_| stream.write_all(&body));
+            });
+            let client = Client::builder()
+                .no_proxy()
+                .timeout(METADATA_TIMEOUT)
+                .build()
+                .unwrap();
+            let budget = if expires {
+                Duration::from_millis(150)
+            } else {
+                update_sources::CHECK_TIMEOUT
+            };
+            let start = Instant::now();
+            let result = fetch_catalog(&client, &url, start + budget);
+            if expires {
+                assert!(result.is_err());
+                assert!(start.elapsed() < Duration::from_secs(2));
+            } else {
+                assert_eq!(
+                    catalog_release(&result.unwrap(), "0.0.0", None)
+                        .unwrap()
+                        .unwrap()
+                        .tag,
+                    "v99.0.0"
+                );
+            }
+            server.join().unwrap();
+        }
+    }
 
     pub(in crate::updater) fn fixture(tag: &str) -> Vec<u8> {
         let files: Vec<_> = [
