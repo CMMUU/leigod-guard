@@ -6,6 +6,17 @@ import { execFileSync } from 'node:child_process';
 
 const source = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.dirname(source);
+// Fail the build if a surface was edited separately or source outputs are stale.
+const brandRecord = JSON.parse(await readFile(path.join(repo, 'assets/brand.generated.json'), 'utf8'));
+const brandConfigBytes = (await readFile(path.join(repo, 'assets/brand.json'), 'utf8')).replaceAll('\r\n', '\n');
+const brandConfig = JSON.parse(brandConfigBytes);
+const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
+if (sha256(brandConfigBytes) !== brandRecord.config_sha256 || sha256(await readFile(path.join(repo, brandConfig.source))) !== brandRecord.source_sha256) {
+  throw new Error('Brand source/config changed: run scripts/generate-brand.py');
+}
+for (const [name, hash] of Object.entries(brandRecord.outputs)) {
+  if (sha256(await readFile(path.join(repo, name))) !== hash) throw new Error(`Stale brand asset: ${name}`);
+}
 const output = path.resolve(source, 'dist');
 const config = JSON.parse(await readFile(path.join(source, 'site.config.json'), 'utf8'));
 const site = new URL(config.url);

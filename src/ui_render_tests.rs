@@ -217,6 +217,38 @@ fn selected_accelerator_controls_home_actions_account_and_logs() {
 }
 
 #[test]
+fn etalien_sms_and_password_tabs_are_separate_and_platform_email_remains_available() {
+    let (ctx, mut app) = fixture();
+    app.page = Page::Account;
+    {
+        let mut c = app.config.lock().unwrap();
+        c.commit_selection(Provider::Etalien);
+        c.guard_gate.resume(c.selection_generation);
+    }
+    click(&ctx, &mut app, "11 位手机号，可带 +86");
+    frame(
+        &ctx,
+        &mut app,
+        [1180.0, 780.0],
+        vec![Event::Text("13812345678".into())],
+    );
+    click(&ctx, &mut app, "密码登录");
+    let output = frame(&ctx, &mut app, [1180.0, 780.0], vec![]);
+    assert!(!has_text(&output.shapes, "13812345678"));
+    click(&ctx, &mut app, "短信验证码");
+    let output = frame(&ctx, &mut app, [1180.0, 780.0], vec![]);
+    assert!(has_text(&output.shapes, "13812345678"));
+    click(&ctx, &mut app, "登录外星仔"); // missing code: disabled, no request
+    assert!(app.etalien.shared.lock().unwrap().token.is_none());
+    assert!(app.etalien.shared.lock().unwrap().manual_cmd.is_none());
+    click(&ctx, &mut app, "平台账号");
+    let output = frame(&ctx, &mut app, [1180.0, 780.0], vec![]);
+    assert!(has_text(&output.shapes, "邮箱验证码"));
+    assert!(!has_text(&output.shapes, "13812345678"));
+    assert!(app.platform.email.is_empty());
+}
+
+#[test]
 fn home_controls_update_real_in_memory_strategy_and_commands() {
     let (ctx, mut app) = fixture();
     click(&ctx, &mut app, "准备游戏，保护10分钟");
