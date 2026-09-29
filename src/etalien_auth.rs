@@ -15,6 +15,7 @@ pub const DEFAULT_COOLDOWN: Duration = Duration::from_secs(60);
 pub struct Error {
     message: &'static str,
     pub retry_after: Option<Duration>,
+    http_status: Option<u16>,
 }
 
 impl Error {
@@ -22,12 +23,17 @@ impl Error {
         Self {
             message,
             retry_after: None,
+            http_status: None,
         }
     }
 }
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.message)
+        f.write_str(self.message)?;
+        if let Some(status) = self.http_status {
+            write!(f, "（HTTP {status}）")?;
+        }
+        Ok(())
     }
 }
 
@@ -89,6 +95,20 @@ fn request(
         .build()
         .map_err(|_| Error::new("无法建立外星仔连接"))?;
     let nonce = crate::etalien_api::device_id().map_err(|_| Error::new("无法生成请求标识"))?;
+    execute(build_request(
+        &client, method, path, device, params, body, nonce,
+    ))
+}
+
+fn build_request(
+    client: &Client,
+    method: Method,
+    path: &str,
+    device: &str,
+    params: BTreeMap<&str, String>,
+    body: Option<Value>,
+    nonce: String,
+) -> reqwest::blocking::RequestBuilder {
     let mut req = client
         .request(
             method.clone(),
@@ -96,12 +116,14 @@ fn request(
         )
         .header("reqChannel", "1")
         .header("x-eta", format!("os=2&ver=1.0.0&dvc={device}&ch=h5"))
-        .header("Accept", "application/json")
-        .header("Content-Type", "application/json");
+        .header("Accept", "application/json");
+    // The official Axios adapter removes Content-Type when there is no body.
+    // Declaring JSON on the SMS GET makes the API parse an empty body and reject
+    // the request before reading phone_number from the query string.
     if let Some(body) = body {
         req = req.json(&body);
     }
-    execute(req)
+    req
 }
 
 fn execute(req: reqwest::blocking::RequestBuilder) -> Result<Value, Error> {
@@ -119,14 +141,18 @@ fn execute(req: reqwest::blocking::RequestBuilder) -> Result<Value, Error> {
         return Err(Error {
             message: "请求过于频繁，请等待倒计时结束后重试",
             retry_after: Some(Duration::from_secs(seconds)),
+            http_status: Some(429),
         });
     }
     if !response.status().is_success() {
-        return Err(Error::new(match response.status().as_u16() {
-            400 | 401 | 422 => "手机号或验证码不正确、已过期，请核对后重试",
+        let mut error = Error::new(match response.status().as_u16() {
+            400 => "外星仔未接受请求，请核对输入或更新应用后重试",
+            401 | 422 => "外星仔验证未通过，请核对输入后重试",
             403 => "外星仔拒绝了本次登录请求，请稍后重试或使用其他登录方式",
             _ => "外星仔服务暂不可用，请稍后重试",
-        }));
+        });
+        error.http_status = Some(response.status().as_u16());
+        return Err(error);
     }
     if response.content_length().is_some_and(|len| len > LIMIT) {
         return Err(Error::new("外星仔登录响应过大，请稍后重试"));
@@ -265,6 +291,56 @@ mod tests {
     }
 
     #[test]
+    fn sms_get_has_no_body_type_and_login_post_still_sends_json() {
+        let client = Client::builder().no_proxy().build().unwrap();
+        let device = "F".repeat(32);
+        let sms = build_request(
+            &client,
+            Method::GET,
+            SEND,
+            &device,
+            BTreeMap::from([("phone_number", "+860".into())]),
+            None,
+            "ABC".into(),
+        )
+        .build()
+        .unwrap();
+        assert!(sms.body().is_none());
+        assert!(!sms.headers().contains_key(reqwest::header::CONTENT_TYPE));
+        assert_eq!(sms.method(), Method::GET);
+        assert_eq!(sms.headers()[reqwest::header::ACCEPT], "application/json");
+        assert_eq!(
+            sms.url()
+                .query_pairs()
+                .find(|(key, _)| key == "phone_number")
+                .unwrap()
+                .1,
+            "+860"
+        );
+
+        let login = build_request(
+            &client,
+            Method::POST,
+            LOGIN,
+            &device,
+            BTreeMap::new(),
+            Some(json!({"phone_number":"+860", "verification_code":"012345"})),
+            "ABC".into(),
+        )
+        .build()
+        .unwrap();
+        assert_eq!(
+            login.headers()[reqwest::header::CONTENT_TYPE],
+            "application/json"
+        );
+        assert_eq!(login.method(), Method::POST);
+        let body: Value =
+            serde_json::from_slice(login.body().unwrap().as_bytes().unwrap()).unwrap();
+        assert_eq!(body["verification_code"], "012345");
+        assert!(!login.url().as_str().contains("012345"));
+    }
+
+    #[test]
     fn official_flat_payloads_must_confirm_send_and_login() {
         assert_eq!(
             cooldown(&parse(br#"{"cool_down":120}"#).unwrap()).unwrap(),
@@ -314,6 +390,12 @@ mod tests {
         for (status, headers, body, expected) in [
             ("200 OK", "", "{\"cool_down\":90}", None),
             (
+                "400 Bad Request",
+                "",
+                "{\"code\":1,\"msg\":\"secret-value\"}",
+                Some(0),
+            ),
+            (
                 "429 Too Many Requests",
                 "Retry-After: 180\r\n",
                 "secret-value",
@@ -348,6 +430,10 @@ mod tests {
                 let error = result.unwrap_err();
                 assert!(!error.to_string().contains("secret-value"));
                 assert_eq!(error.retry_after.map(|d| d.as_secs()).unwrap_or(0), delay);
+                if status.starts_with("400") {
+                    assert!(error.to_string().contains("HTTP 400"));
+                    assert!(!error.to_string().contains("手机号或验证码不正确"));
+                }
             } else {
                 assert_eq!(cooldown(&result.unwrap()).unwrap(), Duration::from_secs(90));
             }

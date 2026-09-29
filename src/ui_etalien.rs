@@ -50,6 +50,7 @@ mod tests {
             .unwrap();
         panel.poll(&config, &platform);
         assert!((119..=120).contains(&panel.retry_seconds()));
+        assert!(matches!(panel.sms_feedback, SmsFeedback::Accepted));
         assert_eq!(config.lock().unwrap().etalien.username, "existing-account");
         let state = panel.shared.lock().unwrap();
         assert_eq!(state.token.as_deref(), Some("existing-token"));
@@ -81,6 +82,31 @@ mod tests {
         );
         assert_eq!(panel.message, "验证码无效");
     }
+
+    #[test]
+    fn sms_failure_and_disconnection_cannot_appear_as_accepted() {
+        let config = Arc::new(Mutex::new(Config::default()));
+        let platform = crate::ui_platform::Panel::default();
+        for disconnected in [false, true] {
+            let mut panel = Panel::default();
+            panel.sms_feedback = SmsFeedback::Sending;
+            panel.extend_cooldown(auth::DEFAULT_COOLDOWN);
+            let (tx, rx) = mpsc::channel();
+            panel.events = Some(rx);
+            if !disconnected {
+                tx.send(Ok(Event::SmsSent(Err(auth::phone("invalid").unwrap_err()))))
+                    .unwrap();
+            }
+            drop(tx);
+            panel.poll(&config, &platform);
+            assert!(matches!(panel.sms_feedback, SmsFeedback::Failed(_)));
+            assert!(panel.query_failed);
+            assert!(panel.message.is_empty());
+            assert!(panel.retry_seconds() > 0);
+            assert!(panel.events.is_none());
+            assert!(panel.shared.lock().unwrap().token.is_none());
+        }
+    }
 }
 
 #[derive(Clone, Copy, Default, PartialEq)]
@@ -89,6 +115,15 @@ enum LoginMode {
     Sms,
     Password,
     Token,
+}
+
+#[derive(Default)]
+enum SmsFeedback {
+    #[default]
+    Idle,
+    Sending,
+    Accepted,
+    Failed(String),
 }
 
 pub struct Panel {
@@ -100,6 +135,7 @@ pub struct Panel {
     sms_phone: String,
     sms_code: String,
     sms_retry_at: Option<Instant>,
+    sms_feedback: SmsFeedback,
     login_device: String,
     events: Option<Receiver<Result<Event, String>>>,
     started: Instant,
@@ -118,6 +154,7 @@ impl Default for Panel {
             sms_phone: String::new(),
             sms_code: String::new(),
             sms_retry_at: None,
+            sms_feedback: SmsFeedback::default(),
             login_device: String::new(),
             events: None,
             started: Instant::now(),
@@ -153,6 +190,13 @@ fn save(config: &Arc<Mutex<Config>>, account: Etalien) -> Result<(), String> {
 }
 
 impl Panel {
+    #[cfg(test)]
+    pub(crate) fn preview_sms_failure(&mut self) {
+        self.sms_feedback =
+            SmsFeedback::Failed("外星仔未接受请求，请核对输入或更新应用后重试（HTTP 400）".into());
+        self.extend_cooldown(auth::DEFAULT_COOLDOWN);
+    }
+
     fn start(
         &mut self,
         ctx: egui::Context,
@@ -208,17 +252,34 @@ impl Panel {
             return;
         };
         self.events = None;
+        let result = match result {
+            Ok(Event::SmsSent(result)) => {
+                self.query_failed = result.is_err();
+                self.sms_feedback = match result {
+                    Ok(cooldown) => {
+                        self.extend_cooldown(cooldown);
+                        SmsFeedback::Accepted
+                    }
+                    Err(error) => {
+                        if let Some(cooldown) = error.retry_after {
+                            self.extend_cooldown(cooldown);
+                        }
+                        SmsFeedback::Failed(error.to_string())
+                    }
+                };
+                self.message.clear();
+                return;
+            }
+            Err(error) if matches!(self.sms_feedback, SmsFeedback::Sending) => {
+                self.sms_feedback = SmsFeedback::Failed(error);
+                self.query_failed = true;
+                self.message.clear();
+                return;
+            }
+            result => result,
+        };
         let outcome = result.and_then(|event| match event {
-            Event::SmsSent(result) => match result {
-                Ok(cooldown) => {
-                    self.extend_cooldown(cooldown);
-                    Ok("验证码已发送，请输入手机收到的最新 6 位验证码。有效期以外星仔官方为准。".into())
-                }
-                Err(error) => {
-                    if let Some(cooldown) = error.retry_after { self.extend_cooldown(cooldown); }
-                    Err(error.to_string())
-                }
-            },
+            Event::SmsSent(_) => unreachable!("SMS results handled above"),
             Event::Login {
                 token,
                 device,
@@ -360,6 +421,7 @@ impl Panel {
                     .changed()
                 {
                     self.sms_code.clear();
+                    self.sms_feedback = SmsFeedback::Idle;
                 }
                 ui.horizontal_wrapped(|ui| {
                     ui.add(
@@ -370,8 +432,10 @@ impl Panel {
                             .desired_width(160.0),
                     );
                     let remaining = self.retry_seconds();
-                    let label = if remaining > 0 {
-                        format!("{remaining} 秒后重发")
+                    let label = if matches!(self.sms_feedback, SmsFeedback::Sending) {
+                        "请求中…".into()
+                    } else if remaining > 0 {
+                        format!("{remaining} 秒后可重试")
                     } else {
                         "发送验证码".into()
                     };
@@ -392,12 +456,22 @@ impl Panel {
                                 self.start(ui.ctx().clone(), move || {
                                     Ok(Event::SmsSent(auth::send_code(&phone, &device)))
                                 });
-                                self.message = "正在请求外星仔发送短信验证码…".into();
+                                self.sms_feedback = SmsFeedback::Sending;
+                                self.message.clear();
                             }
-                            Err(error) => self.message = error,
+                            Err(error) => self.sms_feedback = SmsFeedback::Failed(error),
                         }
                     }
                 });
+                let feedback = match &self.sms_feedback {
+                    SmsFeedback::Idle => None,
+                    SmsFeedback::Sending => Some(("正在请求外星仔发送短信…", theme::MUTED)),
+                    SmsFeedback::Accepted => Some(("外星仔已受理短信请求，请留意手机短信。", theme::GREEN)),
+                    SmsFeedback::Failed(error) => Some((error.as_str(), ui.visuals().error_fg_color)),
+                };
+                if let Some((message, color)) = feedback {
+                    ui.label(egui::RichText::new(message).small().color(color));
+                }
             } else if self.login_mode == LoginMode::Token {
                 ui.label("粘贴你本人账号的 Authorization（仅单独授权远程保护后上传平台）：");
                 ui.add(
@@ -453,6 +527,7 @@ impl Panel {
                 let code = std::mem::take(&mut self.sms_code);
                 let mode = self.login_mode;
                 let device = self.device(&account);
+                self.sms_feedback = SmsFeedback::Idle;
                 self.start(ui.ctx().clone(), move || {
                     let device = device?;
                     let token = match mode {
@@ -543,6 +618,7 @@ impl Panel {
             self.token_input.clear();
             self.user.clear();
             self.sms_phone.clear();
+            self.sms_feedback = SmsFeedback::Idle;
             self.login_device.clear();
             self.message = match save(config, Etalien::default()) {
                 Ok(()) => {
