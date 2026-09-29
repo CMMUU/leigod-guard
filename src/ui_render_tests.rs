@@ -275,6 +275,36 @@ fn etalien_sms_inputs_and_login_fit_the_minimum_window() {
 }
 
 #[test]
+fn etalien_sms_failure_is_visible_beside_the_code_in_the_minimum_window() {
+    let (ctx, mut app) = fixture();
+    app.page = Page::Account;
+    {
+        let mut c = app.config.lock().unwrap();
+        c.commit_selection(Provider::Etalien);
+        c.guard_gate.resume(c.selection_generation);
+    }
+    app.etalien.preview_sms_failure();
+    frame(&ctx, &mut app, [680.0, 460.0], vec![]);
+    let output = frame(&ctx, &mut app, [680.0, 460.0], vec![]);
+    let error = text_rect(
+        &output.shapes,
+        "外星仔未接受请求，请核对输入或更新应用后重试（HTTP 400）",
+    );
+    let code = text_rect(&output.shapes, "6 位短信验证码");
+    assert!(error.top() > code.top());
+    assert!(
+        error.bottom() < 404.0,
+        "SMS error must not require scrolling: {error:?}"
+    );
+    let login = text_rect(&output.shapes, "登录外星仔");
+    assert!(
+        login.bottom() < 404.0,
+        "SMS feedback must leave the login visible: {login:?}"
+    );
+    assert!(!has_text(&output.shapes, "验证码已发送"));
+}
+
+#[test]
 fn home_controls_update_real_in_memory_strategy_and_commands() {
     let (ctx, mut app) = fixture();
     click(&ctx, &mut app, "准备游戏，保护10分钟");
@@ -1075,6 +1105,21 @@ fn render_apple_preview() {
             size,
             1.0,
             &output.join(format!("etalien-account{suffix}.png")),
+        );
+        let (ctx, mut app) = fixture();
+        app.page = Page::Account;
+        {
+            let mut c = app.config.lock().unwrap();
+            c.commit_selection(Provider::Etalien);
+            c.guard_gate.resume(c.selection_generation);
+        }
+        app.etalien.preview_sms_failure();
+        gpu.save(
+            &ctx,
+            &mut app,
+            size,
+            1.0,
+            &output.join(format!("etalien-sms-failure{suffix}.png")),
         );
     }
 
