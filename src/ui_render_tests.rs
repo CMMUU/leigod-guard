@@ -296,6 +296,11 @@ fn etalien_sms_failure_is_visible_beside_the_code_in_the_minimum_window() {
         error.bottom() < 404.0,
         "SMS error must not require scrolling: {error:?}"
     );
+    let login = text_rect(&output.shapes, "登录外星仔");
+    assert!(
+        login.bottom() < 404.0,
+        "SMS feedback must leave the login visible: {login:?}"
+    );
     assert!(!has_text(&output.shapes, "验证码已发送"));
 }
 

@@ -2169,7 +2169,9 @@ impl App {
             &format!("当前守护：{}加速器", provider.name()),
             18.0,
         ));
-        ui.label("在守护概览切换加速器，所有页面和操作同步切换。");
+        if ui.available_width() >= 520.0 {
+            ui.label("在守护概览切换加速器，所有页面和操作同步切换。");
+        }
         if !self.config.lock().is_ok_and(|c| c.is_active(provider)) {
             ui.disable();
         }
