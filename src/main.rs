@@ -5,6 +5,7 @@ compile_error!("Accelerator Guard currently supports Windows only.");
 
 mod autostart;
 mod brand;
+mod brand_shell;
 mod captcha;
 mod config;
 mod dpapi;
@@ -150,8 +151,13 @@ fn main() {
     );
 
     // 主窗口
-    let (rgba, w, h) = ui::make_icon_rgba();
-    let options = eframe::NativeOptions {
+    // Repair only shortcuts pointing to this executable, away from the UI thread.
+    std::thread::spawn(|| {
+        if let Err(error) = brand_shell::refresh_owned_shortcuts() {
+            ui::dbglog(&format!("shortcut icon refresh failed: {error}"));
+        }
+    });
+    let options = brand::native_options(eframe::NativeOptions {
         // wgpu(DX12) 渲染：规避部分机器 OpenGL 新窗口白屏问题
         renderer: eframe::Renderer::Wgpu,
         // 关闭窗口几何持久化：eframe persistence 会把调试期间的残废窗口尺寸
@@ -165,14 +171,9 @@ fn main() {
             .with_inner_size([1180.0, 780.0])
             .with_min_inner_size([680.0, 460.0])
             .with_visible(!minimized)
-            .with_active(!minimized)
-            .with_icon(egui::IconData {
-                rgba,
-                width: w,
-                height: h,
-            }),
+            .with_active(!minimized),
         ..Default::default()
-    };
+    });
 
     let shared_ui = Arc::clone(&shared);
     let config_ui = Arc::clone(&config);

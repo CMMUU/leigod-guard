@@ -26,6 +26,7 @@
   #define SourceRoot InstallerDir + ".."
 #endif
 #define AppIconFile AddBackslash(SourceRoot) + "assets\app-icon.ico"
+#define AppIconName "app-icon-" + LowerCase(GetSHA256OfFile(AppIconFile)) + ".ico"
 
 [Setup]
 ; Keep this identifier unchanged so future versions upgrade this installation.
@@ -51,7 +52,7 @@ ArchitecturesInstallIn64BitMode=x64os
 MinVersion=10.0
 UsePreviousAppDir=yes
 UsePreviousTasks=yes
-UninstallDisplayIcon={app}\{#ProductExe}
+UninstallDisplayIcon={app}\branding\{#AppIconName}
 SetupIconFile={#AppIconFile}
 UninstallDisplayName={cm:AppDisplayName}
 AppMutex=Local\LeigodGuard
@@ -108,6 +109,7 @@ Source: "{#BootstrapperFile}"; DestDir: "{tmp}"; DestName: "MicrosoftEdgeWebview
 ; SourceDir is an isolated payload staging directory. Keep this list explicit;
 ; personal configuration, logs, credentials, and screenshots are not payload.
 Source: "{#SourceDir}\{#ProductExe}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#AppIconFile}"; DestDir: "{app}\branding"; DestName: "{#AppIconName}"; Flags: ignoreversion
 Source: "{#SourceDir}\WebView2Loader.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "{#SourceDir}\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
@@ -127,12 +129,12 @@ Type: files; Name: "{autodesktop}\雷神守护.lnk"
 Type: files; Name: "{autodesktop}\LeigodGuard.lnk"
 
 [Icons]
-Name: "{group}\{cm:AppDisplayName}"; Filename: "{app}\{#ProductExe}"; WorkingDir: "{app}"
+Name: "{group}\{cm:AppDisplayName}"; Filename: "{app}\{#ProductExe}"; WorkingDir: "{app}"; IconFilename: "{app}\branding\{#AppIconName}"
 Name: "{group}\{cm:ProjectWebsite}"; Filename: "{#ProjectURL}#readme"
-Name: "{autodesktop}\{cm:AppDisplayName}"; Filename: "{app}\{#ProductExe}"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{autodesktop}\{cm:AppDisplayName}"; Filename: "{app}\{#ProductExe}"; WorkingDir: "{app}"; IconFilename: "{app}\branding\{#AppIconName}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#ProductExe}"; WorkingDir: "{app}"; Description: "{cm:LaunchApp}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#ProductExe}"; WorkingDir: "{app}"; IconFilename: "{app}\branding\{#AppIconName}"; Description: "{cm:LaunchApp}"; Flags: nowait postinstall skipifsilent
 
 [Code]
 const

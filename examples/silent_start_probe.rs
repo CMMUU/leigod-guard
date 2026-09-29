@@ -1,5 +1,8 @@
 //! Isolated real-eframe regression: no account, config, tray, guard or network.
 //! Run once normally and once with --manual. The tiny window stays off-screen.
+#[path = "../src/brand.rs"]
+#[allow(dead_code)]
+mod brand;
 #[path = "../src/window_visibility.rs"]
 mod window_visibility;
 
@@ -7,9 +10,10 @@ use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, IsWindowVisible, ShowWindow, SW_HIDE, SW_SHOWNOACTIVATE,
+    GetForegroundWindow, IsWindowVisible, SendMessageW, ShowWindow, ICON_BIG, ICON_SMALL, SW_HIDE,
+    SW_SHOWNOACTIVATE, WM_GETICON,
 };
 
 struct Probe {
@@ -43,7 +47,7 @@ fn main() -> eframe::Result {
     });
     eframe::run_native(
         "LeigodGuard isolated startup probe",
-        eframe::NativeOptions {
+        brand::native_options(eframe::NativeOptions {
             renderer: eframe::Renderer::Wgpu,
             persist_window: false,
             viewport: egui::ViewportBuilder::default()
@@ -53,7 +57,7 @@ fn main() -> eframe::Result {
                 .with_active(false)
                 .with_visible(manual),
             ..Default::default()
-        },
+        }),
         Box::new(move |cc| {
             if !manual {
                 window_visibility::install(cc)?;
@@ -62,6 +66,16 @@ fn main() -> eframe::Result {
                 panic!("Expected Windows");
             };
             let raw = handle.hwnd.get() as usize;
+            let hwnd = HWND(raw as *mut _);
+            for kind in [ICON_SMALL, ICON_BIG] {
+                require(
+                    unsafe {
+                        SendMessageW(hwnd, WM_GETICON, WPARAM(kind as usize), LPARAM(0)).0 != 0
+                    },
+                    "actual eframe window must explicitly own both window and taskbar icons",
+                );
+            }
+            println!("PASS: actual eframe window and taskbar icons explicitly set");
             let observed_frames = Arc::clone(&frames);
             let ctx = cc.egui_ctx.clone();
             std::thread::spawn(move || {
