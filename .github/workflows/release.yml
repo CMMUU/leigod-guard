@@ -86,11 +86,13 @@ jobs:
       - name: Verify normal session end on isolated eframe windows
         run: ./scripts/test-session-end.ps1 -Target $env:RUST_TARGET
       - name: Render native UI with the DirectX software adapter
+        id: native-ui
+        if: ${{ !cancelled() }}
         env:
           LEIGOD_UI_PREVIEW_DIR: target/ui-preview
         run: cargo test --locked --offline --target $env:RUST_TARGET ui::presentation_tests::render_apple_preview -- --ignored --nocapture
       - name: Upload native UI previews
-        if: always()
+        if: ${{ !cancelled() && steps.native-ui.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: native-ui-${{ github.ref_name }}
@@ -142,7 +144,7 @@ jobs:
           $notes = @"
           **推荐下载安装版：``leigod-guard-$env:RELEASE_TAG-windows-x64-setup.exe``。** 双击后按安装向导操作，完成后可从桌面或开始菜单打开。
 
-          **本版改善更新检查的弱网与 Windows 手动系统代理兼容。** 检查最多等待 30 秒，建立连接最多 15 秒；代理兼容仅用于更新请求，显式环境代理优先，PAC 暂不支持。下载中心继续为默认来源，明确选择的 Gitee/GitHub 保留；官网固定下载地址后续无需随版本变更。完整发布说明见本版本 CHANGELOG。延续单一加速器守护：首页下拉选择雷神或外星仔，默认雷神，同一时间只守护当前对象；已绑定设备继续使用后台 0.6.0。
+          **本版更新钛银钴蓝折面界面，以及桌面、任务栏和系统托盘的新图标。** 首页采用静态金属折片、切角面板及守护状态／余额分栏，窄窗口自动上下排列；背景不增加动画循环。原生架构、账号、名单和暂停策略保留。下载中心继续为默认来源，明确选择的 Gitee/GitHub 保留；官网固定下载地址无需随版本变更。首页下拉选择雷神或外星仔，默认雷神，同一时间只守护当前对象；后台继续使用 0.6.0。
 
           适用于 Windows 10 / 11 x64。安装程序自动检查 Microsoft WebView2 Runtime；缺少时调用包内的微软官方安装器联网补齐。已有运行库时直接安装应用。选择加速器、登录对应账号并添加需要监控的游戏；外星仔还需完成官方暂停状态校准。安装版和便携版均为独立第三方工具，与雷神、外星仔官方无隶属或背书关系。
 

@@ -931,6 +931,31 @@ fn render_apple_preview() {
         .unwrap_or_else(|| std::path::PathBuf::from("target/ui-preview"));
     std::fs::create_dir_all(&output).unwrap();
     let gpu = Offscreen::new();
+    for (name, size, scale) in [
+        ("home-running", [1180.0, 780.0], 1.0),
+        ("home-running-concept", [1181.5385, 787.6923], 1.3),
+        ("home-running-narrow", [680.0, 460.0], 1.0),
+    ] {
+        let (ctx, mut app) = fixture();
+        set_demo_balance(&mut app, 128 * 3600 + 42 * 60);
+        {
+            let mut config = app.config.lock().unwrap();
+            config.games.swap(0, 1);
+            config.games[0].name = "PUBG：绝地求生".into();
+        }
+        {
+            let mut shared = app.shared.lock().unwrap();
+            shared.process_snapshot = Some(vec!["TslGame.exe".into()]);
+            shared.startup_pause_status = StartupPauseStatus::default();
+        }
+        gpu.save(
+            &ctx,
+            &mut app,
+            size,
+            scale,
+            &output.join(format!("{name}.png")),
+        );
+    }
     for (suffix, size) in [("", [1180.0, 780.0]), ("-narrow", [680.0, 460.0])] {
         let (ctx, mut app) = fixture();
         set_launch_observation(&mut app);

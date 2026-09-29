@@ -137,6 +137,7 @@ fn presentation(state: &HomeState<'_>) -> Presentation {
         p.detail = "检测到名单中的游戏。游戏全部退出后，再按退出宽限期检查。".into();
         p.value = "守护中".into();
         p.caption = "游戏正在运行";
+        p.color = theme::GREEN;
     } else if let Some((startup, requested)) = state.startup.filter(|(s, _)| s.pending) {
         p.can_defer = !requested;
         if requested {
@@ -207,8 +208,9 @@ pub fn game_running(processes: Option<&[String]>, exe: &str) -> Option<bool> {
 pub fn render(ui: &mut Ui, state: &HomeState<'_>, enabled: &mut bool) -> HomeAction {
     ui.spacing_mut().item_spacing.y = 8.0;
     let mut action = HomeAction::None;
+    theme::aero_header(ui);
     ui.horizontal_wrapped(|ui| {
-        ui.label(theme::title("守护概览", 30.0));
+        ui.label(theme::title("守护概览", 32.0));
         ui.add_space(12.0);
         ui.add_enabled_ui(state.guard_ready, |ui| {
             let mut selected = state.provider;
@@ -235,7 +237,7 @@ pub fn render(ui: &mut Ui, state: &HomeState<'_>, enabled: &mut bool) -> HomeAct
     ui.label(RichText::new("让加速时长，留给真正开玩的时刻。").color(theme::MUTED));
     ui.add_space(12.0);
     let p = presentation(state);
-    theme::card().inner_margin(0).show(ui, |ui| {
+    theme::cut_panel(ui, |ui| {
         ui.set_min_width(ui.available_width());
         ui.spacing_mut().item_spacing.y = 0.0;
         status_row(ui, |ui| {
@@ -271,96 +273,100 @@ pub fn render(ui: &mut Ui, state: &HomeState<'_>, enabled: &mut bool) -> HomeAct
         });
         group_separator(ui);
         status_row(ui, |ui| {
-            if ui.available_width() >= 550.0 {
-                let width = ui.available_width();
+            let width = ui.available_width();
+            if width >= 710.0 {
+                let left_width = width * 0.55;
                 ui.horizontal_top(|ui| {
-                    ui.allocate_ui_with_layout(
-                        vec2(155.0, 0.0),
+                    ui.spacing_mut().item_spacing.x = 22.0;
+                    let left = ui.allocate_ui_with_layout(
+                        vec2(left_width, 0.0),
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
-                            ui.set_min_width(155.0);
-                            ui.add_space(3.0);
-                            ui.label(theme::title(
-                                &format!("{}账户剩余时长", state.provider.name()),
-                                16.0,
-                            ));
+                            ui.set_min_width(left_width);
+                            ui.set_max_width(left_width);
+                            guard_status(ui, state, &p);
                         },
                     );
-                    ui.allocate_ui_with_layout(
-                        vec2(width - 165.0, 0.0),
-                        egui::Layout::top_down(egui::Align::Max),
+                    let right = ui.allocate_ui_with_layout(
+                        vec2(width - left_width - 22.0, 0.0),
+                        egui::Layout::top_down(egui::Align::Min),
                         |ui| {
-                            ui.set_min_width(width - 165.0);
-                            let next = time_balance(ui, state.balance);
+                            ui.set_min_width(width - left_width - 22.0);
+                            ui.set_max_width(width - left_width - 22.0);
+                            ui.label(
+                                RichText::new(format!("{}账户剩余时长", state.provider.name()))
+                                    .size(15.0)
+                                    .color(theme::MUTED),
+                            );
+                            let next = time_balance(ui, state.balance, state.provider);
                             if next != HomeAction::None {
                                 action = next;
                             }
                         },
                     );
+                    let x = left.response.rect.right() + 11.0;
+                    ui.painter().line_segment(
+                        [
+                            egui::pos2(x, left.response.rect.top()),
+                            egui::pos2(
+                                x,
+                                left.response
+                                    .rect
+                                    .bottom()
+                                    .max(right.response.rect.bottom()),
+                            ),
+                        ],
+                        Stroke::new(1.0, theme::BORDER),
+                    );
                 });
             } else {
+                guard_status(ui, state, &p);
+                ui.add_space(10.0);
+                group_separator(ui);
+                ui.add_space(10.0);
                 ui.label(
                     RichText::new(format!("{}账户剩余时长", state.provider.name()))
                         .size(13.0)
                         .color(theme::MUTED),
                 );
-                let next = time_balance(ui, state.balance);
+                let next = time_balance(ui, state.balance, state.provider);
                 if next != HomeAction::None {
                     action = next;
                 }
             }
         });
-        group_separator(ui);
-        status_row(ui, |ui| {
-            let width = ui.available_width();
-            let value_width = if width >= 550.0 { 150.0 } else { 112.0 };
-            ui.horizontal_top(|ui| {
-                ui.allocate_ui_with_layout(
-                    vec2(width - value_width - 10.0, 0.0),
-                    egui::Layout::top_down(egui::Align::Min),
-                    |ui| {
-                        ui.set_min_width(width - value_width - 10.0);
-                        ui.spacing_mut().item_spacing.y = 4.0;
-                        ui.label(theme::title(&p.title, 16.0));
-                        ui.label(RichText::new(&p.detail).size(13.0).color(theme::MUTED));
-                    },
-                );
-                ui.allocate_ui_with_layout(
-                    vec2(value_width, 0.0),
-                    egui::Layout::top_down(egui::Align::Max),
-                    |ui| {
-                        ui.set_min_width(value_width);
-                        ui.spacing_mut().item_spacing.y = 3.0;
-                        ui.label(theme::title(
-                            &p.value,
-                            if p.value.contains(':') { 24.0 } else { 18.0 },
-                        ));
-                        ui.label(RichText::new(p.caption).size(12.0).color(theme::MUTED));
-                    },
-                );
-            });
-        });
     });
     ui.add_space(10.0);
     let width = ui.available_width();
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 20.0;
+        ui.spacing_mut().item_spacing.x = 16.0;
+        let button_width = (width - 16.0) / 2.0;
         if ui
-            .add_enabled(
-                p.can_defer,
-                theme::outline_button("准备游戏，保护10分钟", true)
-                    .min_size(vec2((width - 20.0) / 2.0, 46.0)),
-            )
+            .add_enabled_ui(p.can_defer, |ui| {
+                theme::action_button(
+                    ui,
+                    "准备游戏，保护10分钟",
+                    Icon::Protect,
+                    true,
+                    button_width,
+                )
+            })
+            .inner
             .clicked()
         {
             action = HomeAction::Defer;
         }
         if ui
-            .add_enabled(
-                state.account_ready,
-                theme::outline_button(&format!("立即暂停{}", state.provider.name()), false)
-                    .min_size(vec2((width - 20.0) / 2.0, 46.0)),
-            )
+            .add_enabled_ui(state.account_ready, |ui| {
+                theme::action_button(
+                    ui,
+                    &format!("立即暂停{}", state.provider.name()),
+                    Icon::Pause,
+                    false,
+                    button_width,
+                )
+            })
+            .inner
             .clicked()
         {
             action = HomeAction::Pause;
@@ -368,9 +374,11 @@ pub fn render(ui: &mut Ui, state: &HomeState<'_>, enabled: &mut bool) -> HomeAct
     });
     ui.label(
         RichText::new(if p.can_defer {
-            "准备开玩？先延后，再启动游戏。"
+            "准备开玩？先保护启动，再启动游戏。"
+        } else if p.title == "游戏运行中，安心畅玩" {
+            "已检测到游戏，保持守护；游戏退出后再按策略检查。"
         } else {
-            "仅在本次启动检查尚未结束时可延后。"
+            "准备保护会在可用时开启，不会启动或恢复加速。"
         })
         .size(12.0)
         .color(theme::MUTED),
@@ -407,15 +415,6 @@ pub fn render(ui: &mut Ui, state: &HomeState<'_>, enabled: &mut bool) -> HomeAct
             action = HomeAction::Strategy;
         }
     });
-    ui.add_space(6.0);
-    ui.label(theme::title("重启后，安心处理其他任务", 14.0));
-    ui.label(
-        RichText::new(
-            "无需游戏加速时，自动暂停计时，减少闲置消耗。游戏重新运行，将取消退出倒计时。",
-        )
-        .size(12.0)
-        .color(theme::MUTED),
-    );
     ui.scope(|ui| {
         ui.spacing_mut().interact_size.y = 22.0;
         ui.collapsing(RichText::new("生效条件与异常处理").size(12.0).color(theme::MUTED), |ui| {
@@ -428,13 +427,85 @@ pub fn render(ui: &mut Ui, state: &HomeState<'_>, enabled: &mut bool) -> HomeAct
     action
 }
 
+fn guard_status(ui: &mut Ui, state: &HomeState<'_>, p: &Presentation) {
+    let running = p.title == "游戏运行中，安心畅玩";
+    let width = ui.available_width();
+    let compact = ui.ctx().screen_rect().height() < 620.0;
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = 14.0;
+        let (symbol, _) = ui.allocate_exact_size(vec2(42.0, 46.0), egui::Sense::hover());
+        theme::status_symbol(ui, symbol.shrink2(vec2(0.0, 2.0)), running, p.color);
+        ui.allocate_ui_with_layout(
+            vec2((width - 56.0).max(80.0), 0.0),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                ui.set_min_width((width - 56.0).max(80.0));
+                ui.set_max_width((width - 56.0).max(80.0));
+                ui.spacing_mut().item_spacing.y = if compact { 4.0 } else { 7.0 };
+                ui.label(theme::title(
+                    &p.title,
+                    if compact {
+                        16.0
+                    } else if width >= 430.0 {
+                        22.0
+                    } else {
+                        18.0
+                    },
+                ));
+                if running {
+                    let names = state
+                        .games
+                        .iter()
+                        .filter(|game| game_running(state.processes, &game.exe) == Some(true))
+                        .map(|game| game.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join("、");
+                    ui.label(
+                        RichText::new(format!("已检测到 {names}"))
+                            .size(14.0)
+                            .color(theme::TEXT),
+                    );
+                    ui.label(
+                        RichText::new(format!(
+                            "游戏全部退出后等待 {} 秒，再复查并暂停。",
+                            state.strategy.grace_secs
+                        ))
+                        .size(12.0)
+                        .color(theme::MUTED),
+                    );
+                } else {
+                    ui.label(
+                        RichText::new(&p.detail)
+                            .size(if compact { 12.0 } else { 13.0 })
+                            .color(theme::MUTED),
+                    );
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(theme::title(
+                            &p.value,
+                            if p.value.contains(':') && !compact {
+                                24.0
+                            } else {
+                                16.0
+                            },
+                        ));
+                        ui.label(RichText::new(p.caption).size(12.0).color(theme::MUTED));
+                    });
+                }
+            },
+        );
+    });
+}
+
 fn status_row(ui: &mut Ui, contents: impl FnOnce(&mut Ui)) {
-    egui::Frame::new()
-        .inner_margin(egui::Margin::symmetric(22, 10))
-        .show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            contents(ui);
-        });
+    let margin = if ui.ctx().screen_rect().height() < 620.0 {
+        egui::Margin::symmetric(16, 8)
+    } else {
+        egui::Margin::symmetric(22, 16)
+    };
+    egui::Frame::new().inner_margin(margin).show(ui, |ui| {
+        ui.set_min_width(ui.available_width());
+        contents(ui);
+    });
 }
 
 fn group_separator(ui: &mut Ui) {
@@ -445,7 +516,7 @@ fn group_separator(ui: &mut Ui) {
     );
 }
 
-fn time_balance(ui: &mut Ui, balance: Option<&TimeBalance>) -> HomeAction {
+fn time_balance(ui: &mut Ui, balance: Option<&TimeBalance>, provider: Provider) -> HomeAction {
     let fallback = TimeBalance::default();
     let balance = balance.unwrap_or(&fallback);
     let mut action = HomeAction::None;
@@ -461,10 +532,12 @@ fn time_balance(ui: &mut Ui, balance: Option<&TimeBalance>) -> HomeAction {
     } else {
         "暂不可用".into()
     };
-    let size = if ui.available_width() < 275.0 {
+    let size = if ui.ctx().screen_rect().height() < 620.0 || ui.available_width() < 290.0 {
         20.0
+    } else if ui.available_width() < 360.0 {
+        24.0
     } else {
-        22.0
+        30.0
     };
     ui.label(theme::title(value, size));
     if let Some(free) = balance.free_seconds.filter(|_| balance.logged_in) {
@@ -479,7 +552,7 @@ fn time_balance(ui: &mut Ui, balance: Option<&TimeBalance>) -> HomeAction {
         ui.spacing_mut().item_spacing.x = 7.0;
         ui.spacing_mut().interact_size.y = 19.0;
         let note = if !balance.logged_in {
-            "登录雷神账号后显示".into()
+            format!("登录{}账号后显示", provider.name())
         } else if balance.refreshing {
             if balance.seconds.is_some() {
                 "上次结果 · 正在刷新…".into()
@@ -540,7 +613,7 @@ fn game_list(
 ) -> Option<usize> {
     let mut remove = None;
     theme::card()
-        .inner_margin(egui::Margin::symmetric(16, 4))
+        .inner_margin(egui::Margin::symmetric(16, 8))
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = 6.0;
@@ -619,7 +692,10 @@ fn game_list(
                                     None => ("待检测", theme::AMBER),
                                 }
                             };
-                            theme::badge(ui, text, color);
+                            ui.label(RichText::new(text).size(14.0).color(color));
+                            let (dot, _) =
+                                ui.allocate_exact_size(vec2(8.0, 8.0), egui::Sense::hover());
+                            ui.painter().circle_filled(dot.center(), 4.0, color);
                         });
                     });
                 });
@@ -638,7 +714,7 @@ fn game_icon(ui: &Ui, game: &GameEntry, rect: Rect) {
         _ => game.name.chars().take(2).collect::<String>(),
     };
     ui.painter()
-        .rect_filled(rect, 7, Color32::from_rgb(233, 236, 246));
+        .rect_filled(rect, 4, Color32::from_rgb(234, 238, 245));
     ui.painter().text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
