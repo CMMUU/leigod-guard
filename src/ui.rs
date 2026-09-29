@@ -1104,7 +1104,7 @@ impl App {
                     });
                 let bottom = ui.max_rect().bottom();
                 let footer = egui::Rect::from_min_max(
-                    egui::pos2(ui.max_rect().left() + 16.0, bottom - 129.0),
+                    egui::pos2(ui.max_rect().left() + 16.0, bottom - 144.0),
                     egui::pos2(ui.max_rect().right() - 16.0, bottom - 12.0),
                 );
                 ui.scope_builder(egui::UiBuilder::new().max_rect(footer), |ui| {
@@ -1130,7 +1130,23 @@ impl App {
                             .size(11.0)
                             .color(theme::MUTED),
                         );
-                        if ui.small_button("隐藏到托盘").clicked() {
+                        let tray_button = ui.add(
+                            egui::Button::new("隐藏到托盘")
+                                .min_size(egui::vec2(ui.available_width(), 32.0)),
+                        );
+                        theme::icon(
+                            ui,
+                            Icon::Monitor,
+                            egui::Rect::from_center_size(
+                                egui::pos2(
+                                    tray_button.rect.left() + 19.0,
+                                    tray_button.rect.center().y,
+                                ),
+                                egui::vec2(17.0, 17.0),
+                            ),
+                            theme::TEXT,
+                        );
+                        if tray_button.clicked() {
                             self.hide_requested = true;
                         }
                     });

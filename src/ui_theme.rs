@@ -367,6 +367,7 @@ pub enum Icon {
     Link,
     Pause,
     Protect,
+    Monitor,
 }
 
 pub fn icon(ui: &Ui, kind: Icon, rect: Rect, color: Color32) {
@@ -385,6 +386,16 @@ pub fn icon(ui: &Ui, kind: Icon, rect: Rect, color: Color32) {
         ));
     };
     match kind {
+        Icon::Monitor => {
+            p.rect_stroke(
+                Rect::from_min_max(at(3., 3.), at(21., 17.)),
+                1,
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            line(&[(12., 17.), (12., 21.)]);
+            line(&[(7., 21.), (17., 21.)]);
+        }
         Icon::Home => {
             line(&[(2., 11.), (12., 2.), (22., 11.)]);
             line(&[
