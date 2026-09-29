@@ -2432,7 +2432,6 @@ dependencies = [
  "tray-icon",
  "wgpu",
  "windows 0.58.0",
- "winit",
  "winreg",
  "wry",
  "zip",
