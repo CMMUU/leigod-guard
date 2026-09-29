@@ -86,11 +86,13 @@ jobs:
       - name: Verify normal session end on isolated eframe windows
         run: ./scripts/test-session-end.ps1 -Target $env:RUST_TARGET
       - name: Render native UI with the DirectX software adapter
+        id: native-ui
+        if: ${{ !cancelled() }}
         env:
           LEIGOD_UI_PREVIEW_DIR: target/ui-preview
         run: cargo test --locked --offline --target $env:RUST_TARGET ui::presentation_tests::render_apple_preview -- --ignored --nocapture
       - name: Upload native UI previews
-        if: always()
+        if: ${{ !cancelled() && steps.native-ui.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: native-ui-${{ github.ref_name }}

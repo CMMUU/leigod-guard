@@ -430,6 +430,7 @@ pub fn render(ui: &mut Ui, state: &HomeState<'_>, enabled: &mut bool) -> HomeAct
 fn guard_status(ui: &mut Ui, state: &HomeState<'_>, p: &Presentation) {
     let running = p.title == "游戏运行中，安心畅玩";
     let width = ui.available_width();
+    let compact = ui.ctx().screen_rect().height() < 620.0;
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = 14.0;
         let (symbol, _) = ui.allocate_exact_size(vec2(42.0, 46.0), egui::Sense::hover());
@@ -440,10 +441,16 @@ fn guard_status(ui: &mut Ui, state: &HomeState<'_>, p: &Presentation) {
             |ui| {
                 ui.set_min_width((width - 56.0).max(80.0));
                 ui.set_max_width((width - 56.0).max(80.0));
-                ui.spacing_mut().item_spacing.y = 7.0;
+                ui.spacing_mut().item_spacing.y = if compact { 4.0 } else { 7.0 };
                 ui.label(theme::title(
                     &p.title,
-                    if width >= 430.0 { 22.0 } else { 18.0 },
+                    if compact {
+                        16.0
+                    } else if width >= 430.0 {
+                        22.0
+                    } else {
+                        18.0
+                    },
                 ));
                 if running {
                     let names = state
@@ -467,11 +474,19 @@ fn guard_status(ui: &mut Ui, state: &HomeState<'_>, p: &Presentation) {
                         .color(theme::MUTED),
                     );
                 } else {
-                    ui.label(RichText::new(&p.detail).size(13.0).color(theme::MUTED));
+                    ui.label(
+                        RichText::new(&p.detail)
+                            .size(if compact { 12.0 } else { 13.0 })
+                            .color(theme::MUTED),
+                    );
                     ui.horizontal_wrapped(|ui| {
                         ui.label(theme::title(
                             &p.value,
-                            if p.value.contains(':') { 24.0 } else { 16.0 },
+                            if p.value.contains(':') && !compact {
+                                24.0
+                            } else {
+                                16.0
+                            },
                         ));
                         ui.label(RichText::new(p.caption).size(12.0).color(theme::MUTED));
                     });
@@ -482,12 +497,15 @@ fn guard_status(ui: &mut Ui, state: &HomeState<'_>, p: &Presentation) {
 }
 
 fn status_row(ui: &mut Ui, contents: impl FnOnce(&mut Ui)) {
-    egui::Frame::new()
-        .inner_margin(egui::Margin::symmetric(22, 16))
-        .show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            contents(ui);
-        });
+    let margin = if ui.ctx().screen_rect().height() < 620.0 {
+        egui::Margin::symmetric(16, 8)
+    } else {
+        egui::Margin::symmetric(22, 16)
+    };
+    egui::Frame::new().inner_margin(margin).show(ui, |ui| {
+        ui.set_min_width(ui.available_width());
+        contents(ui);
+    });
 }
 
 fn group_separator(ui: &mut Ui) {
@@ -514,7 +532,7 @@ fn time_balance(ui: &mut Ui, balance: Option<&TimeBalance>, provider: Provider) 
     } else {
         "暂不可用".into()
     };
-    let size = if ui.available_width() < 290.0 {
+    let size = if ui.ctx().screen_rect().height() < 620.0 || ui.available_width() < 290.0 {
         20.0
     } else if ui.available_width() < 360.0 {
         24.0
