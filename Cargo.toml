@@ -19,7 +19,6 @@ eframe = { version = "0.31", default-features = false, features = [
 ] }
 egui = "0.31"
 raw-window-handle = "0.6"
-winit = { version = "0.30", default-features = false }
 wgpu = { version = "24.0.5", default-features = false, features = ["dx12"] }
 wry = "0.53"
 tao = "0.34"

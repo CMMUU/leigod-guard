@@ -59,6 +59,7 @@ fn main() -> eframe::Result {
             ..Default::default()
         }),
         Box::new(move |cc| {
+            brand::install_taskbar_icon(cc)?;
             if !manual {
                 window_visibility::install(cc)?;
             }

@@ -181,6 +181,7 @@ fn main() {
         "加速器守护 - Accelerator Guard",
         options,
         Box::new(move |cc| {
+            brand::install_taskbar_icon(cc)?;
             shutdown::install_main_window(cc)?;
             if minimized {
                 // Install before tray creation or any background UI callbacks.

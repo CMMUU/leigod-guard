@@ -43,6 +43,6 @@ python scripts/generate-brand.py --check
 
 ## Windows 升级后的图标刷新（0.22.2）
 
-`egui::ViewportBuilder::with_icon` 在当前依赖中只设置窗口小图标。`brand::native_options` 同时通过 winit 的 Windows 扩展显式设置任务栏大图标；实际 eframe 启动探针分别读取 `WM_GETICON / ICON_SMALL` 和 `ICON_BIG`，不能以离屏 UI 或 EXE 资源检查替代此项。
+`egui::ViewportBuilder::with_icon` 在当前依赖中只设置窗口小图标。`brand::native_options` 统一窗口资源，`brand::install_taskbar_icon` 在实际窗口创建后通过 Windows 的 `WM_SETICON / ICON_BIG` 独立设置任务栏大图标，并在窗口销毁时回收持有的图标；实际 eframe 启动探针分别读取 `WM_GETICON / ICON_SMALL` 和 `ICON_BIG`，不能以离屏 UI 或 EXE 资源检查替代此项。
 
 安装器为桌面、开始菜单、卸载入口显式指定 `branding/app-icon-<sha256>.ico`。`src/brand_shell.rs` 在后台为**直接指向当前 EXE**的已有桌面、产品开始菜单目录和已固定任务栏快捷方式更新 IconLocation；本地缓存名也取 ICO 的 SHA-256，避免旧 EXE 路径的图标缓存。保留名称、启动参数和工作目录，不创建新的固定项，不操作其他程序，不重启 Explorer 或清空系统缓存。绿色版无需在 ZIP 中携带额外 ICO，运行时从同一内嵌资源生成。
