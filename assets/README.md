@@ -22,7 +22,7 @@ Logo：从已确认品牌板提取彩色主标，保持几何盾牌、箭头、�
 
 ## 验证
 
-Windows 流水线使用 `scripts/test-icons.ps1` 对实际 EXE、安装器和绿色 ZIP 内 EXE 逐帧读取并比对 ICO，不运行用户应用。原生界面测试确认标题栏使用新图标；发布前另检查 16／32 px 在浅、深底的可读性。`make_tray_icon_rgba` 和 `make_icon_rgba` 的固定长度数组在编译时验证大小。
+Windows 流水线使用 `scripts/test-icons.ps1` 对实际 EXE、安装器和绿色 ZIP 内 EXE 逐帧读取并比对 ICO，不运行用户应用。原生界面测试确认标题栏使用新图标；发布前另检查 16／32 px 在浅、深底的可读性。`src/brand.rs` 的固定长度数组在编译时验证大小。
 
 折片在首次显示时解码并缓存，窗口变窄时省略，不遮挡标题、选择框和按钮，不请求动画重绘。参考 Aero Shards 的折面语言，未引入 React Bits 运行时或动态 WebGPU 场景。
 
@@ -39,3 +39,10 @@ python scripts/generate-brand.py --check
 生成依赖仅用于维护资源，不加入客户端或服务器运行时。`brand.generated.json` 记录源图、配置和所有产物 SHA-256；校验命令只需 Python 标准库。Windows CI、正式发布、Server CI 和官网构建均校验资源是否同步。修改源图时必须同时提交生成产物与记录。历史截图和旧版设计档案保留其当时的图标，不作为当前资源源头。
 
 发布网站与后台时仍需正常部署静态资源；统一生成不代表已上传到线上。后台容器／可执行部署所需的静态文件已在仓库内，无需部署机器安装图片工具。
+
+
+## Windows 升级后的图标刷新（0.22.2）
+
+`egui::ViewportBuilder::with_icon` 在当前依赖中只设置窗口小图标。`brand::native_options` 统一窗口资源，`brand::install_taskbar_icon` 在实际窗口创建后通过 Windows 的 `WM_SETICON / ICON_BIG` 独立设置任务栏大图标，并在窗口销毁时回收持有的图标；实际 eframe 启动探针分别读取 `WM_GETICON / ICON_SMALL` 和 `ICON_BIG`，不能以离屏 UI 或 EXE 资源检查替代此项。
+
+安装器为桌面、开始菜单、卸载入口显式指定 `branding/app-icon-<sha256>.ico`。`src/brand_shell.rs` 在后台为**直接指向当前 EXE**的已有桌面、产品开始菜单目录和已固定任务栏快捷方式更新 IconLocation；本地缓存名也取 ICO 的 SHA-256，避免旧 EXE 路径的图标缓存。保留名称、启动参数和工作目录，不创建新的固定项，不操作其他程序，不重启 Explorer 或清空系统缓存。绿色版无需在 ZIP 中携带额外 ICO，运行时从同一内嵌资源生成。

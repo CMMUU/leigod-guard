@@ -130,10 +130,6 @@ pub struct App {
     plan_note: String,
 }
 
-pub fn make_icon_rgba() -> (Vec<u8>, u32, u32) {
-    crate::brand::window_icon()
-}
-
 fn make_tray_icon_rgba() -> (Vec<u8>, u32, u32) {
     crate::brand::tray_icon()
 }

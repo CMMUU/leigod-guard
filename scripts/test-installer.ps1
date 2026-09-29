@@ -130,9 +130,18 @@ try {
         throw 'The uninstall registration has an incorrect version or installation directory.'
     }
     $shell = New-Object -ComObject WScript.Shell
+    $sourceIcon = Join-Path $repositoryRoot 'assets\app-icon.ico'
+    $iconHash = (Get-FileHash -LiteralPath $sourceIcon -Algorithm SHA256).Hash.ToLowerInvariant()
+    $installedIcon = Join-Path $installRoot ("branding\app-icon-$iconHash.ico")
+    if ((Get-FileHash -LiteralPath $installedIcon -Algorithm SHA256).Hash.ToLowerInvariant() -cne $iconHash) {
+        throw 'Installed shortcut icon differs from the shared brand asset.'
+    }
     foreach ($shortcutPath in @($menuShortcut, $desktopShortcut)) {
         if ($shell.CreateShortcut($shortcutPath).TargetPath -ine $installedExecutable) {
             throw "Shortcut points to an unexpected executable: $shortcutPath"
+        }
+        if ($shell.CreateShortcut($shortcutPath).IconLocation -ine "$installedIcon,0") {
+            throw "Shortcut does not explicitly use the content-addressed brand icon: $shortcutPath"
         }
     }
     Assert-InstalledVersion
