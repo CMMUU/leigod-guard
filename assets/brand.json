@@ -1,0 +1,6 @@
+{
+  "source": "docs/brand/aero-guard-source.png",
+  "png": {"assets/app-icon.png": 256, "server/static/logo.png": 256},
+  "rgba": {"assets/app-icon-32.rgba": 32, "assets/app-icon-256.rgba": 256},
+  "ico": {"assets/app-icon.ico": [16, 20, 24, 32, 40, 48, 64, 128, 256]}
+}

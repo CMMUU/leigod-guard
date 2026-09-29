@@ -62,6 +62,8 @@ jobs:
           key: windows-msvc-${{ steps.rust.outputs.compiler }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/config.toml', 'build.rs', 'src/**', 'examples/**', 'assets/**') }}
           restore-keys: |
             windows-msvc-${{ steps.rust.outputs.compiler }}-
+      - name: Verify shared brand assets
+        run: python scripts/generate-brand.py --check
       - name: Check package version against tag
         run: |
           $metadataText = cargo metadata --locked --no-deps --format-version 1
@@ -144,7 +146,7 @@ jobs:
           $notes = @"
           **推荐下载安装版：``leigod-guard-$env:RELEASE_TAG-windows-x64-setup.exe``。** 双击后按安装向导操作，完成后可从桌面或开始菜单打开。
 
-          **本版更新钛银钴蓝折面界面，以及桌面、任务栏和系统托盘的新图标。** 首页采用静态金属折片、切角面板及守护状态／余额分栏，窄窗口自动上下排列；背景不增加动画循环。原生架构、账号、名单和暂停策略保留。下载中心继续为默认来源，明确选择的 Gitee/GitHub 保留；官网固定下载地址无需随版本变更。首页下拉选择雷神或外星仔，默认雷神，同一时间只守护当前对象；后台继续使用 0.6.0。
+          **本版新增外星仔手机号短信验证码直接登录，并统一所有 Logo 资源。** 在首页选择外星仔，打开“账户 → 短信验证码”，获取六位验证码后登录。验证码由外星仔官方发送和校验，密码及验证码不保存，成功后加密保存令牌；首次暂停状态校准和服务器明确授权仍需完成。桌面、任务栏、托盘、官网和后台 Logo 由单一源图生成并自动校验。下载中心继续为默认来源，官网固定下载地址无需随版本变更；后台功能版本继续使用 0.6.0。
 
           适用于 Windows 10 / 11 x64。安装程序自动检查 Microsoft WebView2 Runtime；缺少时调用包内的微软官方安装器联网补齐。已有运行库时直接安装应用。选择加速器、登录对应账号并添加需要监控的游戏；外星仔还需完成官方暂停状态校准。安装版和便携版均为独立第三方工具，与雷神、外星仔官方无隶属或背书关系。
 

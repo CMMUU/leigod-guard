@@ -131,14 +131,11 @@ pub struct App {
 }
 
 pub fn make_icon_rgba() -> (Vec<u8>, u32, u32) {
-    // 与 EXE/安装器的 ICO 共用设计；内嵌 RGBA，无需运行时解码或读取文件。
-    const PIXELS: &[u8; 256 * 256 * 4] = include_bytes!("../assets/app-icon-256.rgba");
-    (PIXELS.to_vec(), 256, 256)
+    crate::brand::window_icon()
 }
 
 fn make_tray_icon_rgba() -> (Vec<u8>, u32, u32) {
-    const PIXELS: &[u8; 32 * 32 * 4] = include_bytes!("../assets/app-icon-32.rgba");
-    (PIXELS.to_vec(), 32, 32)
+    crate::brand::tray_icon()
 }
 
 fn load_cjk_fonts(ctx: &egui::Context) {
@@ -1262,7 +1259,7 @@ fn page_header(ui: &mut egui::Ui, title: &str, subtitle: &str) {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.etalien.poll(&self.config);
+        self.etalien.poll(&self.config, &self.platform);
         // Explorer may not have finished creating the tray at Windows login.
         // Retry on its owning UI thread without releasing the startup guard.
         if let Some((menu, last_attempt)) = self.tray_retry.as_mut() {

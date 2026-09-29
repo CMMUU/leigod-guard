@@ -9,8 +9,8 @@ pub fn render(ctx: &Context, backdrop: &egui::TextureHandle) -> bool {
     let logo = ctx.data(|data| data.get_temp::<egui::TextureHandle>(logo_id));
     let logo = logo.unwrap_or_else(|| {
         let image = egui::ColorImage::from_rgba_unmultiplied(
-            [256, 256],
-            include_bytes!("../assets/app-icon-256.rgba"),
+            [crate::brand::WINDOW_SIDE, crate::brand::WINDOW_SIDE],
+            crate::brand::WINDOW_RGBA,
         );
         let logo = ctx.load_texture(
             "accelerator-guard-logo",

@@ -4,10 +4,12 @@
 compile_error!("Accelerator Guard currently supports Windows only.");
 
 mod autostart;
+mod brand;
 mod captcha;
 mod config;
 mod dpapi;
 mod etalien_api;
+mod etalien_auth;
 mod game_lifecycle;
 mod game_presets;
 mod guard;

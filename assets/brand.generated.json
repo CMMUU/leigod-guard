@@ -1,0 +1,12 @@
+{
+  "source_sha256": "8d9b356e65da7e490dc0540c956938a1e8b082461611130526aee1686ad4f675",
+  "config_sha256": "c9202ad1182d0012e05b4ee88afd138c9286d3ce6a546e403bee0bab70de54f3",
+  "generator": "Pillow 11.3.0 / Lanczos",
+  "outputs": {
+    "assets/app-icon.png": "945e674eecaa9fe7f4680c16c2a2d8fcb63d1a6b13e72e1478cc1624b211c060",
+    "server/static/logo.png": "945e674eecaa9fe7f4680c16c2a2d8fcb63d1a6b13e72e1478cc1624b211c060",
+    "assets/app-icon-32.rgba": "ac827abb1848ceab7299671922c50e33dba53fcfcf5773397aba8696a25d309d",
+    "assets/app-icon-256.rgba": "06a0e3312e59030a93f658ef3fd633efa97fceb8892ae1f83c7d8fe9a810bbd1",
+    "assets/app-icon.ico": "c013f25747e65aa40d85f70d24857a053d697c5f2e7d565e4e51cedce0a47dce"
+  }
+}
