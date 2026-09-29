@@ -48,11 +48,21 @@ fn write_icon(root: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
             return Err("brand cache contents differ".into());
         }
     } else {
+        let pending = root.join(format!(".icon-{}.tmp", std::process::id()));
         let mut file = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(&path)?;
-        file.write_all(ICON)?;
+            .open(&pending)?;
+        let result = (|| -> std::io::Result<()> {
+            file.write_all(ICON)?;
+            file.sync_all()?;
+            drop(file);
+            fs::rename(&pending, &path)
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&pending);
+        }
+        result?;
     }
     Ok(path)
 }

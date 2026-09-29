@@ -134,7 +134,7 @@ Name: "{group}\{cm:ProjectWebsite}"; Filename: "{#ProjectURL}#readme"
 Name: "{autodesktop}\{cm:AppDisplayName}"; Filename: "{app}\{#ProductExe}"; WorkingDir: "{app}"; IconFilename: "{app}\branding\{#AppIconName}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#ProductExe}"; WorkingDir: "{app}"; IconFilename: "{app}\branding\{#AppIconName}"; Description: "{cm:LaunchApp}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#ProductExe}"; WorkingDir: "{app}"; Description: "{cm:LaunchApp}"; Flags: nowait postinstall skipifsilent
 
 [Code]
 const
