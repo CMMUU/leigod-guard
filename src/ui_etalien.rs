@@ -341,6 +341,7 @@ impl Panel {
         let compact = ui.available_width() < 520.0;
         let busy = self.events.is_some();
         ui.add_enabled_ui(!busy, |ui| {
+            if compact { ui.spacing_mut().item_spacing.y = 4.0; }
             ui.horizontal_wrapped(|ui| {
                 ui.selectable_value(&mut self.login_mode, LoginMode::Sms, "短信验证码");
                 ui.selectable_value(&mut self.login_mode, LoginMode::Password, "密码登录");
