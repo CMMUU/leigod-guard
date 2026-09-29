@@ -1092,7 +1092,7 @@ impl App {
                         for (page, icon, label) in [
                             (Page::Games, Icon::Home, "首页与游戏"),
                             (Page::Account, Icon::Account, "账户"),
-                            (Page::Platform, Icon::Account, "平台账号"),
+                            (Page::Platform, Icon::Link, "平台账号"),
                             (Page::Strategy, Icon::Shield, "策略"),
                             (Page::Logs, Icon::Logs, "日志"),
                         ] {
