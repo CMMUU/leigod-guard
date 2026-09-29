@@ -338,17 +338,7 @@ impl Panel {
     ) {
         self.poll(config, platform);
         let account = config.lock().map(|c| c.etalien.clone()).unwrap_or_default();
-        ui.label(egui::RichText::new("外星仔加速器 · 本机自动暂停（试验性接入）").strong());
-        ui.label(
-            "使用游戏名单、游戏退出宽限期和启动保护。服务器失联保护可在“平台账号”页单独授权开启。",
-        );
-        ui.label(
-            egui::RichText::new(
-                "登录令牌由 Windows 加密保存；密码和短信验证码不保存。首次使用请核对官方计时状态。",
-            )
-            .color(theme::MUTED),
-        );
-        ui.add_space(8.0);
+        let compact = ui.available_width() < 520.0;
         let busy = self.events.is_some();
         ui.add_enabled_ui(!busy, |ui| {
             ui.horizontal_wrapped(|ui| {
@@ -357,7 +347,7 @@ impl Panel {
                 ui.selectable_value(&mut self.login_mode, LoginMode::Token, "已有 Token");
             });
             if self.login_mode == LoginMode::Sms {
-                ui.label("外星仔账号手机号");
+                if !compact { ui.label("外星仔账号手机号"); }
                 if ui
                     .add(
                         egui::TextEdit::singleline(&mut self.sms_phone)
@@ -407,13 +397,6 @@ impl Panel {
                         }
                     }
                 });
-                ui.label(
-                    egui::RichText::new(
-                        "验证码由外星仔官方发送和校验；未注册的手机号可能按官方规则创建账号。",
-                    )
-                    .small()
-                    .color(theme::MUTED),
-                );
             } else if self.login_mode == LoginMode::Token {
                 ui.label("粘贴你本人账号的 Authorization（仅单独授权远程保护后上传平台）：");
                 ui.add(
@@ -486,6 +469,15 @@ impl Panel {
                     })
                 });
             }
+            if self.login_mode == LoginMode::Sms {
+                ui.label(egui::RichText::new("验证码由外星仔官方发送和校验；未注册的手机号可能按官方规则创建账号。").small().color(theme::MUTED));
+            }
+            ui.label(egui::RichText::new("登录令牌由 Windows 加密保存；密码和短信验证码不保存。").small().color(theme::MUTED));
+            ui.collapsing("首次使用与服务器保护", |ui| {
+                ui.label("外星仔加速器 · 本机自动暂停（试验性接入）");
+                ui.label("使用游戏名单、游戏退出宽限期和启动保护。服务器失联保护可在“平台账号”页单独授权开启。");
+                ui.label("首次使用请核对外星仔官方计时状态。");
+            });
             ui.separator();
             let token = self.shared.lock().ok().and_then(|s| s.token.clone());
             ui.add_enabled_ui(token.is_some(), |ui| {
