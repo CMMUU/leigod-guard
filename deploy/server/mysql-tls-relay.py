@@ -79,17 +79,49 @@ class Relay:
             client = self.local_tls.wrap_socket(client, server_side=True)
             for sock in (client, upstream):
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-                sock.settimeout(15)
+                sock.setblocking(False)
+            sockets = (client, upstream)
+            outgoing = {sock: bytearray() for sock in sockets}
+            read_needs_write, write_needs_read, ended = set(), set(), set()
             while not self.stop.is_set():
-                ready = [sock for sock in (client, upstream) if sock.pending()]
-                if not ready:
-                    ready, _, _ = select.select([client, upstream], [], [], 1)
-                for source in ready:
-                    data = source.recv(65536)
-                    if not data:
-                        return
+                # TLS 1.3 tickets can make the TCP socket readable without any
+                # application bytes. A blocking recv here deadlocks the other
+                # direction while a slower client prepares authentication.
+                readable = [sock for sock in sockets if sock in write_needs_read or (
+                    sock not in ended and len(outgoing[upstream if sock is client else client]) < 262144)]
+                writable = [sock for sock in sockets if sock in read_needs_write or (
+                    outgoing[sock] and sock not in write_needs_read)]
+                pending = {sock for sock in readable if sock.pending()}
+                ready_r, ready_w, _ = select.select(readable, writable, [], 0 if pending else 1)
+                ready_r, ready_w = set(ready_r) | pending, set(ready_w)
+                for sock in ready_w | (ready_r & write_needs_read):
+                    if not outgoing[sock]:
+                        continue
+                    try:
+                        sent = sock.send(outgoing[sock][:65536])
+                        del outgoing[sock][:sent]
+                        write_needs_read.discard(sock)
+                    except ssl.SSLWantReadError:
+                        write_needs_read.add(sock)
+                    except ssl.SSLWantWriteError:
+                        pass
+                for source in ready_r | (ready_w & read_needs_write):
                     destination = upstream if source is client else client
-                    destination.sendall(data)
+                    if source in ended or len(outgoing[destination]) >= 262144:
+                        continue
+                    try:
+                        data = source.recv(65536)
+                        read_needs_write.discard(source)
+                        if data:
+                            outgoing[destination].extend(data)
+                        else:
+                            ended.add(source)
+                    except ssl.SSLWantReadError:
+                        pass
+                    except ssl.SSLWantWriteError:
+                        read_needs_write.add(source)
+                if ended and not any(outgoing.values()):
+                    return
         except (OSError, ValueError) as error:
             # Exception text can contain endpoints. Never log it or packet contents.
             print('connection_closed type=' + type(error).__name__, file=sys.stderr, flush=True)

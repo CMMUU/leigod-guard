@@ -29,7 +29,7 @@ with tempfile.TemporaryDirectory() as folder:
                        stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,check=True)
     der = ssl.PEM_cert_to_DER_cert((folder/'upstream.pem').read_text())
     pin = hashlib.sha256(der).hexdigest()
-    for case in ('success', 'wrong_pin', 'wrong_ca', 'plaintext'):
+    for case in ('success', 'delayed_auth', 'wrong_pin', 'wrong_ca', 'plaintext'):
         upstream_port, local_port = port(), port()
         config = dict(upstream_host='127.0.0.1', upstream_port=upstream_port,
                       upstream_ca=str(folder/('other.pem' if case == 'wrong_ca' else 'upstream.pem')),
@@ -74,12 +74,14 @@ with tempfile.TemporaryDirectory() as folder:
             else:
                 ctx=ssl.create_default_context(cafile=str(folder/'local.pem'))
                 client=ctx.wrap_socket(client,server_hostname='localhost')
+                if case == 'delayed_auth':
+                    time.sleep(.3)
                 client.sendall(b'fixture-auth-secret')
                 assert client.recv(1024)==b'fixture-auth-secret'
-                assert case == 'success'
+                assert case in ('success','delayed_auth')
         except OSError:
-            assert case != 'success'
+            assert case not in ('success','delayed_auth')
         finally:
             client.close();server.join(7);relay.stop.set();worker.join(3)
-        assert observed == ([b'fixture-auth-secret'] if case == 'success' else []), case
+        assert observed == ([b'fixture-auth-secret'] if case in ('success','delayed_auth') else []), case
         print('PASS TLS relay '+case+' authentication forwarding verified')
