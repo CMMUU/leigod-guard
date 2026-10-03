@@ -28,7 +28,7 @@ try:
         options = Path(folder)/'client.cnf'
         local = u.hostname in ('127.0.0.1','localhost','::1')
         content = '[client]\n'+'\n'.join(k+'='+quote(v) for k,v in dict(host=u.hostname,port=str(u.port or 3306),user=unquote(u.username),password=unquote(u.password)).items())
-        content += '\nssl-mode='+('PREFERRED' if local else 'VERIFY_IDENTITY')+'\n'
+        content += '\nssl-mode='+('PREFERRED' if local and not os.environ.get('MYSQL_SSL_CA') else 'VERIFY_IDENTITY')+'\n'
         if os.environ.get('MYSQL_SSL_CA'):
             content += 'ssl-ca='+quote(os.environ['MYSQL_SSL_CA'])+'\n'
         options.write_text(content)

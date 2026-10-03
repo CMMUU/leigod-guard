@@ -71,7 +71,7 @@ def mysql():
     if url.scheme != 'mysql' or not url.path.strip('/'):
         raise ValueError('MySQL DATABASE_URL required')
     tls = {}
-    if url.hostname not in ('127.0.0.1', 'localhost', '::1'):
+    if os.environ.get('MYSQL_SSL_CA') or url.hostname not in ('127.0.0.1', 'localhost', '::1'):
         tls = dict(ssl_verify_cert=True, ssl_verify_identity=True,
                    ssl_ca=os.environ.get('MYSQL_SSL_CA'))
     return pymysql.connect(host=url.hostname, port=url.port or 3306,
