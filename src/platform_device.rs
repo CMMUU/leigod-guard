@@ -1296,6 +1296,17 @@ mod tests {
         assert!(read.paused);
         assert!(read[Provider::Leigod].pending_disable);
         assert_eq!(read[Provider::Leigod].remote_revision, 4);
+        // Loading an old maintained origin must preserve compensation intent,
+        // counters and installation identity, never register a new device.
+        s.origin = "https://111.229.216.86".into();
+        let old = crate::dpapi::protect(&serde_json::to_string(&s).unwrap()).unwrap();
+        std::fs::write(&store.0, old).unwrap();
+        let migrated = store.load().unwrap();
+        assert_eq!(migrated.origin, ORIGIN_URL);
+        assert_eq!(migrated.installation_key, original);
+        assert_eq!(migrated.reserved_until, 256);
+        assert!(migrated[Provider::Leigod].pending_disable);
+        assert_eq!(migrated[Provider::Leigod].remote_revision, 4);
         assert!(!std::fs::read_to_string(&store.0)
             .unwrap()
             .contains(&original));

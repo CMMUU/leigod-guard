@@ -232,6 +232,11 @@ pub fn render(ui: &mut Ui, state: &HomeState<'_>, enabled: &mut bool) -> HomeAct
                 action = HomeAction::Select(selected);
             }
         });
+        ui.add_space(8.0);
+        if ui.button("使用云端自动暂停").clicked() {
+            action = HomeAction::Platform;
+        }
+        ui.label(RichText::new("临时测试").small().color(theme::AMBER));
     });
     if !state.guard_ready {
         ui.disable();
@@ -386,23 +391,6 @@ pub fn render(ui: &mut Ui, state: &HomeState<'_>, enabled: &mut bool) -> HomeAct
         .color(theme::MUTED),
     );
     ui.add_space(8.0);
-    theme::card().show(ui, |ui| {
-        ui.set_min_width(ui.available_width());
-        ui.horizontal_wrapped(|ui| {
-            ui.label(theme::title("云端自动暂停", 16.0));
-            ui.label(RichText::new("临时测试").small().color(theme::AMBER));
-            ui.label(RichText::new(format!("当前：{}", state.provider.name())).small().color(theme::MUTED));
-        });
-        ui.label(state.cloud_status);
-        ui.label(RichText::new("需单独授权。设备失联后由云端尝试暂停；测试期间可能延迟或不可用，本地守护可独立使用。").small().color(theme::MUTED));
-        ui.horizontal_wrapped(|ui| {
-            if ui.button("使用云端自动暂停").clicked() {
-                action = HomeAction::Platform;
-            }
-            ui.hyperlink_to("打开云平台", crate::platform_api::ORIGIN_URL);
-        });
-    });
-    ui.add_space(8.0);
     ui.horizontal(|ui| {
         ui.label(theme::title("游戏名单", 20.0));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -433,6 +421,23 @@ pub fn render(ui: &mut Ui, state: &HomeState<'_>, enabled: &mut bool) -> HomeAct
         if ui.link(RichText::new("调整策略 ›").size(12.0)).clicked() {
             action = HomeAction::Strategy;
         }
+    });
+    ui.add_space(8.0);
+    theme::card().show(ui, |ui| {
+        ui.set_min_width(ui.available_width());
+        ui.horizontal_wrapped(|ui| {
+            ui.label(theme::title("云端自动暂停", 16.0));
+            ui.label(RichText::new("临时测试").small().color(theme::AMBER));
+            ui.label(RichText::new(format!("当前：{}", state.provider.name())).small().color(theme::MUTED));
+        });
+        ui.label(state.cloud_status);
+        ui.label(RichText::new("需单独授权。设备失联后由云端尝试暂停；测试期间可能延迟或不可用，本地守护可独立使用。").small().color(theme::MUTED));
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("管理云端保护").clicked() {
+                action = HomeAction::Platform;
+            }
+            ui.hyperlink_to("打开云平台", crate::platform_api::ORIGIN_URL);
+        });
     });
     ui.scope(|ui| {
         ui.spacing_mut().interact_size.y = 22.0;

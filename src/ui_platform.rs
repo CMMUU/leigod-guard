@@ -915,6 +915,26 @@ impl Panel {
 mod tests {
     use super::*;
     use std::cell::RefCell;
+    #[test]
+    fn cloud_summary_requires_fresh_selected_provider_confirmation() {
+        let mut panel = Panel::default();
+        panel.remote_fixture(true, false);
+        assert!(panel.cloud_summary(Provider::Leigod).contains("待确认"));
+        {
+            let mut view = panel.agent.as_ref().unwrap().view.lock().unwrap();
+            view.remote[0].checked_at = Some(std::time::Instant::now());
+        }
+        assert!(panel.cloud_summary(Provider::Leigod).contains("保护生效"));
+        assert!(!panel.cloud_summary(Provider::Etalien).contains("保护生效"));
+        {
+            let mut view = panel.agent.as_ref().unwrap().view.lock().unwrap();
+            view.remote[0].checked_at =
+                Some(std::time::Instant::now() - std::time::Duration::from_secs(31));
+        }
+        assert!(panel.cloud_summary(Provider::Leigod).contains("待确认"));
+        panel.remote_fixture(true, true);
+        assert!(panel.cloud_summary(Provider::Leigod).contains("关闭待确认"));
+    }
     #[derive(Default)]
     struct MemoryStore {
         session: RefCell<Option<Session>>,

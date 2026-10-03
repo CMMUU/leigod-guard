@@ -1304,6 +1304,17 @@ fn render_apple_preview() {
 }
 
 #[test]
+fn home_cloud_entry_only_opens_platform_and_does_not_request_pause() {
+    let (ctx, mut app) = fixture();
+    let before = app.config.lock().unwrap().selected_provider;
+    click(&ctx, &mut app, "使用云端自动暂停");
+    assert!(app.page == Page::Platform);
+    assert_eq!(app.config.lock().unwrap().selected_provider, before);
+    assert!(app.shared.lock().unwrap().manual_cmd.is_none());
+    assert!(app.platform.action.is_none());
+}
+
+#[test]
 fn platform_form_emits_actions_without_touching_accelerator_credentials() {
     let (ctx, mut app) = fixture();
     app.shared
