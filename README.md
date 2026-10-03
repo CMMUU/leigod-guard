@@ -12,7 +12,7 @@
 
 [项目网站](https://leigod.cmmuu.com) · [下载中心（推荐）](https://downloads.cmmuu.com/) · [Gitee 备用下载](https://gitee.com/cmmuu/leigod-guard/releases) · [前往 GitHub 下载](https://github.com/CMMUU/leigod-guard/releases/latest)
 
-**自建后台：** 服务端源码位于 [server/](server/)，支持 [Docker Compose 或 Linux 可执行文件部署](docs/SERVER_DEPLOYMENT.md)。说明包含 PostgreSQL、管理员初始化、邮件、HTTPS、远程保护及客户端连接地址配置。
+**自建后台：** 服务端源码位于 [server/](server/)，支持 [Docker Compose 或 Linux 可执行文件部署](docs/SERVER_DEPLOYMENT.md)。后台 0.7.0 使用 MySQL 8.4，说明包含旧 PostgreSQL 离线迁移、管理员初始化、邮件、HTTPS、远程保护及客户端连接地址配置。
 
 两处发布页均提供**安装版 EXE、绿色免安装 ZIP 和校验文件**。一般用户选择安装版；希望解压即用的用户选择绿色版。已有用户可在「关于与更新」中检查新版，点击「下载并自动更新」完成升级。
 
