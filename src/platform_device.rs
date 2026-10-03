@@ -101,8 +101,9 @@ impl Store {
                 }
                 let plain = crate::dpapi::unprotect(&text)
                     .map_err(|_| "设备身份无法解密，请使用原 Windows 用户。")?;
-                let saved: Saved =
+                let mut saved: Saved =
                     serde_json::from_str(&plain).map_err(|_| "设备身份文件无效。")?;
+                crate::platform_api::migrate_origin(&mut saved.origin);
                 if !saved.valid() {
                     return Err("设备身份文件无效。".into());
                 }
@@ -150,6 +151,7 @@ pub(crate) struct View {
 }
 #[derive(Clone, Default)]
 pub(crate) struct RemoteView {
+    pub checked_at: Option<Instant>,
     pub status: RemoteStatus,
     pub message: String,
     pub error: String,
@@ -865,6 +867,8 @@ fn remote_view(
     kind: Provider,
 ) {
     if let Ok(mut v) = view.lock() {
+        v.remote[kind.index()].checked_at = Some(Instant::now());
+        v.remote[kind.index()].error.clear();
         v.remote[kind.index()].pending_disable = pending;
         v.remote[kind.index()].message = status.message().into();
         v.remote[kind.index()].status = status;
@@ -1035,6 +1039,7 @@ fn sync_remote(
         }
         Err(_) => {
             if let Ok(mut v) = view.lock() {
+                v.remote[kind.index()].checked_at = None;
                 v.remote[kind.index()].message = if saved[kind].pending_disable {
                     "服务器关闭未确认，可能仍会超时暂停；正在重试。"
                 } else {

@@ -1,12 +1,10 @@
-"""Real disposable PostgreSQL and loopback providers; never a real accelerator."""
+"""Real disposable MySQL and loopback providers; never a real accelerator."""
 import http.cookiejar,json,os,secrets,subprocess,time,urllib.error,urllib.request
 BASE=os.environ.get('BASE_URL','http://127.0.0.1:3089')
 assert BASE.startswith('http://127.0.0.1:')
 assert os.environ['LEIGOD_TEST_ORIGIN']=='http://127.0.0.1:3091'
 nonce=secrets.token_hex(5)
-def sql(q):
- args=json.loads(os.environ['TEST_PSQL']) if 'TEST_PSQL' in os.environ else ['psql',os.environ['DATABASE_URL'],'-v','ON_ERROR_STOP=1','-At']
- return subprocess.run(args,input=q,text=True,capture_output=True,check=True).stdout.strip()
+from db import sql
 class Client:
  def __init__(self):self.http=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()));self.csrf=None
  def call(self,path,body=None,status=200,token=None):
@@ -31,7 +29,7 @@ def wait(fn,seconds=30):
   if v:return v
   time.sleep(.25)
  raise AssertionError('cafe worker did not reach expected state')
-def ready():sql("UPDATE remote_service SET warmup_until=now()-interval '1 second',ingress_ok=true,blocked=false,last_tick=now();")
+def ready():sql("UPDATE remote_service SET warmup_until=UTC_TIMESTAMP(6)-INTERVAL 1 SECOND,ingress_ok=true,blocked=false,last_tick=UTC_TIMESTAMP(6);")
 def mock(token,port=3091,**kw):
  urllib.request.urlopen(urllib.request.Request(f'http://127.0.0.1:{port}/control',data=json.dumps({'token':token,**kw}).encode(),headers={'Content-Type':'application/json'})).read()
 def stats(token,port=3091):return json.load(urllib.request.urlopen(f'http://127.0.0.1:{port}/'))[token]
@@ -55,12 +53,12 @@ class Account:
   p={'enabled':enabled,'revision':self.view()['revision'] if revision is None else revision}
   if hours is not None:p['max_hours']=hours
   return (client or self.client).call('/remote/cafe/'+self.id,p,status)
- def poll(self):sql(f"UPDATE cafe_policies SET next_poll=now() WHERE account_id='{self.id}';")
+ def poll(self):sql(f"UPDATE cafe_policies SET next_poll=UTC_TIMESTAMP(6) WHERE account_id='{self.id}';")
  def running(self):
   mock(self.token,self.port,**({'state':0} if self.kind=='etalien' else {'paused':False}))
   self.poll();wait(lambda:self.view()['observed_state']=='running' and self.view()['started_at'])
  def expire(self,hours=25):
-  sql(f"UPDATE cafe_policies SET started_at=now()-interval '{hours} hours',observed_at=now(),observed_state='running',next_poll=now()+interval '60 seconds' WHERE account_id='{self.id}';")
+  sql(f"UPDATE cafe_policies SET started_at=UTC_TIMESTAMP(6)-INTERVAL {hours} HOUR,observed_at=UTC_TIMESTAMP(6),observed_state='running',next_poll=UTC_TIMESTAMP(6)+INTERVAL 60 SECOND WHERE account_id='{self.id}';")
  def calls(self):return stats(self.token,self.port)['pause_calls']
  def off_device(self):
   self.client.call('/devices/'+self.device+'/remote/disable'+('?provider=etalien' if self.kind=='etalien' else ''),{})
@@ -75,7 +73,7 @@ a.set(revision=0,status=409)
 check('explicit opt-in, 24h default, duration bounds, ownership, CSRF and revision checks')
 wait(lambda:a.view()['started_at']);start=a.view()['started_at']
 # Cafe mode needs no first armed heartbeat, yet old offline policy cannot fire.
-sql(f"UPDATE remote_grants SET armed_at=now(),last_seen=now()-interval '125 seconds' WHERE account_id='{a.id}';")
+sql(f"UPDATE remote_grants SET armed_at=UTC_TIMESTAMP(6),last_seen=UTC_TIMESTAMP(6)-INTERVAL 125 SECOND WHERE account_id='{a.id}';")
 time.sleep(6);assert a.calls()==0
 epoch=sql(f"SELECT epoch FROM remote_accounts WHERE id='{a.id}';")
 a.beat();assert sql(f"SELECT epoch FROM remote_accounts WHERE id='{a.id}';")==epoch
@@ -89,9 +87,9 @@ check('home disconnect suppressed; heartbeats do not reset timer; edit keeps sta
 a.running();assert a.view()['started_at']!=start and a.calls()==1
 mock(a.token,paused=True);a.poll();wait(lambda:a.view()['observed_state']=='paused');assert a.view()['started_at'] is None
 a.running();second=a.view()['started_at']
-sql(f"UPDATE cafe_policies SET started_at=now()-interval '23 hours',observed_at=now()-interval '6 minutes' WHERE account_id='{a.id}';")
-a.poll();wait(lambda:sql(f"SELECT started_at>now()-interval '1 minute' FROM cafe_policies WHERE account_id='{a.id}';")=='t')
-assert sql(f"SELECT started_at>now()-interval '1 minute' FROM cafe_policies WHERE account_id='{a.id}';")=='t'
+sql(f"UPDATE cafe_policies SET started_at=UTC_TIMESTAMP(6)-INTERVAL 23 HOUR,observed_at=UTC_TIMESTAMP(6)-INTERVAL 6 MINUTE WHERE account_id='{a.id}';")
+a.poll();wait(lambda:sql(f"SELECT started_at>UTC_TIMESTAMP(6)-INTERVAL 1 MINUTE FROM cafe_policies WHERE account_id='{a.id}';")=='1')
+assert sql(f"SELECT started_at>UTC_TIMESTAMP(6)-INTERVAL 1 MINUTE FROM cafe_policies WHERE account_id='{a.id}';")=='1'
 check('manual pause ends cycle; resume starts new cycle; long unknown gap starts conservatively')
 a.off_device();assert a.view()['enabled'] and a.view()['credential']=='valid'
 a.expire();ready();wait(lambda:a.calls()==2)
@@ -104,7 +102,7 @@ b=Account();b.set();wait(lambda:b.view()['started_at']);b.beat();b.expire()
 mock(b.token,info_delay=3);ready();before=stats(b.token)['info_calls']
 wait(lambda:stats(b.token)['info_calls']>before);b.set(enabled=False)
 time.sleep(5);assert b.calls()==0 and not b.view()['enabled']
-assert sql(f"SELECT armed_at IS NULL FROM remote_grants WHERE account_id='{b.id}';")=='t'
+assert sql(f"SELECT armed_at IS NULL FROM remote_grants WHERE account_id='{b.id}';")=='1'
 mock(b.token,info_delay=0);b.off_device()
 check('disable during slow query cancels write; old home grants require fresh heartbeat after leaving cafe')
 
@@ -123,11 +121,11 @@ check('unknown upstream state defers; expired credential requires reauthorizatio
 
 # Durable polling leases prevent overlapping reads and recover after a worker dies.
 e=Account();e.set();wait(lambda:e.view()['started_at'])
-sql(f"UPDATE cafe_policies SET next_poll=now(),poll_lease=gen_random_uuid(),poll_until=now()+interval '60 seconds' WHERE account_id='{e.id}';")
+sql(f"UPDATE cafe_policies SET next_poll=UTC_TIMESTAMP(6),poll_lease=UUID_TO_BIN(UUID()),poll_until=UTC_TIMESTAMP(6)+INTERVAL 60 SECOND WHERE account_id='{e.id}';")
 before=stats(e.token)['info_calls'];time.sleep(6);assert stats(e.token)['info_calls']==before
-sql(f"UPDATE cafe_policies SET poll_until=now()-interval '1 second' WHERE account_id='{e.id}';")
+sql(f"UPDATE cafe_policies SET poll_until=UTC_TIMESTAMP(6)-INTERVAL 1 SECOND WHERE account_id='{e.id}';")
 wait(lambda:stats(e.token)['info_calls']>before)
-wait(lambda:sql(f"SELECT poll_lease IS NULL FROM cafe_policies WHERE account_id='{e.id}';")=='t')
+wait(lambda:sql(f"SELECT poll_lease IS NULL FROM cafe_policies WHERE account_id='{e.id}';")=='1')
 # A stale delayed poll must not resurrect disabled consent or overwrite its fields.
 mock(e.token,info_delay=3);before=stats(e.token)['info_calls'];e.poll()
 wait(lambda:stats(e.token)['info_calls']>before);e.set(enabled=False)
@@ -138,8 +136,8 @@ check('poll leases recover after expiry; delayed observation cannot resurrect di
 # A disabled platform user cannot leave a cloud policy or usable credential behind.
 d=Account(client=other);d.set();wait(lambda:d.view()['started_at'])
 admin.call('/admin/users/'+other_uid+'/status',{'disabled':True})
-assert sql(f"SELECT NOT enabled FROM cafe_policies WHERE account_id='{d.id}';")=='t'
-assert sql(f"SELECT credential IS NULL FROM remote_accounts WHERE id='{d.id}';")=='t'
+assert sql(f"SELECT NOT enabled FROM cafe_policies WHERE account_id='{d.id}';")=='1'
+assert sql(f"SELECT credential IS NULL FROM remote_accounts WHERE id='{d.id}';")=='1'
 assert d.calls()==0
 visible=json.dumps(owner.call('/remote'))+json.dumps(owner.call('/events'))
 assert a.token not in visible and b.token not in visible and 'credential_version' not in visible

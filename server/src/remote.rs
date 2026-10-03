@@ -2,17 +2,14 @@
 use crate::provider::Kind;
 use crate::*;
 use axum::extract::Query;
-use sqlx::{Postgres, Transaction};
+use sqlx::{MySql, Transaction};
 #[derive(Default, Deserialize)]
 pub struct Selection {
     #[serde(default)]
     provider: Kind,
 }
-pub async fn lock(tx: &mut Transaction<'_, Postgres>) -> ApiResult<()> {
-    sqlx::query("SELECT pg_advisory_xact_lock(73940128)")
-        .execute(&mut **tx)
-        .await?;
-    Ok(())
+pub async fn lock(tx: &mut Transaction<'_, MySql>) -> ApiResult<()> {
+    storage::lock(tx).await
 }
 pub(crate) async fn device(s: &AppState, h: &HeaderMap) -> ApiResult<(Uuid, Uuid)> {
     let token = h
@@ -21,8 +18,7 @@ pub(crate) async fn device(s: &AppState, h: &HeaderMap) -> ApiResult<(Uuid, Uuid
         .and_then(|v| v.strip_prefix("Bearer "))
         .filter(|v| devices::valid_key(v))
         .ok_or(ApiError(StatusCode::UNAUTHORIZED, "设备凭据无效"))?;
-    let r=sqlx::query("SELECT d.id,d.user_id FROM devices d JOIN users u ON u.id=d.user_id WHERE d.token_hash=$1 AND NOT d.revoked AND NOT u.disabled")
-        .bind(auth::digest(token)).fetch_optional(&s.db).await?.ok_or(ApiError(StatusCode::UNAUTHORIZED,"设备授权已失效"))?;
+    let r=sqlx::query("SELECT d.id,d.user_id FROM devices d JOIN users u ON u.id=d.user_id WHERE d.token_hash=? AND NOT d.revoked AND NOT u.disabled").bind(auth::digest(token)).fetch_optional(&s.db).await?.ok_or(ApiError(StatusCode::UNAUTHORIZED,"设备授权已失效"))?;
     Ok((r.get("id"), r.get("user_id")))
 }
 pub async fn status(
@@ -34,7 +30,7 @@ pub async fn status(
     Ok(Json(view(&s, id, q.provider).await?))
 }
 pub async fn service(s: &AppState) -> ApiResult<Value> {
-    let r=sqlx::query("SELECT blocked,reason,ingress_ok,warmup_until,last_tick,now()<warmup_until AS warming,now()-last_tick>interval '20 seconds' AS stale FROM remote_service WHERE singleton").fetch_one(&s.db).await?;
+    let r=sqlx::query("SELECT blocked,reason,ingress_ok,warmup_until,last_tick,UTC_TIMESTAMP(6)<warmup_until AS warming,last_tick<UTC_TIMESTAMP(6)-INTERVAL 20 SECOND AS stale FROM remote_service WHERE singleton").fetch_one(&s.db).await?;
     let state = if s.provider.is_none() {
         "disabled"
     } else if r.get::<bool, _>("blocked") {
@@ -47,15 +43,15 @@ pub async fn service(s: &AppState) -> ApiResult<Value> {
         "ready"
     };
     Ok(
-        json!({"state":state,"reason":r.get::<String,_>("reason"),"warmup_until":r.get::<DateTime<Utc>,_>("warmup_until"),"last_tick":r.get::<DateTime<Utc>,_>("last_tick")}),
+        json!({"state":state,"stage":s.stage,"reason":r.get::<String,_>("reason"),"warmup_until":r.get::<DateTime<Utc>,_>("warmup_until"),"last_tick":r.get::<DateTime<Utc>,_>("last_tick")}),
     )
 }
 pub async fn view(s: &AppState, id: Uuid, kind: Kind) -> ApiResult<Value> {
     let service = service(s).await?;
-    let row=sqlx::query("SELECT g.revision,g.enabled,g.armed_at,g.last_seen,g.run_generation,a.provider_key,a.label,a.credential_state,j.state AS job_state,j.result,j.updated_at AS result_at,(j.epoch=a.epoch) AS current_job FROM remote_grants g JOIN remote_accounts a ON a.id=g.account_id LEFT JOIN LATERAL(SELECT * FROM remote_jobs WHERE account_id=a.id ORDER BY created_at DESC LIMIT 1) j ON true WHERE g.device_id=$1 AND g.provider=$2").bind(id).bind(kind.as_str()).fetch_optional(&s.db).await?;
+    let row=sqlx::query("SELECT g.revision,g.enabled,g.armed_at,g.last_seen,g.run_generation,a.provider_key,a.label,a.credential_state,j.state AS job_state,j.result,j.updated_at AS result_at,(j.epoch=a.epoch) AS current_job FROM remote_grants g JOIN remote_accounts a ON a.id=g.account_id LEFT JOIN remote_jobs j ON j.id=(SELECT newest.id FROM remote_jobs newest WHERE newest.account_id=a.id ORDER BY newest.created_at DESC,newest.id DESC LIMIT 1) WHERE g.device_id=? AND g.provider=?").bind(id).bind(kind.as_str()).fetch_optional(&s.db).await?;
     let Some(r) = row else {
         let revision: i64 = sqlx::query_scalar(&format!(
-            "SELECT {} FROM devices WHERE id=$1",
+            "SELECT {} FROM devices WHERE id=?",
             kind.revision_column()
         ))
         .bind(id)
@@ -170,10 +166,9 @@ pub async fn authorize(
     let cipher = provider
         .seal(&info.key, &credential)
         .map_err(|_| ApiError(StatusCode::INTERNAL_SERVER_ERROR, "凭据保存失败"))?;
-    let mut tx = s.db.begin().await?;
+    let mut tx = storage::begin(&s.db).await?;
     // Revalidate after the external call; concurrent logout/rebind wins.
-    let d=sqlx::query(&format!("SELECT d.guard_provider,d.run_generation,d.{} AS remote_revision FROM devices d JOIN users u ON u.id=d.user_id WHERE d.id=$1 AND d.user_id=$2 AND d.token_hash=$3 AND NOT d.revoked AND NOT u.disabled FOR UPDATE OF d", q.provider.revision_column()))
-        .bind(id).bind(uid).bind(auth::digest(h.get("authorization").unwrap().to_str().unwrap().strip_prefix("Bearer ").unwrap())).fetch_optional(&mut *tx).await?.ok_or(ApiError(StatusCode::UNAUTHORIZED,"设备授权已失效"))?;
+    let d=sqlx::query(&format!("SELECT d.guard_provider,d.run_generation,d.{} AS remote_revision FROM devices d JOIN users u ON u.id=d.user_id WHERE d.id=? AND d.user_id=? AND d.token_hash=? AND NOT d.revoked AND NOT u.disabled FOR UPDATE", q.provider.revision_column())).bind(id).bind(uid).bind(auth::digest(h.get("authorization").unwrap().to_str().unwrap().strip_prefix("Bearer ").unwrap())).fetch_optional(&mut *tx).await?.ok_or(ApiError(StatusCode::UNAUTHORIZED,"设备授权已失效"))?;
     if d.get::<Option<String>, _>("guard_provider")
         .is_some_and(|selected| selected != q.provider.as_str())
     {
@@ -189,7 +184,7 @@ pub async fn authorize(
     }
     lock(&mut tx).await?;
     let old = sqlx::query(
-        "SELECT revision,account_id,enabled FROM remote_grants WHERE device_id=$1 AND provider=$2",
+        "SELECT revision,account_id,enabled FROM remote_grants WHERE device_id=? AND provider=?",
     )
     .bind(id)
     .bind(q.provider.as_str())
@@ -199,7 +194,7 @@ pub async fn authorize(
         return Err(ApiError(StatusCode::CONFLICT, "远程授权已变化，请重新确认"));
     }
     let account = sqlx::query(
-        "SELECT id,user_id,credential FROM remote_accounts WHERE provider_key=$1 AND provider=$2",
+        "SELECT id,user_id,credential FROM remote_accounts WHERE provider_key=? AND provider=?",
     )
     .bind(&info.key)
     .bind(q.provider.as_str())
@@ -239,12 +234,13 @@ pub async fn authorize(
     } else {
         let a = Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO remote_accounts(id,user_id,provider_key,label,provider) VALUES($1,$2,$3,$4,$5)",
+            "INSERT INTO remote_accounts(id,user_id,provider_key,label,provider) VALUES(?,?,?,?,?)",
         )
         .bind(a)
         .bind(uid)
         .bind(&info.key)
-        .bind(&info.label).bind(q.provider.as_str())
+        .bind(&info.label)
+        .bind(q.provider.as_str())
         .execute(&mut *tx)
         .await?;
         a
@@ -260,28 +256,20 @@ pub async fn authorize(
                 },
             ));
         }
-        sqlx::query("SELECT remote_revoke_provider($1,$2)")
-            .bind(id)
-            .bind(q.provider.as_str())
-            .execute(&mut *tx)
-            .await?;
+        storage::revoke_provider(&mut tx, id, q.provider).await?;
     }
     let revision = p.revision + 1;
     sqlx::query(&format!(
-        "UPDATE devices SET {}=$2 WHERE id=$1",
+        "UPDATE devices SET {}=? WHERE id=?",
         q.provider.revision_column()
     ))
-    .bind(id)
     .bind(revision)
+    .bind(id)
     .execute(&mut *tx)
     .await?;
-    sqlx::query("INSERT INTO remote_grants(device_id,account_id,revision,run_generation,provider) VALUES($1,$2,$3,$4,$5) ON CONFLICT(device_id,provider) DO UPDATE SET account_id=$2,revision=$3,run_generation=$4,enabled=true,armed_at=NULL,last_seen=NULL,prepare_until=NULL,updated_at=now()")
-        .bind(id).bind(aid).bind(revision).bind(p.run_generation).bind(q.provider.as_str()).execute(&mut *tx).await?;
-    sqlx::query("SELECT remote_cancel($1)")
-        .bind(aid)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("UPDATE remote_accounts SET credential=$2,credential_state='valid',credential_version=credential_version+1,label=$3,updated_at=now() WHERE id=$1").bind(aid).bind(cipher).bind(info.label).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO remote_grants(device_id,account_id,revision,run_generation,provider) VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE account_id=?,revision=?,run_generation=?,enabled=true,armed_at=NULL,last_seen=NULL,prepare_until=NULL,updated_at=UTC_TIMESTAMP(6)").bind(id).bind(aid).bind(revision).bind(p.run_generation).bind(q.provider.as_str()).bind(aid).bind(revision).bind(p.run_generation).execute(&mut *tx).await?;
+    storage::cancel(&mut tx, aid).await?;
+    sqlx::query("UPDATE remote_accounts SET credential=?,credential_state='valid',credential_version=credential_version+1,label=?,updated_at=UTC_TIMESTAMP(6) WHERE id=?").bind(&(cipher)).bind(&(info.label)).bind(aid).execute(&mut *tx).await?;
     routes::audit(
         &mut tx,
         uid,
@@ -324,21 +312,20 @@ async fn revoke(
     revision: Option<i64>,
     kind: Kind,
 ) -> ApiResult<()> {
-    let mut tx = s.db.begin().await?;
-    sqlx::query("SELECT id FROM devices WHERE id=$1 AND user_id=$2 FOR UPDATE")
+    let mut tx = storage::begin(&s.db).await?;
+    sqlx::query("SELECT id FROM devices WHERE id=? AND user_id=? FOR UPDATE")
         .bind(id)
         .bind(uid)
         .fetch_optional(&mut *tx)
         .await?
         .ok_or(ApiError(StatusCode::NOT_FOUND, "设备不存在"))?;
     lock(&mut tx).await?;
-    let old = sqlx::query(
-        "SELECT revision,enabled FROM remote_grants WHERE device_id=$1 AND provider=$2",
-    )
-    .bind(id)
-    .bind(kind.as_str())
-    .fetch_optional(&mut *tx)
-    .await?;
+    let old =
+        sqlx::query("SELECT revision,enabled FROM remote_grants WHERE device_id=? AND provider=?")
+            .bind(id)
+            .bind(kind.as_str())
+            .fetch_optional(&mut *tx)
+            .await?;
     if let Some(old) = old {
         if old.get::<bool, _>("enabled")
             && revision.is_some_and(|v| v != old.get::<i64, _>("revision"))
@@ -349,11 +336,7 @@ async fn revoke(
             ));
         }
     }
-    sqlx::query("SELECT remote_revoke_provider($1,$2)")
-        .bind(id)
-        .bind(kind.as_str())
-        .execute(&mut *tx)
-        .await?;
+    storage::revoke_provider(&mut tx, id, kind).await?;
     routes::audit(
         &mut tx,
         uid,
@@ -367,7 +350,7 @@ async fn revoke(
 }
 // Called within the device heartbeat transaction, after locking the device row.
 pub async fn heartbeat(
-    tx: &mut Transaction<'_, Postgres>,
+    tx: &mut Transaction<'_, MySql>,
     id: Uuid,
     run: i64,
     revision: Option<i64>,
@@ -377,7 +360,7 @@ pub async fn heartbeat(
 ) -> ApiResult<()> {
     lock(tx).await?;
     let grant = sqlx::query(
-        "SELECT account_id,revision,enabled FROM remote_grants WHERE device_id=$1 AND provider=$2",
+        "SELECT account_id,revision,enabled FROM remote_grants WHERE device_id=? AND provider=?",
     )
     .bind(id)
     .bind(kind.as_str())
@@ -388,11 +371,7 @@ pub async fn heartbeat(
             // A downgraded client cannot keep an ET grant alive. Revoke it rather
             // than interpreting a healthy legacy heartbeat as accelerator loss.
             if kind == Kind::Etalien && revision.is_none() {
-                sqlx::query("SELECT remote_revoke_provider($1,$2)")
-                    .bind(id)
-                    .bind(kind.as_str())
-                    .execute(&mut **tx)
-                    .await?;
+                storage::revoke_provider(tx, id, kind).await?;
                 return Ok(());
             }
             if revision != Some(g.get::<i64, _>("revision")) || run <= 0 {
@@ -402,18 +381,10 @@ pub async fn heartbeat(
                 ));
             }
             if clear {
-                sqlx::query("SELECT remote_revoke_provider($1,$2)")
-                    .bind(id)
-                    .bind(kind.as_str())
-                    .execute(&mut **tx)
-                    .await?;
+                storage::revoke_provider(tx, id, kind).await?;
             } else {
-                sqlx::query("UPDATE remote_grants SET armed_at=COALESCE(armed_at,now()),last_seen=now(),prepare_until=now()+make_interval(secs=>$2),run_generation=$3,updated_at=now() WHERE device_id=$1 AND provider=$4")
-                    .bind(id).bind(prepare as f64).bind(run).bind(kind.as_str()).execute(&mut **tx).await?;
-                sqlx::query("SELECT remote_cancel($1) WHERE NOT EXISTS(SELECT 1 FROM cafe_policies WHERE account_id=$1 AND enabled)")
-                    .bind(g.get::<Uuid, _>("account_id"))
-                    .execute(&mut **tx)
-                    .await?;
+                sqlx::query("UPDATE remote_grants SET armed_at=COALESCE(armed_at,UTC_TIMESTAMP(6)),last_seen=UTC_TIMESTAMP(6),prepare_until=UTC_TIMESTAMP(6)+INTERVAL ? SECOND,run_generation=?,updated_at=UTC_TIMESTAMP(6) WHERE device_id=? AND provider=?").bind(prepare as f64).bind(run).bind(id).bind(kind.as_str()).execute(&mut **tx).await?;
+                storage::cancel_device_account(tx, id, kind).await?;
             }
         }
     }
@@ -421,24 +392,24 @@ pub async fn heartbeat(
 }
 pub async fn listing(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Json<Value>> {
     let u = auth::user(&s, &h, false).await?;
-    let rows:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('device_id',d.id,'provider',g.provider,'device_name',d.name,'owner',COALESCE(u.email,u.username),'user_id',d.user_id,'label',a.label,'cafe_enabled',EXISTS(SELECT 1 FROM cafe_policies c WHERE c.account_id=a.id AND c.enabled),'enabled',g.enabled,'credential',a.credential_state,'armed_at',g.armed_at,'last_seen',g.last_seen,'revision',g.revision,'connection',CASE WHEN d.revoked THEN 'revoked' WHEN g.last_seen>now()-interval '45 seconds' THEN 'online' WHEN g.last_seen>now()-interval '120 seconds' THEN 'waiting' ELSE 'offline' END,'last_result',j.result,'protection',CASE WHEN NOT g.enabled THEN 'off' WHEN a.credential_state<>'valid' THEN 'reauthorize' WHEN g.armed_at IS NULL THEN 'awaiting_heartbeat' WHEN j.epoch=a.epoch AND j.state='running' THEN 'executing' WHEN j.epoch=a.epoch AND j.state='confirmed' THEN 'confirmed' WHEN j.epoch=a.epoch AND j.state='unconfirmed' THEN 'unconfirmed' WHEN g.last_seen<now()-interval '45 seconds' THEN 'waiting' ELSE 'armed' END) FROM remote_grants g JOIN devices d ON d.id=g.device_id JOIN users u ON u.id=d.user_id JOIN remote_accounts a ON a.id=g.account_id LEFT JOIN LATERAL(SELECT epoch,state,result FROM remote_jobs WHERE account_id=a.id ORDER BY created_at DESC LIMIT 1) j ON true WHERE ($1 OR d.user_id=$2) ORDER BY g.updated_at DESC LIMIT 500").bind(u.role=="admin").bind(u.id).fetch_all(&s.db).await?;
-    let jobs:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('id',j.id,'provider',a.provider,'label',a.label,'state',j.state,'trigger_kind',j.trigger_kind,'result',j.result,'attempts',j.attempts,'created_at',j.created_at,'updated_at',j.updated_at) FROM remote_jobs j JOIN remote_accounts a ON a.id=j.account_id WHERE ($1 OR a.user_id=$2) ORDER BY j.created_at DESC LIMIT 100").bind(u.role=="admin").bind(u.id).fetch_all(&s.db).await?;
+    let rows:Vec<Value>=storage::json_rows(sqlx::query("SELECT d.id AS device_id,g.provider AS provider,d.name AS device_name,COALESCE(u.email,u.username) AS owner,d.user_id AS user_id,a.label AS label,EXISTS(SELECT 1 FROM cafe_policies c WHERE c.account_id=a.id AND c.enabled) AS cafe_enabled,g.enabled AS enabled,a.credential_state AS credential,g.armed_at AS armed_at,g.last_seen AS last_seen,g.revision AS revision,CASE WHEN d.revoked THEN 'revoked' WHEN g.last_seen>UTC_TIMESTAMP(6)-INTERVAL 45 SECOND THEN 'online' WHEN g.last_seen>UTC_TIMESTAMP(6)-INTERVAL 120 SECOND THEN 'waiting' ELSE 'offline' END AS connection,j.result AS last_result,CASE WHEN NOT g.enabled THEN 'off' WHEN a.credential_state<>'valid' THEN 'reauthorize' WHEN g.armed_at IS NULL THEN 'awaiting_heartbeat' WHEN j.epoch=a.epoch AND j.state='running' THEN 'executing' WHEN j.epoch=a.epoch AND j.state='confirmed' THEN 'confirmed' WHEN j.epoch=a.epoch AND j.state='unconfirmed' THEN 'unconfirmed' WHEN g.last_seen<UTC_TIMESTAMP(6)-INTERVAL 45 SECOND THEN 'waiting' ELSE 'armed' END AS protection FROM remote_grants g JOIN devices d ON d.id=g.device_id JOIN users u ON u.id=d.user_id JOIN remote_accounts a ON a.id=g.account_id LEFT JOIN remote_jobs j ON j.id=(SELECT newest.id FROM remote_jobs newest WHERE newest.account_id=a.id ORDER BY newest.created_at DESC,newest.id DESC LIMIT 1) WHERE (? OR d.user_id=?) ORDER BY g.updated_at DESC LIMIT 500").bind(u.role=="admin").bind(u.id).fetch_all(&s.db).await?)?;
+    let jobs:Vec<Value>=storage::json_rows(sqlx::query("SELECT j.id AS id,a.provider AS provider,a.label AS label,j.state AS state,j.trigger_kind AS trigger_kind,j.result AS result,j.attempts AS attempts,j.created_at AS created_at,j.updated_at AS updated_at FROM remote_jobs j JOIN remote_accounts a ON a.id=j.account_id WHERE (? OR a.user_id=?) ORDER BY j.created_at DESC LIMIT 100").bind(u.role=="admin").bind(u.id).fetch_all(&s.db).await?)?;
     Ok(Json(
         json!({"grants":rows,"jobs":jobs,"cafe":cafe::listing(&s,&u).await?,"service":service(&s).await?}),
     ))
 }
 pub async fn acknowledge(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Json<Value>> {
     let u = auth::admin(&s, &h, true).await?;
-    let mut tx = s.db.begin().await?;
+    let mut tx = storage::begin(&s.db).await?;
     lock(&mut tx).await?;
     // Acknowledgement discards old offline episodes, never releases a stale batch.
-    sqlx::query("UPDATE remote_jobs SET state='cancelled',result='incident_acknowledged',updated_at=now() WHERE state IN ('queued','running')").execute(&mut *tx).await?;
-    sqlx::query("UPDATE cafe_policies SET started_at=NULL,observed_at=NULL,observed_state='unknown',revision=revision+1,poll_lease=NULL,poll_until=NULL,next_poll=now() WHERE enabled")
+    sqlx::query("UPDATE remote_jobs SET state='cancelled',result='incident_acknowledged',updated_at=UTC_TIMESTAMP(6) WHERE state IN ('queued','running')").execute(&mut *tx).await?;
+    sqlx::query("UPDATE cafe_policies SET started_at=NULL,observed_at=NULL,observed_state='unknown',revision=revision+1,poll_lease=NULL,poll_until=NULL,next_poll=UTC_TIMESTAMP(6) WHERE enabled")
         .execute(&mut *tx).await?;
     sqlx::query("UPDATE remote_grants SET armed_at=NULL WHERE enabled")
         .execute(&mut *tx)
         .await?;
-    sqlx::query("UPDATE remote_service SET blocked=false,reason='reconnect',warmup_until=now()+interval '120 seconds' WHERE singleton").execute(&mut *tx).await?;
+    sqlx::query("UPDATE remote_service SET blocked=false,reason='reconnect',warmup_until=UTC_TIMESTAMP(6)+INTERVAL 120 SECOND WHERE singleton").execute(&mut *tx).await?;
     routes::audit(
         &mut tx,
         u.id,

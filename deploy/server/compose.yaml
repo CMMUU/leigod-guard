@@ -1,16 +1,17 @@
 name: leigod-guard
 services:
-  postgres:
-    image: postgres:18-alpine
+  mysql:
+    image: mysql:8.4
     restart: unless-stopped
     environment:
-      POSTGRES_USER: guard
-      POSTGRES_DB: leigod_guard
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run init-config.py first}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:?Run init-config.py first}
+      MYSQL_USER: guard
+      MYSQL_DATABASE: leigod_guard
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Run init-config.py first}
     volumes:
-      - postgres-data:/var/lib/postgresql
+      - mysql-data:/var/lib/mysql
     healthcheck:
-      test: [CMD-SHELL, 'pg_isready -U guard -d leigod_guard']
+      test: [CMD-SHELL, 'mysqladmin ping -h 127.0.0.1 --silent']
       interval: 5s
       timeout: 5s
       retries: 20
@@ -23,12 +24,13 @@ services:
       context: ../../server
     restart: unless-stopped
     depends_on:
-      postgres:
+      mysql:
         condition: service_healthy
     env_file:
       - ${GUARD_ENV_FILE:-./server.env}
     environment:
-      DATABASE_URL: postgres://guard:${POSTGRES_PASSWORD:?Run init-config.py first}@postgres:5432/leigod_guard
+      DATABASE_URL: mysql://guard:${MYSQL_PASSWORD:?Run init-config.py first}@mysql:3306/leigod_guard
+      MYSQL_COMPOSE_NETWORK: 'true'
       LISTEN_ADDRESS: 0.0.0.0
       PORT: '3088'
       STATIC_DIR: /app/static
@@ -69,6 +71,6 @@ services:
       driver: json-file
       options: {max-size: 10m, max-file: '3'}
 volumes:
-  postgres-data:
+  mysql-data:
   caddy-data:
   caddy-config:

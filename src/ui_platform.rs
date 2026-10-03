@@ -387,7 +387,7 @@ impl Panel {
                 } else {
                     std::mem::take(&mut self.password)
                 };
-                self.message = "正在登录上海平台…".into();
+                self.message = "正在登录云平台…".into();
                 let email_mode = self.email_mode;
                 let request_id = self
                     .challenge
@@ -577,9 +577,37 @@ impl Panel {
     pub(crate) fn render(&mut self, ui: &mut egui::Ui) {
         self.render_for(ui, Provider::Leigod, true);
     }
+    pub(crate) fn cloud_summary(&self, selected: Provider) -> String {
+        let Some(view) = self.agent.as_ref().and_then(|a| a.view.lock().ok()) else {
+            return "尚未启用 · 登录平台后可单独授权".into();
+        };
+        let remote = &view.remote[selected.index()];
+        if remote.pending_disable {
+            return "关闭待确认 · 正在重试，仍可能触发云端暂停".into();
+        }
+        if !view.active {
+            return "尚未启用 · 请登录或绑定本机".into();
+        }
+        if !remote.error.is_empty() {
+            return "授权或连接异常 · 请在平台账号页查看".into();
+        }
+        if !remote
+            .checked_at
+            .is_some_and(|at| at.elapsed() <= std::time::Duration::from_secs(30))
+        {
+            return "云端状态待确认 · 请检查连接".into();
+        }
+        remote.message.clone()
+    }
     pub(crate) fn render_for(&mut self, ui: &mut egui::Ui, selected: Provider, guard_ready: bool) {
         let busy = self.pending.is_some();
-        ui.label(theme::title("守护平台账号", 20.0));
+        ui.label(theme::title("守护平台账号 · 云服务临时测试", 20.0));
+        ui.label(
+            egui::RichText::new(
+                "云端自动暂停需单独授权，测试期间可能延迟或不可用，请以加速器实际计时状态为准。",
+            )
+            .color(theme::AMBER),
+        );
         ui.label(
             egui::RichText::new("邮箱验证码登录后自动绑定本机；首次登录自动创建普通用户账号。")
                 .color(theme::MUTED),
@@ -806,7 +834,7 @@ impl Panel {
         } else {
             ui.checkbox(
                 &mut self.remote_consent[provider.index()],
-                format!("同意上海服务器加密保存当前{}登录凭据并执行失联暂停", provider.name()),
+                format!("同意云平台加密保存当前{}登录凭据并执行失联暂停", provider.name()),
             );
             ui.label(egui::RichText::new("此凭据具有对应加速器账号权限。全部受保护设备连续失联 120 秒且准备期结束后，服务器尝试暂停；服务异常时可能延迟。关闭确认前仍可能暂停，已发送的请求无法撤回。").size(12.0).color(theme::MUTED));
             if ui
@@ -862,8 +890,8 @@ impl Panel {
         ui.separator();
         ui.add_space(10.0);
         ui.horizontal_wrapped(|ui| {
-            ui.label("上海节点");
-            ui.hyperlink_to("打开后台", ORIGIN_URL);
+            ui.label("香港节点 · 临时测试");
+            ui.hyperlink_to("打开云平台", ORIGIN_URL);
         });
         ui.label(
             egui::RichText::new(

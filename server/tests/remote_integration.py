@@ -1,11 +1,9 @@
-"""Isolated PostgreSQL + mock provider tests. Never target a public service."""
+"""Isolated MySQL + mock provider tests. Never target a public service."""
 import concurrent.futures,hashlib,http.cookiejar,json,os,secrets,subprocess,time,urllib.request,urllib.error
 BASE=os.environ.get('BASE_URL','http://127.0.0.1:3089');assert BASE.startswith('http://127.0.0.1:')
 assert os.environ.get('LEIGOD_TEST_ORIGIN')=='http://127.0.0.1:3091'
 checks=[];nonce=secrets.token_hex(4)
-def sql(text):
- args=json.loads(os.environ['TEST_PSQL']) if 'TEST_PSQL' in os.environ else ['psql',os.environ['DATABASE_URL'],'-v','ON_ERROR_STOP=1','-At']
- return subprocess.run(args,input=text,text=True,capture_output=True,check=True).stdout.strip()
+from db import sql
 class Client:
  def __init__(self):self.http=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()));self.csrf=None
  def call(self,path,body=None,status=200,token=None):
@@ -27,7 +25,7 @@ def check(name):checks.append(name);print('PASS',name,flush=True)
 def mock(token,**kw):
  data={'token':token};data.update(kw);urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:3091/control',data=json.dumps(data).encode(),headers={'Content-Type':'application/json'})).read()
 def stats(token):return json.load(urllib.request.urlopen('http://127.0.0.1:3091/'))[token]
-def ready():sql("UPDATE remote_service SET warmup_until=now()-interval '1 second',ingress_ok=true,blocked=false,reason='ready',last_tick=now();")
+def ready():sql("UPDATE remote_service SET warmup_until=UTC_TIMESTAMP(6)-INTERVAL 1 SECOND,ingress_ok=true,blocked=false,reason='ready',last_tick=UTC_TIMESTAMP(6);")
 def wait(fn,seconds=25):
  deadline=time.monotonic()+seconds
  while time.monotonic()<deadline:
@@ -49,8 +47,8 @@ class Device:
   return r
  def off(self):
   s=self.client.call('/device/remote/disable',{'revision':self.rev},token=self.token);self.rev=s['revision'];return s
- def stale(self,prepare=-1):sql(f"UPDATE remote_grants SET last_seen=now()-interval '125 seconds',prepare_until=now()+interval '{prepare} seconds' WHERE device_id='{self.id}';")
- def jobs(self):return json.loads(sql(f"SELECT coalesce(json_agg(json_build_object('state',j.state,'result',j.result,'attempts',j.attempts)),'[]') FROM remote_jobs j JOIN remote_grants g ON g.account_id=j.account_id WHERE g.device_id='{self.id}';"))
+ def stale(self,prepare=-1):sql(f"UPDATE remote_grants SET last_seen=UTC_TIMESTAMP(6)-INTERVAL 125 SECOND,prepare_until=UTC_TIMESTAMP(6)+INTERVAL {prepare} SECOND WHERE device_id='{self.id}';")
+ def jobs(self):return json.loads(sql(f"SELECT coalesce(JSON_ARRAYAGG(JSON_OBJECT('state',j.state,'result',j.result,'attempts',j.attempts)),'[]') FROM remote_jobs j JOIN remote_grants g ON g.account_id=j.account_id WHERE g.device_id='{self.id}';"))
  def terminal(self,state):return any(j['state']==state for j in self.jobs())
  def account(self):return sql(f"SELECT account_id FROM remote_grants WHERE device_id='{self.id}';")
 ready();d=Device();d.beat();assert d.status()['enabled'] is False
@@ -60,7 +58,7 @@ check('explicit opt-in and first current-revision heartbeat required')
 x=Device(b);x.beat();x.authorize(t,status=409);assert not x.status()['enabled']
 missing='missing-'+nonce;mock(missing,mode='missing_id');x.authorize(missing,status=400)
 check('canonical provider identity required; cross-owner enrollment rejected')
-cipher=sql(f"SELECT encode(credential,'hex') FROM remote_accounts WHERE id='{d.account()}';");assert t.encode().hex() not in cipher and len(cipher)>56
+cipher=sql(f"SELECT LOWER(HEX(credential)) FROM remote_accounts WHERE id='{d.account()}';");assert t.encode().hex() not in cipher and len(cipher)>56
 visible=json.dumps(a.call('/remote'))+json.dumps(admin.call('/remote'))+json.dumps(a.call('/events'));assert t not in visible and cipher not in visible and 'credential_version' not in visible
 assert not b.call('/remote')['grants']
 check('encrypted credentials; tenant read isolation and API secret redaction')
@@ -76,7 +74,7 @@ check('all devices offline: one durable task, provider confirmation, no repeated
 d.beat();d.stale();ready();wait(lambda:len(d.jobs())==2 and d.terminal('confirmed'));wait(lambda:len([j for j in d.jobs() if j['state']=='confirmed'])==2);assert stats(t)['pause_calls']==1
 check('new heartbeat re-arms; already-paused provider avoids duplicate pause')
 # Stopping final grant deletes current cipher; other devices remain enabled.
-d.off();assert e.status()['enabled'];e.off();assert sql(f"SELECT credential IS NULL FROM remote_accounts WHERE id='{d.account()}';")=='t'
+d.off();assert e.status()['enabled'];e.off();assert sql(f"SELECT credential IS NULL FROM remote_accounts WHERE id='{d.account()}';")=='1'
 check('device-scoped revoke preserves peers; final revoke deletes active credentials')
 # Actual provider shape: NN identity survives token rotation and numeric/string
 # encoding; masked usernames must neither establish ownership nor merge accounts.
@@ -104,9 +102,9 @@ h=Device(c);h.beat();th='recover-'+nonce;mock(th,account='recover-account');h.au
 check('heartbeat recovery during preflight cancels unsent pause')
 # Ingress observation during a preflight preserves the finite queued episode.
 u=Device(b);u.beat();tu='interrupted-'+nonce;mock(tu,account='interrupted-account');u.authorize(tu);u.beat();mock(tu,info_delay=3);initial=stats(tu)['info_calls'];u.stale();ready();wait(lambda:stats(tu)['info_calls']>initial)
-sql("UPDATE remote_service SET warmup_until=now()+interval '120 seconds';")
+sql("UPDATE remote_service SET warmup_until=UTC_TIMESTAMP(6)+INTERVAL 120 SECOND;")
 wait(lambda:any(j['state']=='queued' and j['result']=='service_interrupted' for j in u.jobs()));assert stats(tu)['pause_calls']==0
-mock(tu,info_delay=0);ready();sql(f"UPDATE remote_jobs SET next_attempt=now() WHERE account_id='{u.account()}';");wait(lambda:u.terminal('confirmed'));assert stats(tu)['pause_calls']==1;u.off()
+mock(tu,info_delay=0);ready();sql(f"UPDATE remote_jobs SET next_attempt=UTC_TIMESTAMP(6) WHERE account_id='{u.account()}';");wait(lambda:u.terminal('confirmed'));assert stats(tu)['pause_calls']==1;u.off()
 check('transient service observation defers the same task without losing its episode')
 # Expired credential terminal, no pause; rotation verifies and changes version.
 i=Device(b);i.beat();ti='expire-'+nonce;mock(ti,account='expired-account');i.authorize(ti);i.beat();mock(ti,mode='expired');i.stale();ready();wait(lambda:i.terminal('reauthorize'));assert i.status()['credential']=='reauthorize' and stats(ti)['pause_calls']==0;i.off()
@@ -116,29 +114,29 @@ j=Device(c);j.beat();tj='no-apply-'+nonce;mock(tj,account='no-apply-account',mod
 for attempt in range(3):
  wait(lambda:stats(tj)['pause_calls']>=attempt+1)
  wait(lambda:sql(f"SELECT count(*) FROM remote_jobs WHERE account_id='{j.account()}' AND state IN ('queued','unconfirmed');")=='1')
- sql(f"UPDATE remote_jobs SET next_attempt=now() WHERE account_id='{j.account()}' AND state='queued';")
+ sql(f"UPDATE remote_jobs SET next_attempt=UTC_TIMESTAMP(6) WHERE account_id='{j.account()}' AND state='queued';")
 wait(lambda:j.terminal('unconfirmed'));assert stats(tj)['pause_calls']==3;time.sleep(6);assert stats(tj)['pause_calls']==3;j.off()
 check('API acceptance is not confirmation; finite retries and episode deduplication')
 # Cipher tampering is terminal and never forwarded to the provider.
-k=Device(b);k.beat();tk='cipher-'+nonce;mock(tk,account='cipher-account');k.authorize(tk);k.beat();sql(f"UPDATE remote_accounts SET credential=set_byte(credential,15,get_byte(credential,15)#1) WHERE id='{k.account()}';");k.stale();ready();wait(lambda:k.terminal('reauthorize'));assert stats(tk)['pause_calls']==0;k.off()
+k=Device(b);k.beat();tk='cipher-'+nonce;mock(tk,account='cipher-account');k.authorize(tk);k.beat();sql(f"UPDATE remote_accounts SET credential=CONCAT(SUBSTRING(credential,1,15),CHAR(ORD(SUBSTRING(credential,16,1)) ^ 1 USING binary),SUBSTRING(credential,17)) WHERE id='{k.account()}';");k.stale();ready();wait(lambda:k.terminal('reauthorize'));assert stats(tk)['pause_calls']==0;k.off()
 check('cipher tampering fails closed with reauthorization required')
 # Rebinding and user revocation trigger atomic cancellation and credential erasure.
 l=Device(c);l.beat();tl='revoke-'+nonce;mock(tl,account='revoke-account');l.authorize(tl);l.beat();l.run=99;l.beat();oldtoken=l.token
 rebound=c.call('/devices/register',{'installation_key':l.installation,'name':'Rebound QA','version':'qa','reactivate':True});l.token=rebound['device_token'];l.run=1;assert not l.status()['enabled'];l.beat()
 c.call('/device/heartbeat',{'sequence':1000,'run_generation':99,'version':'qa'},status=401,token=oldtoken)
 check('explicit rebind resets run fencing and revokes prior bearer and protection')
-c.call('/devices/'+l.id+'/revoke',{});assert sql(f"SELECT enabled FROM remote_grants WHERE device_id='{l.id}';")=='f'
+c.call('/devices/'+l.id+'/revoke',{});assert sql(f"SELECT enabled FROM remote_grants WHERE device_id='{l.id}';")=='0'
 admin.call('/admin/users/'+cuid+'/status',{'disabled':True});assert sql(f"SELECT count(*) FROM remote_grants g JOIN devices d ON d.id=g.device_id WHERE d.user_id='{cuid}' AND g.enabled;")=='0'
 check('device/user revocation cancels durable grants atomically')
 # A crashed worker retains its lease; another worker recovers only after expiry.
-o=Device(b);o.beat();to='lease-'+nonce;mock(to,account='lease-account',paused=True);o.authorize(to);o.beat();sql("UPDATE remote_service SET warmup_until=now()+interval '120 seconds';");o.stale();aid=o.account()
-sql(f"INSERT INTO remote_jobs(id,account_id,epoch,credential_version,state,attempts,lease_id,lease_until) SELECT gen_random_uuid(),id,epoch,credential_version,'running',1,gen_random_uuid(),now()+interval '60 seconds' FROM remote_accounts WHERE id='{aid}';")
+o=Device(b);o.beat();to='lease-'+nonce;mock(to,account='lease-account',paused=True);o.authorize(to);o.beat();sql("UPDATE remote_service SET warmup_until=UTC_TIMESTAMP(6)+INTERVAL 120 SECOND;");o.stale();aid=o.account()
+sql(f"INSERT INTO remote_jobs(id,account_id,epoch,credential_version,state,attempts,lease_id,lease_until) SELECT UUID_TO_BIN(UUID()),id,epoch,credential_version,'running',1,UUID_TO_BIN(UUID()),UTC_TIMESTAMP(6)+INTERVAL 60 SECOND FROM remote_accounts WHERE id='{aid}';")
 ready();time.sleep(6);assert stats(to)['info_calls']==1
-sql(f"UPDATE remote_jobs SET lease_until=now()-interval '1 second' WHERE account_id='{aid}';")
+sql(f"UPDATE remote_jobs SET lease_until=UTC_TIMESTAMP(6)-INTERVAL 1 SECOND WHERE account_id='{aid}';")
 wait(lambda:o.terminal('confirmed'));assert stats(to)['pause_calls']==0 and o.jobs()[0]['attempts']==2;o.off()
 check('live leases prevent double claim; expired lease recovers by querying first')
-p=Device(b);p.beat();tp='expiry-'+nonce;mock(tp,account='expiry-account');p.authorize(tp);p.beat();sql("UPDATE remote_service SET warmup_until=now()+interval '120 seconds';");p.stale();aid=p.account()
-sql(f"INSERT INTO remote_jobs(id,account_id,epoch,credential_version,expires_at) SELECT gen_random_uuid(),id,epoch,credential_version,now()-interval '1 second' FROM remote_accounts WHERE id='{aid}';")
+p=Device(b);p.beat();tp='expiry-'+nonce;mock(tp,account='expiry-account');p.authorize(tp);p.beat();sql("UPDATE remote_service SET warmup_until=UTC_TIMESTAMP(6)+INTERVAL 120 SECOND;");p.stale();aid=p.account()
+sql(f"INSERT INTO remote_jobs(id,account_id,epoch,credential_version,expires_at) SELECT UUID_TO_BIN(UUID()),id,epoch,credential_version,UTC_TIMESTAMP(6)-INTERVAL 1 SECOND FROM remote_accounts WHERE id='{aid}';")
 ready();wait(lambda:p.terminal('unconfirmed'));assert stats(tp)['pause_calls']==0;p.off()
 check('expired durable task is terminal without sending a pause')
 # Five simultaneous account losses trip circuit breaker; acknowledgement requires new heartbeat.
@@ -148,24 +146,24 @@ mass=[]
 for n in range(5):
  q=Device(muser);q.beat();tq=f'mass-{nonce}-{n}';mock(tq,account=tq);q.authorize(tq);q.beat();mass.append((q,tq))
 ids=','.join("'"+q.id+"'" for q,_ in mass)
-sql(f"UPDATE remote_grants SET last_seen=now()-interval '125 seconds',prepare_until=now()-interval '1 second' WHERE device_id IN ({ids});")
+sql(f"UPDATE remote_grants SET last_seen=UTC_TIMESTAMP(6)-INTERVAL 125 SECOND,prepare_until=UTC_TIMESTAMP(6)-INTERVAL 1 SECOND WHERE device_id IN ({ids});")
 ready();wait(lambda:admin.call('/remote')['service']['state']=='blocked');assert all(stats(tq)['pause_calls']==0 for _,tq in mass)
 admin.call('/admin/remote/acknowledge',{});assert sql("SELECT count(*) FROM remote_grants WHERE enabled AND armed_at IS NOT NULL;")=='0'
 for q,_ in mass:q.off()
 check('mass disconnect suppresses batch; explicit recovery requires new heartbeats')
 # Startup/ingress grace blocks otherwise eligible tasks.
-n=Device(b);n.beat();tn='warmup-'+nonce;mock(tn,account='warmup-account');n.authorize(tn);n.beat();n.stale();sql("UPDATE remote_service SET warmup_until=now()+interval '120 seconds',blocked=false,ingress_ok=true;");time.sleep(6);assert stats(tn)['pause_calls']==0;n.off()
+n=Device(b);n.beat();tn='warmup-'+nonce;mock(tn,account='warmup-account');n.authorize(tn);n.beat();n.stale();sql("UPDATE remote_service SET warmup_until=UTC_TIMESTAMP(6)+INTERVAL 120 SECOND,blocked=false,ingress_ok=true;");time.sleep(6);assert stats(tn)['pause_calls']==0;n.off()
 check('restart/ingress reconnect observation window suppresses old offline tasks')
 if os.environ.get('TEST_SERVER_PID'):
  import atexit,signal,pathlib
- r=Device(b);r.beat();tr='restart-'+nonce;mock(tr,account='restart-account');r.authorize(tr);r.beat();sql("UPDATE remote_service SET warmup_until=now()+interval '120 seconds';");r.stale();aid=r.account()
- sql("UPDATE remote_service SET warmup_until=now()+interval '120 seconds';")
- sql(f"INSERT INTO remote_jobs(id,account_id,epoch,credential_version) SELECT gen_random_uuid(),id,epoch,credential_version FROM remote_accounts WHERE id='{aid}' ON CONFLICT DO NOTHING;")
+ r=Device(b);r.beat();tr='restart-'+nonce;mock(tr,account='restart-account');r.authorize(tr);r.beat();sql("UPDATE remote_service SET warmup_until=UTC_TIMESTAMP(6)+INTERVAL 120 SECOND;");r.stale();aid=r.account()
+ sql("UPDATE remote_service SET warmup_until=UTC_TIMESTAMP(6)+INTERVAL 120 SECOND;")
+ sql(f"INSERT INTO remote_jobs(id,account_id,epoch,credential_version) SELECT UUID_TO_BIN(UUID()),id,epoch,credential_version FROM remote_accounts WHERE id='{aid}' ON DUPLICATE KEY UPDATE id=remote_jobs.id;")
  oldid=sql(f"SELECT id FROM remote_jobs WHERE account_id='{aid}';")
  # Independent cafe clock must survive a real short backend restart as well.
  cr=Device(b);cr.beat();ct='cafe-restart-'+nonce;mock(ct,account=ct);cr.authorize(ct)
  b.call('/remote/cafe/'+cr.account(),{'enabled':True,'revision':0})
- wait(lambda:sql(f"SELECT started_at IS NOT NULL FROM cafe_policies WHERE account_id='{cr.account()}';")=='t')
+ wait(lambda:sql(f"SELECT started_at IS NOT NULL FROM cafe_policies WHERE account_id='{cr.account()}';")=='1')
  cafe_start=sql(f"SELECT started_at FROM cafe_policies WHERE account_id='{cr.account()}';")
  os.kill(int(os.environ['TEST_SERVER_PID']),signal.SIGINT)
  time.sleep(1)

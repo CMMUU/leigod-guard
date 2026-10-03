@@ -12,7 +12,16 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     services:
-      postgres:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: disposable-ci-password
+          MYSQL_DATABASE: guard_test
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 --silent" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+      postgres-migration:
         image: postgres:18-alpine
         env:
           POSTGRES_PASSWORD: disposable-ci-password
@@ -25,7 +34,7 @@ jobs:
       run:
         working-directory: server
     env:
-      DATABASE_URL: postgres://postgres:disposable-ci-password@127.0.0.1:5432/guard_test
+      DATABASE_URL: mysql://root:disposable-ci-password@127.0.0.1:3306/guard_test
       PUBLIC_ORIGIN: http://127.0.0.1:3089
       PORT: '3089'
       RESEND_API_KEY: fixture-mail-key
@@ -45,7 +54,9 @@ jobs:
           rustup toolchain install stable --profile minimal --component rustfmt --component clippy --target x86_64-unknown-linux-musl
           rustup default stable
           sudo apt-get update -qq
-          sudo apt-get install -y musl-tools postgresql-client
+          sudo apt-get install -y musl-tools
+          python3 -m pip install pymysql cryptography "psycopg[binary]"
+
       - name: Verify shared brand assets
         run: python3 ../scripts/generate-brand.py --check
       - name: Check and test
@@ -54,38 +65,12 @@ jobs:
           cargo clippy --locked --all-targets -- -D warnings
           cargo test --locked
           cargo build --locked
-          psql "$DATABASE_URL" -f tests/migration_upgrade.sql
           ./target/debug/leigod-guard-server create-admin
-          python3 tests/mail_mock.py > /tmp/guard-mail.log 2>&1 &
-          MAIL_PID=$!
-          ./target/debug/leigod-guard-server > /tmp/guard-test.log 2>&1 &
-          SERVER_PID=$!
-          trap 'kill "$SERVER_PID" "$MAIL_PID"' EXIT
-          for attempt in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:3089/api/health > /dev/null; then break; fi
-            sleep 1
-          done
-          python3 tests/integration.py
-          python3 tests/email_integration.py
-          kill "$SERVER_PID"
-          wait "$SERVER_PID" || true
-          python3 tests/leigod_mock.py > /tmp/guard-provider.log 2>&1 &
-          PROVIDER_PID=$!
-          python3 tests/etalien_mock.py > /tmp/guard-etalien.log 2>&1 &
-          ETALIEN_PID=$!
-          python3 -c "import os; p='/tmp/guard-remote.key'; open(p,'wb').write(os.urandom(32)); os.chmod(p,0o600)"
-          export REMOTE_EXECUTION=true REMOTE_KEY_FILE=/tmp/guard-remote.key LEIGOD_TEST_ORIGIN=http://127.0.0.1:3091 ETALIEN_TEST_ORIGIN=http://127.0.0.1:3093
-          ./target/debug/leigod-guard-server > /tmp/guard-remote.log 2>&1 &
-          SERVER_PID=$!
-          trap 'kill "$SERVER_PID" "$MAIL_PID" "$PROVIDER_PID" "$ETALIEN_PID" 2>/dev/null || true' EXIT
-          for attempt in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:3089/api/health > /dev/null; then break; fi
-            sleep 1
-          done
-          python3 tests/guard_selection_integration.py
-          python3 tests/etalien_integration.py
-          python3 tests/cafe_integration.py
-          TEST_SERVER_PID="$SERVER_PID" TEST_SERVER_BINARY="$PWD/target/debug/leigod-guard-server" python3 tests/remote_integration.py
+          python3 -u tests/run_suite.py
+      - name: Verify PostgreSQL migration into isolated MySQL
+        run: |
+          PYTHONPATH=tests python3 -c "from db import connect; c=connect(); c.cursor().execute('CREATE DATABASE guard_migration_test CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_as_cs'); c.close()"
+          SOURCE_DATABASE_URL=postgres://postgres:disposable-ci-password@127.0.0.1:5432/guard_test DATABASE_URL=mysql://root:disposable-ci-password@127.0.0.1:3306/guard_migration_test python3 tests/migration_roundtrip.py
       - name: Build portable Linux binary
         run: cargo build --locked --release --target x86_64-unknown-linux-musl
       - name: Package

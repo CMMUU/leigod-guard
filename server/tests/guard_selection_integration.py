@@ -16,10 +16,7 @@ assert os.environ['ETALIEN_TEST_ORIGIN'] == 'http://127.0.0.1:3093'
 nonce = secrets.token_hex(5)
 
 
-def sql(q):
-    args = json.loads(os.environ['TEST_PSQL']) if 'TEST_PSQL' in os.environ else [
-        'psql', os.environ['DATABASE_URL'], '-v', 'ON_ERROR_STOP=1', '-At']
-    return subprocess.run(args, input=q, text=True, capture_output=True, check=True).stdout.strip()
+from db import sql
 
 
 class Client:
@@ -113,13 +110,13 @@ authorize(d, 'leigod', lei)
 authorize(d, 'etalien', et)
 authorize(peer, 'leigod', lei)
 heartbeat(d, 1)
-sql(f"UPDATE remote_grants SET last_seen=now()-interval '125 seconds' WHERE device_id='{d['device_id']}';")
+sql(f"UPDATE remote_grants SET last_seen=UTC_TIMESTAMP(6)-INTERVAL 125 SECOND WHERE device_id='{d['device_id']}';")
 assert request(d, '/device/guard')['provider'] is None
 # A legacy target may have a queued offline episode; retain consent but discard it.
 legacy_aid = sql(f"SELECT account_id FROM remote_grants WHERE device_id='{d['device_id']}' AND provider='leigod';")
-sql(f"INSERT INTO remote_jobs(id,account_id,epoch,credential_version,state) SELECT gen_random_uuid(),id,epoch,credential_version,'queued' FROM remote_accounts WHERE id='{legacy_aid}';")
+sql(f"INSERT INTO remote_jobs(id,account_id,epoch,credential_version,state) SELECT UUID_TO_BIN(UUID()),id,epoch,credential_version,'queued' FROM remote_accounts WHERE id='{legacy_aid}';")
 s1 = select(d, 'leigod', 0)
-assert sql(f"SELECT count(*) FROM remote_grants WHERE device_id='{d['device_id']}' AND provider='leigod' AND armed_at IS NOT NULL AND last_seen>now()-interval '5 seconds';") == '1'
+assert sql(f"SELECT count(*) FROM remote_grants WHERE device_id='{d['device_id']}' AND provider='leigod' AND armed_at IS NOT NULL AND last_seen>UTC_TIMESTAMP(6)-INTERVAL 5 SECOND;") == '1'
 assert sql(f"SELECT count(*) FROM remote_jobs WHERE account_id='{legacy_aid}' AND state='queued';") == '0'
 assert s1['committed'] and s1['revision'] == 1
 assert remote(d, 'leigod')['enabled'] and not remote(d, 'etalien')['enabled']
@@ -149,13 +146,13 @@ check('in-flight authorization cannot restore the old provider')
 
 # Independent account-level cafe policy requires owner action, never silent removal.
 aid = sql(f"SELECT account_id FROM remote_grants WHERE device_id='{d['device_id']}' AND provider='leigod';")
-sql(f"INSERT INTO cafe_policies(account_id,enabled) VALUES('{aid}',true) ON CONFLICT(account_id) DO UPDATE SET enabled=true;")
+sql(f"INSERT INTO cafe_policies(account_id,enabled) VALUES('{aid}',true) ON DUPLICATE KEY UPDATE enabled=true;")
 blocked = select(d, 'etalien', s3['revision'])
 assert not blocked['committed'] and blocked['reason'] == 'cafe_mode'
-assert sql(f"SELECT enabled FROM cafe_policies WHERE account_id='{aid}';") == 't'
+assert sql(f"SELECT enabled FROM cafe_policies WHERE account_id='{aid}';") =='1'
 sql(f"UPDATE cafe_policies SET enabled=false WHERE account_id='{aid}';")
 # An already sent pause cannot be recalled. Wait for its durable lease to drain.
-sql(f"INSERT INTO remote_jobs(id,account_id,epoch,credential_version,state,lease_id,lease_until) SELECT gen_random_uuid(),id,epoch,credential_version,'running',gen_random_uuid(),now()+interval '80 seconds' FROM remote_accounts WHERE id='{aid}';")
+sql(f"INSERT INTO remote_jobs(id,account_id,epoch,credential_version,state,lease_id,lease_until) SELECT UUID_TO_BIN(UUID()),id,epoch,credential_version,'running',UUID_TO_BIN(UUID()),UTC_TIMESTAMP(6)+INTERVAL 80 SECOND FROM remote_accounts WHERE id='{aid}';")
 blocked = select(d, 'etalien', s3['revision'])
 assert not blocked['committed'] and blocked['reason'] == 'in_flight'
 assert request(d, '/device/guard')['revision'] == s3['revision']
@@ -172,5 +169,5 @@ check('cafe consent and sent-job lease block switch; retries and process fencing
 for item in [d, peer]:
     for kind in ['leigod', 'etalien']:
         request(item, '/device/remote/disable?provider=' + kind, {'revision': remote(item, kind)['revision']})
-sql("UPDATE remote_service SET blocked=false,reason='ready',warmup_until=now()+interval '120 seconds';")
+sql("UPDATE remote_service SET blocked=false,reason='ready',warmup_until=UTC_TIMESTAMP(6)+INTERVAL 120 SECOND;")
 print('PASS single accelerator selection integration', flush=True)

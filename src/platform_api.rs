@@ -6,7 +6,15 @@ use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::time::Duration;
 
-pub const ORIGIN_URL: &str = "https://111.229.216.86";
+pub const ORIGIN_URL: &str = "https://leigod-login.cmmuu.com";
+const LEGACY_ORIGIN_URL: &str = "https://111.229.216.86";
+/// Only the maintained predecessor is eligible for the one-time origin migration.
+/// Keep tokens, IDs and expiry unchanged; normal server authentication still applies.
+pub(crate) fn migrate_origin(origin: &mut String) {
+    if origin == LEGACY_ORIGIN_URL {
+        *origin = ORIGIN_URL.into();
+    }
+}
 const COOKIE_NAME: &str = "__Host-guard_session";
 const MAX_RESPONSE: u64 = 32 * 1024;
 
@@ -33,7 +41,7 @@ impl Error {
             Self::Forbidden => "登录校验未通过，请重新登录。",
             Self::RateLimited => "请求过于频繁，请稍后重试。",
             Self::Unavailable => "平台暂时不可用，请稍后重试。本地守护仍可使用。",
-            Self::Network => "未能连接上海平台，请检查网络后重试。本地守护仍可使用。",
+            Self::Network => "未能连接云平台，请检查网络后重试。本地守护仍可使用。",
             Self::Protocol => "平台返回了无法识别的登录信息，请稍后重试。",
             Self::InvalidInput => "请检查邮箱、验证码或账号信息后重试。",
             Self::Conflict => "设备绑定冲突或已撤销。请在原账号解除绑定，或手动重新绑定本机。",
@@ -202,8 +210,8 @@ impl RemoteStatus {
             "waiting" => "设备失联观察中，等待全部受保护设备超时",
             "executing" => "服务器正在执行暂停并查询确认",
             "confirmed" => "服务器已查询确认暂停",
-            "unconfirmed" => "远程暂停未确认，请检查雷神账号状态",
-            "reauthorize" => "雷神凭据失效，请重新登录雷神并开启保护",
+            "unconfirmed" => "远程暂停未确认，请检查当前加速器账号状态",
+            "reauthorize" => "加速器凭据失效，请重新登录并开启保护",
             "service_abnormal" => "远程服务观察或异常期间，自动暂停暂缓",
             _ => "远程保护状态未知",
         }
@@ -700,6 +708,42 @@ fn read_remote(response: Response, provider: Provider) -> Result<RemoteStatus, E
         return Err(Error::Protocol);
     }
     Ok(status)
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::*;
+    #[test]
+    fn origin_migration_is_exact_and_preserves_session_identity_and_expiry() {
+        let mut session = Session {
+            origin: LEGACY_ORIGIN_URL.into(),
+            token: "a".repeat(64),
+            expires_at: 2000,
+            user: User {
+                id: "same-id".into(),
+                username: "user".into(),
+                display_name: "user".into(),
+                role: "user".into(),
+                csrf: "b".repeat(64),
+            },
+        };
+        migrate_origin(&mut session.origin);
+        assert!(session.valid_for(ORIGIN_URL, 1000));
+        assert_eq!(session.expires_at, 2000);
+        assert_eq!(session.user.id, "same-id");
+        assert_eq!(session.token, "a".repeat(64));
+        assert!(!session.valid_for(ORIGIN_URL, 2000));
+        for bad in [
+            "http://111.229.216.86",
+            "https://111.229.216.86.evil.invalid",
+            "https://another.example",
+            "https://111.229.216.86/",
+        ] {
+            let mut origin = bad.to_string();
+            migrate_origin(&mut origin);
+            assert_eq!(origin, bad);
+        }
+    }
 }
 
 #[cfg(test)]
