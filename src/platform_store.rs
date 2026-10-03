@@ -96,8 +96,9 @@ impl Store for DiskStore {
         }
         let plain = crate::dpapi::unprotect(&cipher)
             .map_err(|_| "无法解密登录状态，请使用当前 Windows 用户重新登录。")?;
-        let session: Session =
+        let mut session: Session =
             serde_json::from_str(&plain).map_err(|_| "保存的登录状态无效，请重新登录。")?;
+        crate::platform_api::migrate_origin(&mut session.origin);
         if !session.valid_for(ORIGIN_URL, chrono::Utc::now().timestamp()) {
             return Err("平台登录已过期，请重新登录。".into());
         }
@@ -142,7 +143,8 @@ impl Store for DiskStore {
                 return Err(());
             }
             let plain = crate::dpapi::unprotect(&cipher).map_err(|_| ())?;
-            let login: LoginData = serde_json::from_str(&plain).map_err(|_| ())?;
+            let mut login: LoginData = serde_json::from_str(&plain).map_err(|_| ())?;
+            crate::platform_api::migrate_origin(&mut login.origin);
             if !login.valid() {
                 return Err(());
             }

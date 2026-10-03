@@ -3,10 +3,7 @@ import concurrent.futures, hashlib, http.cookiejar, json, os, re, secrets, subpr
 BASE=os.environ.get('BASE_URL','http://127.0.0.1:3089')
 assert BASE.startswith('http://127.0.0.1:')
 nonce=secrets.token_hex(5);checks=[]
-def sql(text):
- args=json.loads(os.environ['TEST_PSQL']) if 'TEST_PSQL' in os.environ else ['psql',os.environ['DATABASE_URL'],'-v','ON_ERROR_STOP=1','-At']
- r=subprocess.run(args,input=text,text=True,capture_output=True,check=True)
- return r.stdout.strip()
+from db import sql
 class Client:
  def __init__(self):
   self.jar=http.cookiejar.CookieJar();self.http=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.jar));self.csrf=None;self.ip=secrets.token_hex(12);self.headers=None
@@ -37,7 +34,7 @@ a.call('/email/code',{'email':email},status=429)
 assert sql(f"SELECT count(*) FROM users WHERE email='{email}';")=='0'
 a.call('/email/login',dict(login,remember=True));assert 'Max-Age=2592000' in a.headers['Set-Cookie']
 u=a.identity();assert u['role']=='user' and u['username']==email and u['password_enabled'] is False
-expiry=float(sql(f"SELECT extract(epoch FROM expires_at-now()) FROM sessions WHERE user_id='{u['id']}';"));assert 2591900<expiry<=2592000
+expiry=float(sql(f"SELECT TIMESTAMPDIFF(SECOND,UTC_TIMESTAMP(6),expires_at) FROM sessions WHERE user_id='{u['id']}';"));assert 2591900<expiry<=2592000
 anon.call('/email/login',login,status=401);a.call('/admin/users',status=403)
 check('verified email creates ordinary user only; remembered cookie/database TTL 30 days; one-time use')
 # A legacy administrator username that looks like an email is never claimed by registration.
@@ -51,10 +48,10 @@ wrong=Client();data=wrong.send(f'wrong-{nonce}@example.invalid');bad='000000' if
 for _ in range(5):wrong.call('/email/login',dict(data,code=bad),status=401)
 wrong.call('/email/login',data,status=401)
 assert sql(f"SELECT attempts FROM email_challenges WHERE email='{data['email']}';")=='5'
-expired=Client();data=expired.send(f'expired-{nonce}@example.invalid');sql(f"UPDATE email_challenges SET expires_at=now()-interval '1 second' WHERE email='{data['email']}';")
+expired=Client();data=expired.send(f'expired-{nonce}@example.invalid');sql(f"UPDATE email_challenges SET expires_at=UTC_TIMESTAMP(6)-INTERVAL 1 SECOND WHERE email='{data['email']}';")
 expired.call('/email/login',data,status=401)
 check('five incorrect attempts lock the challenge; expired codes rejected')
-resend=Client();old=resend.send(f'resend-{nonce}@example.invalid');sql(f"UPDATE email_challenges SET requested_at=now()-interval '61 seconds' WHERE email='{old['email']}';")
+resend=Client();old=resend.send(f'resend-{nonce}@example.invalid');sql(f"UPDATE email_challenges SET requested_at=UTC_TIMESTAMP(6)-INTERVAL 61 SECOND WHERE email='{old['email']}';")
 new=resend.send(old['email']);resend.call('/email/login',old,status=401);resend.call('/email/login',new)
 failed=Client();failure=f'reject-{nonce}@example.invalid';failed.call('/email/code',{'email':failure},status=503)
 assert sql(f"SELECT count(*) FROM email_challenges WHERE email='{failure}';")=='0'

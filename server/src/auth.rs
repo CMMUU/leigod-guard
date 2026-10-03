@@ -33,7 +33,13 @@ pub fn check_password(p: &str, hash: &str) -> bool {
         .is_ok_and(|h| Argon2::default().verify_password(p.as_bytes(), &h).is_ok())
 }
 pub fn same_origin(s: &AppState, h: &HeaderMap) -> ApiResult<()> {
-    if h.get("origin").and_then(|v| v.to_str().ok()) != Some(s.origin.as_str()) {
+    let origin = h.get("origin").and_then(|v| v.to_str().ok());
+    if origin != Some(s.origin.as_str())
+        && !s
+            .legacy_origin
+            .as_deref()
+            .is_some_and(|v| origin == Some(v))
+    {
         return Err(ApiError(StatusCode::FORBIDDEN, "请求来源不匹配"));
     }
     Ok(())
@@ -46,8 +52,7 @@ pub fn cookie_token(s: &AppState, h: &HeaderMap) -> Option<String> {
 }
 pub async fn user(s: &AppState, h: &HeaderMap, write: bool) -> ApiResult<SessionUser> {
     let token = cookie_token(s, h).ok_or(ApiError(StatusCode::UNAUTHORIZED, "请先登录"))?;
-    let u=sqlx::query_as::<_,SessionUser>("SELECT u.id,COALESCE(u.email,u.username) AS username,u.display_name,u.role,s.csrf,(u.password_hash<>'!') AS password_enabled FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>now() AND NOT u.disabled")
-        .bind(digest(&token)).fetch_optional(&s.db).await?.ok_or(ApiError(StatusCode::UNAUTHORIZED,"会话已过期，请重新登录"))?;
+    let u=sqlx::query_as::<_,SessionUser>("SELECT u.id,COALESCE(u.email,u.username) AS username,u.display_name,u.role,s.csrf,(u.password_hash<>'!') AS password_enabled FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>UTC_TIMESTAMP(6) AND NOT u.disabled").bind(digest(&token) ).fetch_optional(&s.db).await?.ok_or(ApiError(StatusCode::UNAUTHORIZED,"会话已过期，请重新登录"))?;
     if write {
         same_origin(s, h)?;
         if h.get("x-csrf-token").and_then(|v| v.to_str().ok()) != Some(u.csrf.as_str()) {
@@ -57,7 +62,7 @@ pub async fn user(s: &AppState, h: &HeaderMap, write: bool) -> ApiResult<Session
             ));
         }
     }
-    sqlx::query("UPDATE sessions SET last_seen=now() WHERE token_hash=$1 AND last_seen<now()-interval '30 seconds'").bind(digest(&token)).execute(&s.db).await?;
+    sqlx::query("UPDATE sessions SET last_seen=UTC_TIMESTAMP(6) WHERE token_hash=? AND last_seen<UTC_TIMESTAMP(6)-INTERVAL 30 SECOND").bind(digest(&token) ).execute(&s.db).await?;
     Ok(u)
 }
 pub async fn admin(s: &AppState, h: &HeaderMap, write: bool) -> ApiResult<SessionUser> {
@@ -112,15 +117,24 @@ pub fn session_cookie(s: &AppState, value: &str, seconds: u32) -> String {
 }
 
 pub async fn issue_session(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
     id: Uuid,
     remember: bool,
 ) -> ApiResult<(String, u32)> {
     let token = secret();
     let seconds = if remember { 30 * 86400 } else { 86400 };
-    sqlx::query("DELETE FROM sessions WHERE user_id=$1 AND (expires_at<now() OR token_hash IN (SELECT token_hash FROM sessions WHERE user_id=$1 ORDER BY last_seen DESC OFFSET 9))").bind(id).execute(&mut **tx).await?;
-    sqlx::query("INSERT INTO sessions(token_hash,user_id,csrf,expires_at) VALUES($1,$2,$3,now()+make_interval(secs=>$4))")
-        .bind(digest(&token)).bind(id).bind(secret()).bind(seconds as f64).execute(&mut **tx).await?;
+    sqlx::query("DELETE FROM sessions WHERE user_id=? AND expires_at<UTC_TIMESTAMP(6)")
+        .bind(id)
+        .execute(&mut **tx)
+        .await?;
+    let old: Vec<String> = sqlx::query_scalar("SELECT token_hash FROM sessions WHERE user_id=? ORDER BY last_seen DESC,token_hash LIMIT 18446744073709551615 OFFSET 9").bind(id ).fetch_all(&mut **tx).await?;
+    for hash in old {
+        sqlx::query("DELETE FROM sessions WHERE token_hash=?")
+            .bind(&(hash))
+            .execute(&mut **tx)
+            .await?;
+    }
+    sqlx::query("INSERT INTO sessions(token_hash,user_id,csrf,expires_at) VALUES(?,?,?,UTC_TIMESTAMP(6)+INTERVAL ? SECOND)").bind(digest(&token) ).bind(id ).bind(secret() ).bind(seconds as f64 ).execute(&mut **tx).await?;
     Ok((token, seconds))
 }
 

@@ -31,18 +31,17 @@ pub async fn save(
             "服务器远程暂停能力尚未开放",
         ));
     }
-    let mut tx = s.db.begin().await?;
+    let mut tx = storage::begin(&s.db).await?;
     // Same user -> global lock order as user disabling. Recheck after session auth.
-    sqlx::query("SELECT id FROM users WHERE id=$1 AND NOT disabled FOR UPDATE")
+    sqlx::query("SELECT id FROM users WHERE id=? AND NOT disabled FOR UPDATE")
         .bind(user.id)
         .fetch_optional(&mut *tx)
         .await?
         .ok_or(ApiError(StatusCode::UNAUTHORIZED, "账号已停用"))?;
     remote::lock(&mut tx).await?;
-    let account = sqlx::query("SELECT credential_state,credential IS NOT NULL AS has_credential FROM remote_accounts WHERE id=$1 AND user_id=$2")
-        .bind(id).bind(user.id).fetch_optional(&mut *tx).await?
+    let account = sqlx::query("SELECT credential_state,credential IS NOT NULL AS has_credential FROM remote_accounts WHERE id=? AND user_id=?").bind(id).bind(user.id).fetch_optional(&mut *tx).await?
         .ok_or(ApiError(StatusCode::NOT_FOUND, "加速器账号不存在"))?;
-    let old = sqlx::query("SELECT revision,enabled FROM cafe_policies WHERE account_id=$1")
+    let old = sqlx::query("SELECT revision,enabled FROM cafe_policies WHERE account_id=?")
         .bind(id)
         .fetch_optional(&mut *tx)
         .await?;
@@ -60,15 +59,20 @@ pub async fn save(
         ));
     }
     let was_enabled = old.as_ref().is_some_and(|r| r.get::<bool, _>("enabled"));
-    sqlx::query("INSERT INTO cafe_policies(account_id,enabled,max_hours) VALUES($1,$2,$3) ON CONFLICT(account_id) DO UPDATE SET enabled=$2,max_hours=$3,revision=cafe_policies.revision+1,started_at=CASE WHEN cafe_policies.enabled AND $2 THEN cafe_policies.started_at ELSE NULL END,observed_at=CASE WHEN cafe_policies.enabled AND $2 THEN cafe_policies.observed_at ELSE NULL END,observed_state=CASE WHEN cafe_policies.enabled AND $2 THEN cafe_policies.observed_state ELSE 'unknown' END,next_poll=now(),poll_lease=NULL,poll_until=NULL,failures=0,updated_at=now()")
-        .bind(id).bind(p.enabled).bind(p.max_hours).execute(&mut *tx).await?;
-    sqlx::query("SELECT remote_cancel($1)")
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
+    if old.is_some() {
+        sqlx::query("UPDATE cafe_policies SET enabled=?,max_hours=?,revision=revision+1,started_at=CASE WHEN ? THEN started_at ELSE NULL END,observed_at=CASE WHEN ? THEN observed_at ELSE NULL END,observed_state=CASE WHEN ? THEN observed_state ELSE 'unknown' END,next_poll=UTC_TIMESTAMP(6),poll_lease=NULL,poll_until=NULL,failures=0,updated_at=UTC_TIMESTAMP(6) WHERE account_id=?").bind(p.enabled).bind(p.max_hours).bind(was_enabled && p.enabled).bind(was_enabled && p.enabled).bind(was_enabled && p.enabled).bind(id).execute(&mut *tx).await?;
+    } else {
+        sqlx::query("INSERT INTO cafe_policies(account_id,enabled,max_hours) VALUES(?,?,?)")
+            .bind(id)
+            .bind(p.enabled)
+            .bind(p.max_hours)
+            .execute(&mut *tx)
+            .await?;
+    }
+    storage::cancel(&mut tx, id).await?;
     if was_enabled && !p.enabled {
         // Leaving cafe mode must not immediately unleash stale home-device jobs.
-        sqlx::query("UPDATE remote_grants SET armed_at=NULL WHERE account_id=$1 AND enabled")
+        sqlx::query("UPDATE remote_grants SET armed_at=NULL WHERE account_id=? AND enabled")
             .bind(id)
             .execute(&mut *tx)
             .await?;
@@ -90,8 +94,7 @@ pub async fn save(
 }
 
 pub async fn listing(s: &AppState, user: &SessionUser) -> ApiResult<Vec<Value>> {
-    Ok(sqlx::query_scalar("SELECT jsonb_build_object('id',a.id,'user_id',a.user_id,'owner',COALESCE(u.email,u.username),'provider',a.provider,'label',a.label,'credential',a.credential_state,'enabled',COALESCE(c.enabled,false),'max_hours',COALESCE(c.max_hours,24),'revision',COALESCE(c.revision,0),'started_at',c.started_at,'deadline',c.started_at+make_interval(hours=>c.max_hours),'observed_at',c.observed_at,'observed_state',CASE WHEN c.observed_at<now()-interval '150 seconds' THEN 'unknown' ELSE COALESCE(c.observed_state,'unknown') END,'next_poll',c.next_poll,'job_state',j.state,'last_result',j.result) FROM remote_accounts a JOIN users u ON u.id=a.user_id LEFT JOIN cafe_policies c ON c.account_id=a.id LEFT JOIN remote_jobs j ON j.account_id=a.id AND j.epoch=a.epoch AND j.trigger_kind='cafe' WHERE ($1 OR a.user_id=$2) ORDER BY a.updated_at DESC LIMIT 500")
-        .bind(user.role=="admin").bind(user.id).fetch_all(&s.db).await?)
+    storage::json_rows(sqlx::query("SELECT a.id AS id,a.user_id AS user_id,COALESCE(u.email,u.username) AS owner,a.provider AS provider,a.label AS label,a.credential_state AS credential,COALESCE(c.enabled,false) AS enabled,COALESCE(c.max_hours,24) AS max_hours,COALESCE(c.revision,0) AS revision,c.started_at AS started_at,c.started_at+INTERVAL c.max_hours HOUR AS deadline,c.observed_at AS observed_at,CASE WHEN c.observed_at<UTC_TIMESTAMP(6)-INTERVAL 150 SECOND THEN 'unknown' ELSE COALESCE(c.observed_state,'unknown') END AS observed_state,c.next_poll AS next_poll,j.state AS job_state,j.result AS last_result FROM remote_accounts a JOIN users u ON u.id=a.user_id LEFT JOIN cafe_policies c ON c.account_id=a.id LEFT JOIN remote_jobs j ON j.account_id=a.id AND j.epoch=a.epoch AND j.trigger_kind='cafe' WHERE (? OR a.user_id=?) ORDER BY a.updated_at DESC LIMIT 500").bind(user.role=="admin").bind(user.id).fetch_all(&s.db).await?)
 }
 
 pub struct Poll {
@@ -105,9 +108,9 @@ pub struct Poll {
     cipher: Vec<u8>,
 }
 pub async fn claim(s: &AppState) -> ApiResult<Option<Poll>> {
-    let mut tx = s.db.begin().await?;
+    let mut tx = storage::begin(&s.db).await?;
     remote::lock(&mut tx).await?;
-    let row = sqlx::query("SELECT c.account_id,c.revision,a.epoch,a.credential_version,a.provider_key,a.provider,a.credential FROM cafe_policies c JOIN remote_accounts a ON a.id=c.account_id JOIN users u ON u.id=a.user_id WHERE c.enabled AND NOT u.disabled AND a.credential_state='valid' AND a.credential IS NOT NULL AND c.next_poll<=now() AND (c.poll_until IS NULL OR c.poll_until<=now()) AND NOT EXISTS(SELECT 1 FROM remote_jobs j WHERE j.account_id=a.id AND j.lease_until>now()) AND (SELECT count(*) FROM remote_jobs WHERE lease_until>now())+(SELECT count(*) FROM cafe_policies WHERE poll_until>now())<2 ORDER BY c.next_poll FOR UPDATE OF c SKIP LOCKED LIMIT 1")
+    let row = sqlx::query("SELECT c.account_id,c.revision,a.epoch,a.credential_version,a.provider_key,a.provider,a.credential FROM cafe_policies c JOIN remote_accounts a ON a.id=c.account_id JOIN users u ON u.id=a.user_id WHERE c.enabled AND NOT u.disabled AND a.credential_state='valid' AND a.credential IS NOT NULL AND c.next_poll<=UTC_TIMESTAMP(6) AND (c.poll_until IS NULL OR c.poll_until<=UTC_TIMESTAMP(6)) AND NOT EXISTS(SELECT 1 FROM remote_jobs j WHERE j.account_id=a.id AND j.lease_until>UTC_TIMESTAMP(6)) AND (SELECT count(*) FROM remote_jobs WHERE lease_until>UTC_TIMESTAMP(6))+(SELECT count(*) FROM cafe_policies WHERE poll_until>UTC_TIMESTAMP(6))<2 ORDER BY c.next_poll LIMIT 1 FOR UPDATE SKIP LOCKED")
         .fetch_optional(&mut *tx).await?;
     let Some(r) = row else {
         return Ok(None);
@@ -123,8 +126,7 @@ pub async fn claim(s: &AppState) -> ApiResult<Option<Poll>> {
             .map_err(|_| ApiError(StatusCode::INTERNAL_SERVER_ERROR, "未知加速器"))?,
         cipher: r.get("credential"),
     };
-    sqlx::query("UPDATE cafe_policies SET poll_lease=$2,poll_until=now()+interval '60 seconds' WHERE account_id=$1")
-        .bind(poll.id).bind(poll.lease).execute(&mut *tx).await?;
+    sqlx::query("UPDATE cafe_policies SET poll_lease=?,poll_until=UTC_TIMESTAMP(6)+INTERVAL 60 SECOND WHERE account_id=?").bind(poll.lease).bind(poll.id).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(Some(poll))
 }
@@ -137,13 +139,11 @@ pub async fn observe(s: &AppState, p: &Poll) -> ApiResult<()> {
         Ok(token) => provider.info(p.kind, &token).await,
         Err(e) => Err(e),
     };
-    let mut tx = s.db.begin().await?;
+    let mut tx = storage::begin(&s.db).await?;
     remote::lock(&mut tx).await?;
-    let row = sqlx::query("SELECT c.started_at,c.observed_at,c.failures FROM cafe_policies c JOIN remote_accounts a ON a.id=c.account_id JOIN users u ON u.id=a.user_id WHERE c.account_id=$1 AND c.enabled AND c.revision=$2 AND c.poll_lease=$3 AND c.poll_until>now() AND a.epoch=$4 AND a.credential_version=$5 AND NOT u.disabled")
-        .bind(p.id).bind(p.revision).bind(p.lease).bind(p.epoch).bind(p.credential_version).fetch_optional(&mut *tx).await?;
+    let row = sqlx::query("SELECT c.started_at,c.observed_at,c.failures FROM cafe_policies c JOIN remote_accounts a ON a.id=c.account_id JOIN users u ON u.id=a.user_id WHERE c.account_id=? AND c.enabled AND c.revision=? AND c.poll_lease=? AND c.poll_until>UTC_TIMESTAMP(6) AND a.epoch=? AND a.credential_version=? AND NOT u.disabled").bind(p.id).bind(p.revision).bind(p.lease).bind(p.epoch).bind(p.credential_version).fetch_optional(&mut *tx).await?;
     let Some(r) = row else {
-        sqlx::query("UPDATE cafe_policies SET poll_lease=NULL,poll_until=NULL WHERE account_id=$1 AND poll_lease=$2")
-            .bind(p.id).bind(p.lease).execute(&mut *tx).await?;
+        sqlx::query("UPDATE cafe_policies SET poll_lease=NULL,poll_until=NULL WHERE account_id=? AND poll_lease=?").bind(p.id).bind(p.lease).execute(&mut *tx).await?;
         tx.commit().await?;
         return Ok(());
     };
@@ -158,30 +158,21 @@ pub async fn observe(s: &AppState, p: &Poll) -> ApiResult<()> {
         // A long observation gap cannot prove this is the same uninterrupted run.
         let next = next_start(started, observed, paused, now);
         if next != started {
-            sqlx::query("SELECT remote_cancel($1)")
-                .bind(p.id)
-                .execute(&mut *tx)
-                .await?;
+            storage::cancel(&mut tx, p.id).await?;
         }
-        sqlx::query("UPDATE cafe_policies SET started_at=$2,observed_at=now(),observed_state=$3,failures=0,next_poll=now()+interval '60 seconds',poll_lease=NULL,poll_until=NULL,updated_at=now() WHERE account_id=$1")
-            .bind(p.id).bind(next).bind(if paused {"paused"} else {"running"}).execute(&mut *tx).await?;
+        sqlx::query("UPDATE cafe_policies SET started_at=?,observed_at=UTC_TIMESTAMP(6),observed_state=?,failures=0,next_poll=UTC_TIMESTAMP(6)+INTERVAL 60 SECOND,poll_lease=NULL,poll_until=NULL,updated_at=UTC_TIMESTAMP(6) WHERE account_id=?").bind(next).bind(if paused {"paused"} else {"running"}).bind(p.id).execute(&mut *tx).await?;
     } else {
         let invalid = matches!(
             &result,
             Err(provider::Failure::Credential | provider::Failure::InvalidAccount)
         ) || matches!(&result, Ok(info) if info.key != p.key);
         if invalid {
-            sqlx::query("SELECT remote_cancel($1)")
-                .bind(p.id)
-                .execute(&mut *tx)
-                .await?;
-            sqlx::query("UPDATE remote_accounts SET credential=NULL,credential_state='reauthorize' WHERE id=$1")
-                .bind(p.id).execute(&mut *tx).await?;
+            storage::cancel(&mut tx, p.id).await?;
+            sqlx::query("UPDATE remote_accounts SET credential=NULL,credential_state='reauthorize' WHERE id=?").bind(p.id).execute(&mut *tx).await?;
         }
         let failures = r.get::<i32, _>("failures").saturating_add(1).min(10);
         let delay = (60 * (1_i32 << failures.min(3))).min(300) as f64;
-        sqlx::query("UPDATE cafe_policies SET observed_state='unknown',failures=$2,next_poll=now()+make_interval(secs=>$3),poll_lease=NULL,poll_until=NULL,updated_at=now() WHERE account_id=$1")
-            .bind(p.id).bind(failures).bind(delay).execute(&mut *tx).await?;
+        sqlx::query("UPDATE cafe_policies SET observed_state='unknown',failures=?,next_poll=UTC_TIMESTAMP(6)+INTERVAL ? SECOND,poll_lease=NULL,poll_until=NULL,updated_at=UTC_TIMESTAMP(6) WHERE account_id=?").bind(failures).bind(delay).bind(p.id).execute(&mut *tx).await?;
     }
     tx.commit().await?;
     Ok(())

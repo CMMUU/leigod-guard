@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""HK forced-command receiver; no shell, reads, arbitrary paths, or overwrites."""
+"""Offsite forced-command receiver; no shell, reads, arbitrary paths, or overwrites."""
 import hashlib,os,pathlib,re,sys,time
 command=os.environ.get('SSH_ORIGINAL_COMMAND','')
-match=re.fullmatch(r'store (guard-\d{8}T\d{6}Z\.tar\.age)',command)
+match=re.fullmatch(r'store (guard-(?:mysql-)?\d{8}T\d{6}Z\.tar\.age)',command)
 if not match:raise SystemExit('unsupported backup operation')
 root=pathlib.Path('/opt/leigod-guard-offsite');target=root/match.group(1)
 tmp=root/(match.group(1)+'.'+str(os.getpid())+'.pending')

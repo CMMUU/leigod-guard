@@ -137,8 +137,13 @@ pub fn normalize(input: &str) -> Option<String> {
     Some(value)
 }
 async fn budget(s: &AppState, key: String, max: i32, seconds: f64) -> ApiResult<()> {
-    let hits: i32 = sqlx::query_scalar("INSERT INTO email_rate_limits(key,hits,expires_at) VALUES($1,1,now()+make_interval(secs=>$2)) ON CONFLICT(key) DO UPDATE SET hits=CASE WHEN email_rate_limits.expires_at<=now() THEN 1 ELSE email_rate_limits.hits+1 END,expires_at=CASE WHEN email_rate_limits.expires_at<=now() THEN EXCLUDED.expires_at ELSE email_rate_limits.expires_at END RETURNING hits")
-        .bind(key).bind(seconds).fetch_one(&s.db).await?;
+    let mut tx = storage::begin(&s.db).await?;
+    sqlx::query("INSERT INTO email_rate_limits(`key`,hits,expires_at) VALUES(?,1,UTC_TIMESTAMP(6)+INTERVAL ? SECOND) ON DUPLICATE KEY UPDATE hits=CASE WHEN expires_at<=UTC_TIMESTAMP(6) THEN 1 ELSE hits+1 END,expires_at=CASE WHEN expires_at<=UTC_TIMESTAMP(6) THEN UTC_TIMESTAMP(6)+INTERVAL ? SECOND ELSE expires_at END").bind(&key).bind(seconds).bind(seconds).execute(&mut *tx).await?;
+    let hits: i32 = sqlx::query_scalar("SELECT hits FROM email_rate_limits WHERE `key`=?")
+        .bind(&key)
+        .fetch_one(&mut *tx)
+        .await?;
+    tx.commit().await?;
     if hits > max {
         return Err(ApiError(
             StatusCode::TOO_MANY_REQUESTS,
@@ -175,24 +180,26 @@ pub async fn send_code(
     budget(&s, "send-global-day".into(), 100, 86400.).await?;
     let id = Uuid::new_v4();
     let code = format!("{:06}", rand::rngs::OsRng.gen_range(0..1_000_000u32));
-    let changed = sqlx::query("INSERT INTO email_challenges(email,request_id,code_hash,expires_at) VALUES($1,$2,$3,now()+interval '10 minutes') ON CONFLICT(email) DO UPDATE SET request_id=EXCLUDED.request_id,code_hash=EXCLUDED.code_hash,requested_at=now(),expires_at=EXCLUDED.expires_at,attempts=0,ready=false WHERE email_challenges.requested_at<now()-interval '60 seconds'")
-        .bind(&email).bind(id).bind(mail.hash(&email,id,&code)).execute(&s.db).await?;
-    if changed.rows_affected() != 1 {
+    let mut tx = storage::begin(&s.db).await?;
+    let recent: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM email_challenges WHERE email=? AND requested_at>=UTC_TIMESTAMP(6)-INTERVAL 60 SECOND)").bind(&email).fetch_one(&mut *tx).await?;
+    if recent {
         return Err(ApiError(
             StatusCode::TOO_MANY_REQUESTS,
             "请等待 60 秒后重新获取验证码",
         ));
     }
+    sqlx::query("INSERT INTO email_challenges(email,request_id,code_hash,expires_at) VALUES(?,?,?,UTC_TIMESTAMP(6)+INTERVAL 10 MINUTE) ON DUPLICATE KEY UPDATE request_id=?,code_hash=?,requested_at=UTC_TIMESTAMP(6),expires_at=UTC_TIMESTAMP(6)+INTERVAL 10 MINUTE,attempts=0,ready=false").bind(&email).bind(id).bind(mail.hash(&email,id,&code)).bind(id).bind(mail.hash(&email,id,&code)).execute(&mut *tx).await?;
+    tx.commit().await?;
     // No database transaction or row lock is held across the external delivery request.
     if let Err(error) = mail.send(&email, id, &code).await {
-        sqlx::query("DELETE FROM email_challenges WHERE email=$1 AND request_id=$2")
+        sqlx::query("DELETE FROM email_challenges WHERE email=? AND request_id=?")
             .bind(&email)
             .bind(id)
             .execute(&s.db)
             .await?;
         return Err(error);
     }
-    sqlx::query("UPDATE email_challenges SET ready=true WHERE email=$1 AND request_id=$2")
+    sqlx::query("UPDATE email_challenges SET ready=true WHERE email=? AND request_id=?")
         .bind(&email)
         .bind(id)
         .execute(&s.db)
@@ -230,9 +237,8 @@ pub async fn verify_code(
         StatusCode::SERVICE_UNAVAILABLE,
         "邮件服务尚未配置",
     ))?;
-    let mut tx = s.db.begin().await?;
-    let row = sqlx::query("SELECT code_hash,attempts FROM email_challenges WHERE email=$1 AND request_id=$2 AND ready AND expires_at>now() FOR UPDATE")
-        .bind(&email).bind(input.request_id).fetch_optional(&mut *tx).await?.ok_or_else(invalid)?;
+    let mut tx = storage::begin(&s.db).await?;
+    let row = sqlx::query("SELECT code_hash,attempts FROM email_challenges WHERE email=? AND request_id=? AND ready AND expires_at>UTC_TIMESTAMP(6) FOR UPDATE").bind(&email).bind(input.request_id).fetch_optional(&mut *tx).await?.ok_or_else(invalid)?;
     if row.get::<i32, _>("attempts") >= 5 {
         return Err(invalid());
     }
@@ -242,7 +248,7 @@ pub async fn verify_code(
         &input.code,
         &row.get::<Vec<u8>, _>("code_hash"),
     ) {
-        sqlx::query("UPDATE email_challenges SET attempts=attempts+1 WHERE email=$1")
+        sqlx::query("UPDATE email_challenges SET attempts=attempts+1 WHERE email=?")
             .bind(&email)
             .execute(&mut *tx)
             .await?;
@@ -251,13 +257,12 @@ pub async fn verify_code(
     }
     // Never infer verified ownership or administrator privileges from a legacy username.
     let id = Uuid::new_v4();
-    sqlx::query("INSERT INTO users(id,username,display_name,password_hash,role,email,email_verified_at) VALUES($1,$2,$3,'!','user',$4,now()) ON CONFLICT(email) DO NOTHING")
-        .bind(id).bind(format!("email-{}",id.simple())).bind("邮箱用户").bind(&email).execute(&mut *tx).await?;
-    let user = sqlx::query("SELECT id,disabled,role FROM users WHERE email=$1 FOR UPDATE")
+    sqlx::query("INSERT INTO users(id,username,display_name,password_hash,role,email,email_verified_at) VALUES(?,?,?,'!','user',?,UTC_TIMESTAMP(6)) ON DUPLICATE KEY UPDATE email=users.email").bind(id).bind(format!("email-{}",id.simple())).bind("邮箱用户").bind(&email).execute(&mut *tx).await?;
+    let user = sqlx::query("SELECT id,disabled,role FROM users WHERE email=? FOR UPDATE")
         .bind(&email)
         .fetch_one(&mut *tx)
         .await?;
-    sqlx::query("DELETE FROM email_challenges WHERE email=$1")
+    sqlx::query("DELETE FROM email_challenges WHERE email=?")
         .bind(&email)
         .execute(&mut *tx)
         .await?;

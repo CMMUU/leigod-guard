@@ -3,9 +3,7 @@ import http.cookiejar,json,os,secrets,subprocess,time,urllib.error,urllib.reques
 BASE=os.environ.get('BASE_URL','http://127.0.0.1:3089');assert BASE.startswith('http://127.0.0.1:')
 assert os.environ['ETALIEN_TEST_ORIGIN']=='http://127.0.0.1:3093'
 nonce=secrets.token_hex(5);ACCOUNT_ID=int(nonce,16)+1000000000000
-def sql(q):
- args=json.loads(os.environ['TEST_PSQL']) if 'TEST_PSQL' in os.environ else ['psql',os.environ['DATABASE_URL'],'-v','ON_ERROR_STOP=1','-At']
- return subprocess.run(args,input=q,text=True,capture_output=True,check=True).stdout.strip()
+from db import sql
 class Client:
  def __init__(self):self.http=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()));self.csrf=None
  def call(self,path,body=None,status=200,token=None):
@@ -25,7 +23,7 @@ owner=user(1);other=user(2)
 def mock(t,port=3093,**kw):
  urllib.request.urlopen(urllib.request.Request(f'http://127.0.0.1:{port}/control',data=json.dumps({'token':t,**kw}).encode(),headers={'Content-Type':'application/json'})).read()
 def stats(t):return json.load(urllib.request.urlopen('http://127.0.0.1:3093/'))[t]
-def ready():sql("UPDATE remote_service SET warmup_until=now()-interval '1 second',ingress_ok=true,blocked=false,last_tick=now();")
+def ready():sql("UPDATE remote_service SET warmup_until=UTC_TIMESTAMP(6)-INTERVAL 1 SECOND,ingress_ok=true,blocked=false,last_tick=UTC_TIMESTAMP(6);")
 def wait(fn):
  until=time.monotonic()+25
  while time.monotonic()<until:
@@ -49,7 +47,7 @@ class Device:
  def off(self,k):
   r=self.c.call(self.path(k,'/disable'),{'revision':self.rev[k]},token=self.token);self.rev[k]=r['revision'];return r
  def aid(self,k):return sql(f"SELECT account_id FROM remote_grants WHERE device_id='{self.id}' AND provider='{k}';")
- def stale(self,k='etalien'):sql(f"UPDATE remote_grants SET last_seen=now()-interval '125 seconds',prepare_until=now()-interval '1 second' WHERE device_id='{self.id}' AND provider='{k}';")
+ def stale(self,k='etalien'):sql(f"UPDATE remote_grants SET last_seen=UTC_TIMESTAMP(6)-INTERVAL 125 SECOND,prepare_until=UTC_TIMESTAMP(6)-INTERVAL 1 SECOND WHERE device_id='{self.id}' AND provider='{k}';")
  def confirmed(self):return sql(f"SELECT count(*) FROM remote_jobs WHERE account_id='{self.aid('etalien')}' AND state='confirmed';")=='1'
 def check(t):print('PASS',t,flush=True)
 d=Device();d.beat();et='et-'+nonce;lei='lei-'+nonce
@@ -72,7 +70,7 @@ e.stale();ready();wait(d.confirmed);assert stats(et2)['pause_calls']==1
 check('token rotation preserves account grouping; online peer blocks pause; offline task queries confirmation')
 assert d.status('leigod')['enabled'];e.off('etalien');d.off('etalien')
 assert d.status('leigod')['enabled']
-assert sql(f"SELECT credential IS NULL FROM remote_accounts WHERE id='{d.aid('etalien')}';")=='t'
+assert sql(f"SELECT credential IS NULL FROM remote_accounts WHERE id='{d.aid('etalien')}';")=='1'
 check('ET disable deletes final ET cipher and preserves Lei authorization')
 mock(et,state=2);d.auth('etalien',et);d.beat();d.beat(legacy=True)
 assert not d.status('etalien')['enabled'] and d.status('leigod')['enabled']

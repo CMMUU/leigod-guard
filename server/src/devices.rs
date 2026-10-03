@@ -18,7 +18,7 @@ pub async fn register(
 ) -> ApiResult<Json<Value>> {
     let u = auth::user(&s, &h, true).await?;
     auth::throttle(&s, format!("register:{}", u.id), 20, 600)?;
-    let mut tx = s.db.begin().await?;
+    let mut tx = storage::begin(&s.db).await?;
     let response = bind(
         &mut tx,
         u.id,
@@ -32,7 +32,7 @@ pub async fn register(
     Ok(Json(response))
 }
 pub async fn bind(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
     uid: Uuid,
     installation: Option<&str>,
     name: &str,
@@ -48,7 +48,7 @@ pub async fn bind(
         return Err(ApiError(StatusCode::BAD_REQUEST, "设备参数无效"));
     }
     let owner = sqlx::query(
-        "SELECT disabled,COALESCE(email,username) AS username FROM users WHERE id=$1 FOR UPDATE",
+        "SELECT disabled,COALESCE(email,username) AS username FROM users WHERE id=? FOR UPDATE",
     )
     .bind(uid)
     .fetch_one(&mut **tx)
@@ -61,13 +61,8 @@ pub async fn bind(
         .map(auth::digest)
         .unwrap_or_else(|| auth::digest(&token));
     if installation.is_some() {
-        // Serialize the global installation identity even before its first row exists.
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
-            .bind(&hash)
-            .execute(&mut **tx)
-            .await?;
         if let Some(existing) = sqlx::query(
-            "SELECT id,user_id,revoked,sequence FROM devices WHERE installation_hash=$1 FOR UPDATE",
+            "SELECT id,user_id,revoked,sequence FROM devices WHERE installation_hash=? FOR UPDATE",
         )
         .bind(&hash)
         .fetch_optional(&mut **tx)
@@ -87,13 +82,10 @@ pub async fn bind(
                 enforce_limit(tx, uid).await?;
             }
             let id: Uuid = existing.get("id");
+            storage::revoke_device(tx, id).await?;
             sqlx::query(
-                "UPDATE devices SET name=$2,version=$3,revoked=false,token_hash=$4,run_generation=0 WHERE id=$1",
-            )
-            .bind(id)
-            .bind(name.trim())
-            .bind(version)
-            .bind(auth::digest(&token))
+                "UPDATE devices SET name=?,version=?,revoked=false,token_hash=?,run_generation=0 WHERE id=?",
+            ).bind(name.trim()).bind(version).bind(auth::digest(&token)).bind(id)
             .execute(&mut **tx)
             .await?;
             if revoked {
@@ -106,8 +98,7 @@ pub async fn bind(
     }
     enforce_limit(tx, uid).await?;
     let id = Uuid::new_v4();
-    sqlx::query("INSERT INTO devices(id,user_id,name,token_hash,installation_hash,version) VALUES($1,$2,$3,$4,$5,$6)")
-        .bind(id).bind(uid).bind(name.trim()).bind(auth::digest(&token)).bind(installation.map(|_|hash.clone())).bind(version).execute(&mut **tx).await?;
+    sqlx::query("INSERT INTO devices(id,user_id,name,token_hash,installation_hash,version) VALUES(?,?,?,?,?,?)").bind(id).bind(uid).bind(name.trim()).bind(auth::digest(&token)).bind(installation.map(|_|hash.clone())).bind(version).execute(&mut **tx).await?;
     routes::audit(
         tx,
         uid,
@@ -120,9 +111,9 @@ pub async fn bind(
         json!({"device_id":id,"device_token":token,"owner_id":uid,"owner":owner.get::<String,_>("username"),"sequence":-1,"heartbeat_seconds":15,"mode":"observe"}),
     )
 }
-async fn enforce_limit(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, uid: Uuid) -> ApiResult<()> {
+async fn enforce_limit(tx: &mut sqlx::Transaction<'_, sqlx::MySql>, uid: Uuid) -> ApiResult<()> {
     let count: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM devices WHERE user_id=$1 AND NOT revoked")
+        sqlx::query_scalar("SELECT count(*) FROM devices WHERE user_id=? AND NOT revoked")
             .bind(uid)
             .fetch_one(&mut **tx)
             .await?;
@@ -138,16 +129,16 @@ pub async fn forget(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<Value>> {
     let u = auth::user(&s, &h, true).await?;
-    let mut tx = s.db.begin().await?;
-    sqlx::query("SELECT id FROM users WHERE id=$1 FOR UPDATE")
+    let mut tx = storage::begin(&s.db).await?;
+    sqlx::query("SELECT id FROM users WHERE id=? FOR UPDATE")
         .bind(u.id)
         .fetch_one(&mut *tx)
         .await?;
-    let changed=sqlx::query("UPDATE devices SET revoked=true,installation_hash=NULL,token_hash=$3 WHERE id=$1 AND user_id=$2")
-        .bind(id).bind(u.id).bind(auth::digest(&auth::secret())).execute(&mut *tx).await?;
+    let changed=sqlx::query("UPDATE devices SET revoked=true,installation_hash=NULL,token_hash=? WHERE id=? AND user_id=?").bind(auth::digest(&auth::secret())).bind(id).bind(u.id).execute(&mut *tx).await?;
     if changed.rows_affected() != 1 {
         return Err(ApiError(StatusCode::NOT_FOUND, "设备不存在"));
     }
+    storage::revoke_device(&mut tx, id).await?;
     routes::audit(
         &mut tx,
         u.id,

@@ -9,6 +9,7 @@ mod remote;
 mod remote_worker;
 mod routes;
 mod scheduler;
+mod storage;
 use axum::{
     extract::{DefaultBodyLimit, Path, State},
     http::{HeaderMap, HeaderValue, StatusCode},
@@ -19,7 +20,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sqlx::{postgres::PgPoolOptions, PgPool, Row};
+use sqlx::{MySqlPool, Row};
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -30,7 +31,9 @@ use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct AppState {
-    db: PgPool,
+    db: MySqlPool,
+    legacy_origin: Option<String>,
+    stage: String,
     origin: String,
     secure: bool,
     cookie_name: &'static str,
@@ -73,7 +76,7 @@ pub async fn event(
     kind: &str,
     detail: &str,
 ) -> ApiResult<()> {
-    sqlx::query("INSERT INTO events(user_id,device_id,kind,detail) VALUES($1,$2,$3,$4)")
+    sqlx::query("INSERT INTO events(user_id,device_id,kind,detail) VALUES(?,?,?,?)")
         .bind(user_id)
         .bind(device)
         .bind(kind)
@@ -88,12 +91,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter("leigod_guard_server=info")
         .init();
-    let db = PgPoolOptions::new()
-        .max_connections(8)
-        .acquire_timeout(Duration::from_secs(5))
-        .connect(&std::env::var("DATABASE_URL")?)
-        .await?;
-    sqlx::migrate!().run(&db).await?;
+    let db = storage::connect(&std::env::var("DATABASE_URL")?).await?;
+    sqlx::migrate!("migrations/mysql").run(&db).await?;
+    if std::env::args().nth(1).as_deref() == Some("migrate") {
+        println!("MySQL schema ready.");
+        return Ok(());
+    }
     if std::env::args().nth(1).as_deref() == Some("create-admin") {
         let username = std::env::var("ADMIN_USERNAME")?.to_lowercase();
         let password = std::env::var("ADMIN_PASSWORD")?;
@@ -101,8 +104,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             return Err("invalid administrator credentials".into());
         }
         let hash = auth::hash_password(&password)?;
-        sqlx::query("INSERT INTO users(id,username,display_name,password_hash,role) VALUES($1,$2,'管理员',$3,'admin')")
-            .bind(Uuid::new_v4()).bind(username).bind(hash).execute(&db).await?;
+        sqlx::query("INSERT INTO users(id,username,display_name,password_hash,role) VALUES(?,?,'管理员',?,'admin')").bind(Uuid::new_v4() ).bind(&(username)).bind(&(hash)).execute(&db).await?;
         println!("Administrator created.");
         return Ok(());
     }
@@ -111,14 +113,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !secure && !origin.starts_with("http://127.0.0.1:") {
         return Err("HTTPS origin required".into());
     }
+    let legacy_origin = std::env::var("LEGACY_ORIGIN")
+        .ok()
+        .filter(|v| !v.is_empty());
+    if legacy_origin
+        .as_ref()
+        .is_some_and(|v| v != "https://111.229.216.86")
+    {
+        return Err("unsupported legacy platform origin".into());
+    }
+    let stage = std::env::var("SERVICE_STAGE").unwrap_or_else(|_| "testing".into());
+    if !matches!(stage.as_str(), "testing" | "maintenance" | "stable") {
+        return Err("invalid service stage".into());
+    }
     let mailer = email::Mailer::from_env(&origin)?;
-    let provider = provider::Provider::from_env(&origin)?;
+    let provider = if stage == "maintenance" {
+        None
+    } else {
+        provider::Provider::from_env(&origin)?
+    };
     let state = AppState {
         provider,
         remote_slots: Arc::new(Semaphore::new(2)),
         mailer,
         db,
         origin,
+        legacy_origin,
+        stage,
         secure,
         cookie_name: if secure {
             "__Host-guard_session"
@@ -165,6 +186,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/admin/users/{id}/status", post(routes::user_status))
         .route("/admin/devices", get(routes::all_devices))
         .route("/admin/events", get(routes::all_events));
+    let api = api.route_layer(axum::middleware::from_fn_with_state(
+        state.clone(),
+        maintenance,
+    ));
     let static_dir = std::env::var("STATIC_DIR").unwrap_or("static".into());
     let app = Router::new()
         .nest("/api", api)
@@ -180,7 +205,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ))
         .with_state(state.clone());
     tokio::spawn(remote_worker::run(state.clone()));
-    tokio::spawn(scheduler::run(state));
+    if state.stage != "maintenance" {
+        tokio::spawn(scheduler::run(state));
+    }
     let port = std::env::var("PORT").unwrap_or("3088".into());
     let address: std::net::IpAddr = std::env::var("LISTEN_ADDRESS")
         .unwrap_or_else(|_| "127.0.0.1".into())
@@ -193,4 +220,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .await?;
     Ok(())
+}
+
+// A maintenance instance accepts no authenticated or device traffic, including
+// read routes that normally update session activity. Never acknowledge a lost write.
+async fn maintenance(
+    State(s): State<AppState>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    if s.stage == "maintenance" && request.uri().path() != "/health" {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [(axum::http::header::RETRY_AFTER, "60")],
+            Json(json!({"error":"云平台维护中，请稍后重试；本地守护可独立使用"})),
+        )
+            .into_response();
+    }
+    next.run(request).await
 }

@@ -1576,7 +1576,13 @@ impl App {
         let observed_processes = observation.as_ref().and_then(|o| {
             (o.phase != crate::game_lifecycle::Phase::Unknown).then_some(o.processes.as_slice())
         });
+        let cloud_status = if config.is_active(config.selected_provider) {
+            self.platform.cloud_summary(config.selected_provider)
+        } else {
+            "正在确认守护对象 · 云端保护状态待确认".into()
+        };
         let state = HomeState {
+            cloud_status: &cloud_status,
             provider: config.selected_provider,
             guard_ready: config.is_active(config.selected_provider),
             account_ready: if config.selected_provider == Provider::Etalien {
@@ -1637,6 +1643,7 @@ impl App {
             HomeAction::Pause => self.request_manual_pause(),
             HomeAction::Strategy => self.page = Page::Strategy,
             HomeAction::Account => self.page = Page::Account,
+            HomeAction::Platform => self.page = Page::Platform,
             HomeAction::RefreshAccount => {
                 if config.selected_provider == Provider::Etalien {
                     self.etalien.refresh(&self.config, ui.ctx());

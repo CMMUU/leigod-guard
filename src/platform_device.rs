@@ -101,8 +101,9 @@ impl Store {
                 }
                 let plain = crate::dpapi::unprotect(&text)
                     .map_err(|_| "设备身份无法解密，请使用原 Windows 用户。")?;
-                let saved: Saved =
+                let mut saved: Saved =
                     serde_json::from_str(&plain).map_err(|_| "设备身份文件无效。")?;
+                crate::platform_api::migrate_origin(&mut saved.origin);
                 if !saved.valid() {
                     return Err("设备身份文件无效。".into());
                 }
@@ -150,6 +151,7 @@ pub(crate) struct View {
 }
 #[derive(Clone, Default)]
 pub(crate) struct RemoteView {
+    pub checked_at: Option<Instant>,
     pub status: RemoteStatus,
     pub message: String,
     pub error: String,
@@ -865,6 +867,8 @@ fn remote_view(
     kind: Provider,
 ) {
     if let Ok(mut v) = view.lock() {
+        v.remote[kind.index()].checked_at = Some(Instant::now());
+        v.remote[kind.index()].error.clear();
         v.remote[kind.index()].pending_disable = pending;
         v.remote[kind.index()].message = status.message().into();
         v.remote[kind.index()].status = status;
@@ -1035,6 +1039,7 @@ fn sync_remote(
         }
         Err(_) => {
             if let Ok(mut v) = view.lock() {
+                v.remote[kind.index()].checked_at = None;
                 v.remote[kind.index()].message = if saved[kind].pending_disable {
                     "服务器关闭未确认，可能仍会超时暂停；正在重试。"
                 } else {
@@ -1291,6 +1296,17 @@ mod tests {
         assert!(read.paused);
         assert!(read[Provider::Leigod].pending_disable);
         assert_eq!(read[Provider::Leigod].remote_revision, 4);
+        // Loading an old maintained origin must preserve compensation intent,
+        // counters and installation identity, never register a new device.
+        s.origin = "https://111.229.216.86".into();
+        let old = crate::dpapi::protect(&serde_json::to_string(&s).unwrap()).unwrap();
+        std::fs::write(&store.0, old).unwrap();
+        let migrated = store.load().unwrap();
+        assert_eq!(migrated.origin, ORIGIN_URL);
+        assert_eq!(migrated.installation_key, original);
+        assert_eq!(migrated.reserved_until, 256);
+        assert!(migrated[Provider::Leigod].pending_disable);
+        assert_eq!(migrated[Provider::Leigod].remote_revision, 4);
         assert!(!std::fs::read_to_string(&store.0)
             .unwrap()
             .contains(&original));

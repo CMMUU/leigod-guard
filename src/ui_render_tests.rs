@@ -122,6 +122,7 @@ fn home_dropdown_emits_one_selected_provider_action() {
     ctx.style_mut(|style| style.animation_time = 0.0);
     let config = Config::default();
     let state = HomeState {
+        cloud_status: "尚未启用 · 登录平台后可单独授权",
         provider: Provider::Leigod,
         guard_ready: true,
         account_ready: false,
@@ -1303,6 +1304,17 @@ fn render_apple_preview() {
 }
 
 #[test]
+fn home_cloud_entry_only_opens_platform_and_does_not_request_pause() {
+    let (ctx, mut app) = fixture();
+    let before = app.config.lock().unwrap().selected_provider;
+    click(&ctx, &mut app, "使用云端自动暂停");
+    assert!(app.page == Page::Platform);
+    assert_eq!(app.config.lock().unwrap().selected_provider, before);
+    assert!(app.shared.lock().unwrap().manual_cmd.is_none());
+    assert!(app.platform.action.is_none());
+}
+
+#[test]
 fn platform_form_emits_actions_without_touching_accelerator_credentials() {
     let (ctx, mut app) = fixture();
     app.shared
@@ -1383,6 +1395,6 @@ fn remote_protection_disclosure_and_pending_close_render_without_network() {
     let output = frame(&ctx, &mut app, [1180.0, 1200.0], vec![]);
     text_rect(
         &output.shapes,
-        "同意上海服务器加密保存当前雷神登录凭据并执行失联暂停",
+        "同意云平台加密保存当前雷神登录凭据并执行失联暂停",
     );
 }
