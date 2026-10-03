@@ -1,0 +1,33 @@
+[Unit]
+Description=Accelerator Guard pinned MySQL TLS relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+LoadCredential=relay.json:/opt/leigod-guard/secrets/relay.json
+LoadCredential=mysql-ca.pem:/opt/leigod-guard/secrets/mysql-ca.pem
+LoadCredential=relay.pem:/opt/leigod-guard/secrets/relay.pem
+LoadCredential=relay.key:/opt/leigod-guard/secrets/relay.key
+ExecStart=/usr/bin/python3 /opt/leigod-guard/current/deploy/server/mysql-tls-relay.py %d/relay.json
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+MemoryHigh=32M
+MemoryMax=64M
+TasksMax=24
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
