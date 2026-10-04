@@ -52,7 +52,7 @@ pub fn cookie_token(s: &AppState, h: &HeaderMap) -> Option<String> {
 }
 pub async fn user(s: &AppState, h: &HeaderMap, write: bool) -> ApiResult<SessionUser> {
     let token = cookie_token(s, h).ok_or(ApiError(StatusCode::UNAUTHORIZED, "请先登录"))?;
-    let u=sqlx::query_as::<_,SessionUser>("SELECT u.id,COALESCE(u.email,u.username) AS username,u.display_name,u.role,s.csrf,(u.password_hash<>'!') AS password_enabled FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>UTC_TIMESTAMP(6) AND NOT u.disabled").bind(digest(&token) ).fetch_optional(&s.db).await?.ok_or(ApiError(StatusCode::UNAUTHORIZED,"会话已过期，请重新登录"))?;
+    let u=sqlx::query_as::<_,SessionUser>("SELECT u.id,COALESCE(u.email,u.username) AS username,u.username AS login_username,u.email,(u.email_verified_at IS NOT NULL) AS email_verified,u.display_name,u.role,s.csrf,(u.password_hash<>'!') AS password_enabled FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>UTC_TIMESTAMP(6) AND NOT u.disabled").bind(digest(&token) ).fetch_optional(&s.db).await?.ok_or(ApiError(StatusCode::UNAUTHORIZED,"会话已过期，请重新登录"))?;
     if write {
         same_origin(s, h)?;
         if h.get("x-csrf-token").and_then(|v| v.to_str().ok()) != Some(u.csrf.as_str()) {

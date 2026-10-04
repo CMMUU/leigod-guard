@@ -50,6 +50,7 @@ try:
     server = start('observe')
     subprocess.run([sys.executable, '-u', 'tests/integration.py'], env=env, check=True)
     test('email')
+    test('email_binding')
     server.send_signal(signal.SIGINT); server.wait(timeout=15)
     spawn([sys.executable, 'tests/leigod_mock.py'], 'leigod')
     spawn([sys.executable, 'tests/etalien_mock.py'], 'etalien')

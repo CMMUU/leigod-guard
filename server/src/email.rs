@@ -46,23 +46,39 @@ impl Mailer {
             pepper,
         }))
     }
-    fn hash(&self, email: &str, id: Uuid, code: &str) -> Vec<u8> {
+    pub(crate) fn hash(&self, email: &str, id: Uuid, code: &str) -> Vec<u8> {
         let mut mac = Hmac::<Sha256>::new_from_slice(self.pepper.as_bytes())
             .expect("HMAC accepts any key length");
         mac.update(format!("guard-email-v1:{id}:{email}:{code}").as_bytes());
         mac.finalize().into_bytes().to_vec()
     }
-    fn matches(&self, email: &str, id: Uuid, code: &str, expected: &[u8]) -> bool {
+    pub(crate) fn matches(&self, email: &str, id: Uuid, code: &str, expected: &[u8]) -> bool {
         let mut mac = Hmac::<Sha256>::new_from_slice(self.pepper.as_bytes())
             .expect("HMAC accepts any key length");
         mac.update(format!("guard-email-v1:{id}:{email}:{code}").as_bytes());
         mac.verify_slice(expected).is_ok()
     }
-    async fn send(&self, email: &str, id: Uuid, code: &str) -> ApiResult<()> {
+    pub(crate) async fn send(
+        &self,
+        email: &str,
+        id: Uuid,
+        code: &str,
+        binding: bool,
+    ) -> ApiResult<()> {
+        let subject = if binding {
+            "加速器守护绑定邮箱验证码"
+        } else {
+            "加速器守护登录验证码"
+        };
+        let purpose = if binding {
+            "用于将此邮箱绑定到当前已登录的平台账号。绑定后可用此邮箱登录该账号。"
+        } else {
+            "用于登录平台；首次验证成功会创建普通平台账号。"
+        };
         let mut response = self.client.post(&self.endpoint).bearer_auth(&self.key)
             .header("Idempotency-Key", format!("guard-login-{id}"))
-            .json(&json!({"from":self.from,"to":[email],"subject":"加速器守护登录验证码",
-                "text":format!("你的加速器守护验证码是：{code}\n\n10 分钟内有效，仅可使用一次。首次验证成功会创建普通平台账号。请勿向他人提供验证码。\n如果不是你本人操作，请忽略此邮件。\n加速器守护是独立开源工具，与雷神加速器官方无隶属关系。") }))
+            .json(&json!({"from":self.from,"to":[email],"subject":subject,
+                "text":format!("你的加速器守护验证码是：{code}\n\n10 分钟内有效，仅可使用一次。{purpose}请勿向他人提供验证码。\n如果不是你本人操作，请忽略此邮件。\n加速器守护是独立开源工具，与雷神加速器官方无隶属关系。") }))
             .send().await.map_err(|_| ApiError(StatusCode::SERVICE_UNAVAILABLE,"验证码发送暂不可用，请稍后重试"))?;
         if !response.status().is_success() {
             tracing::warn!(
@@ -136,7 +152,7 @@ pub fn normalize(input: &str) -> Option<String> {
     }
     Some(value)
 }
-async fn budget(s: &AppState, key: String, max: i32, seconds: f64) -> ApiResult<()> {
+pub(crate) async fn budget(s: &AppState, key: String, max: i32, seconds: f64) -> ApiResult<()> {
     let mut tx = storage::begin(&s.db).await?;
     sqlx::query("INSERT INTO email_rate_limits(`key`,hits,expires_at) VALUES(?,1,UTC_TIMESTAMP(6)+INTERVAL ? SECOND) ON DUPLICATE KEY UPDATE hits=CASE WHEN expires_at<=UTC_TIMESTAMP(6) THEN 1 ELSE hits+1 END,expires_at=CASE WHEN expires_at<=UTC_TIMESTAMP(6) THEN UTC_TIMESTAMP(6)+INTERVAL ? SECOND ELSE expires_at END").bind(&key).bind(seconds).bind(seconds).execute(&mut *tx).await?;
     let hits: i32 = sqlx::query_scalar("SELECT hits FROM email_rate_limits WHERE `key`=?")
@@ -150,6 +166,19 @@ async fn budget(s: &AppState, key: String, max: i32, seconds: f64) -> ApiResult<
             "验证码请求过于频繁，请稍后再试",
         ));
     }
+    Ok(())
+}
+pub(crate) async fn delivery_budget(s: &AppState, h: &HeaderMap, email: &str) -> ApiResult<()> {
+    // Persist limits before sending. Restarts and multiple workers cannot reset the mail budget.
+    budget(
+        s,
+        format!("send-ip:{}", auth::digest(&auth::client_key(h))),
+        10,
+        900.,
+    )
+    .await?;
+    budget(s, format!("send-email:{}", auth::digest(email)), 6, 3600.).await?;
+    budget(s, "send-global-day".into(), 100, 86400.).await?;
     Ok(())
 }
 #[derive(Deserialize)]
@@ -168,20 +197,11 @@ pub async fn send_code(
         StatusCode::SERVICE_UNAVAILABLE,
         "邮件服务尚未配置",
     ))?;
-    // Persist limits before sending. Restarts and multiple workers cannot reset the mail budget.
-    budget(
-        &s,
-        format!("send-ip:{}", auth::digest(&auth::client_key(&h))),
-        10,
-        900.,
-    )
-    .await?;
-    budget(&s, format!("send-email:{}", auth::digest(&email)), 6, 3600.).await?;
-    budget(&s, "send-global-day".into(), 100, 86400.).await?;
+    delivery_budget(&s, &h, &email).await?;
     let id = Uuid::new_v4();
     let code = format!("{:06}", rand::rngs::OsRng.gen_range(0..1_000_000u32));
     let mut tx = storage::begin(&s.db).await?;
-    let recent: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM email_challenges WHERE email=? AND requested_at>=UTC_TIMESTAMP(6)-INTERVAL 60 SECOND)").bind(&email).fetch_one(&mut *tx).await?;
+    let recent: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM email_challenges WHERE email=? AND requested_at>=UTC_TIMESTAMP(6)-INTERVAL 60 SECOND) OR EXISTS(SELECT 1 FROM email_binding_challenges WHERE email=? AND requested_at>=UTC_TIMESTAMP(6)-INTERVAL 60 SECOND)").bind(&email).bind(&email).fetch_one(&mut *tx).await?;
     if recent {
         return Err(ApiError(
             StatusCode::TOO_MANY_REQUESTS,
@@ -191,7 +211,7 @@ pub async fn send_code(
     sqlx::query("INSERT INTO email_challenges(email,request_id,code_hash,expires_at) VALUES(?,?,?,UTC_TIMESTAMP(6)+INTERVAL 10 MINUTE) ON DUPLICATE KEY UPDATE request_id=?,code_hash=?,requested_at=UTC_TIMESTAMP(6),expires_at=UTC_TIMESTAMP(6)+INTERVAL 10 MINUTE,attempts=0,ready=false").bind(&email).bind(id).bind(mail.hash(&email,id,&code)).bind(id).bind(mail.hash(&email,id,&code)).execute(&mut *tx).await?;
     tx.commit().await?;
     // No database transaction or row lock is held across the external delivery request.
-    if let Err(error) = mail.send(&email, id, &code).await {
+    if let Err(error) = mail.send(&email, id, &code, false).await {
         sqlx::query("DELETE FROM email_challenges WHERE email=? AND request_id=?")
             .bind(&email)
             .bind(id)
@@ -258,7 +278,7 @@ pub async fn verify_code(
     // Never infer verified ownership or administrator privileges from a legacy username.
     let id = Uuid::new_v4();
     sqlx::query("INSERT INTO users(id,username,display_name,password_hash,role,email,email_verified_at) VALUES(?,?,?,'!','user',?,UTC_TIMESTAMP(6)) ON DUPLICATE KEY UPDATE email=users.email").bind(id).bind(format!("email-{}",id.simple())).bind("邮箱用户").bind(&email).execute(&mut *tx).await?;
-    let user = sqlx::query("SELECT id,disabled,role FROM users WHERE email=? FOR UPDATE")
+    let user = sqlx::query("SELECT id,disabled,(email_verified_at IS NOT NULL) AS verified FROM users WHERE email=? FOR UPDATE")
         .bind(&email)
         .fetch_one(&mut *tx)
         .await?;
@@ -266,7 +286,7 @@ pub async fn verify_code(
         .bind(&email)
         .execute(&mut *tx)
         .await?;
-    if user.get::<bool, _>("disabled") || user.get::<String, _>("role") != "user" {
+    if user.get::<bool, _>("disabled") || !user.get::<bool, _>("verified") {
         tx.commit().await?;
         return Err(invalid());
     }

@@ -2,6 +2,7 @@
 const app=document.querySelector('#app'),dialog=document.querySelector('#dialog');
 let me=null,chart=null,generation=0,busy=false,loginMode="email",emailChallenge=null,emailRetryAt=0;
 let emailSending=false,emailCountdownTimer=null,emailDraft='';
+let emailBinding={owner:null,timer:null};
 const paths={home:'<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/>',users:'<circle cx="12" cy="7" r="4"/><path d="M5 21v-2a7 7 0 0 1 14 0v2"/>',devices:'<rect x="3" y="3" width="18" height="13" rx="2"/><path d="M8 21h8m-4-5v5"/>',events:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M8 13h8m-8 4h6"/>',tasks:'<rect x="4" y="5" width="16" height="16" rx="2"/><path d="M9 5V3h6v2m-7 8 3 3 5-6"/>',health:'<path d="M2 12h5l3-9 4 18 3-9h5"/>',shield:'<path d="m12 2 9 4v6c0 5-9 10-9 10S3 17 3 12V6z"/><path d="m8 12 3 3 5-6"/>',refresh:'<path d="M20 7v5h-5M4 17v-5h5"/><path d="M6 6a8 8 0 0 1 13 2M5 16a8 8 0 0 0 13 2"/>',plus:'<path d="M12 5v14M5 12h14"/>',menu:'<path d="M4 6h16M4 12h16M4 18h16"/>',logout:'<path d="M9 3H4v18h5m6-14 5 5-5 5m-7-5h12"/>'};
 const icon=n=>`<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${paths[n]||paths.events}</svg>`;
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -21,16 +22,33 @@ function updateEmailCodeButton(){
  button.setAttribute('aria-busy',String(emailSending));
  if(seconds>0)emailCountdownTimer=setTimeout(updateEmailCodeButton,1000);
 }
+function bindingState(){
+ if(emailBinding.owner!==me?.id){clearTimeout(emailBinding.timer);emailBinding={owner:me?.id,email:'',challenge:null,retryAt:0,sending:false,timer:null}}
+ return emailBinding;
+}
+function updateEmailBindingButton(){
+ clearTimeout(emailBinding.timer);emailBinding.timer=null;
+ const button=document.querySelector('[data-action="send-binding-code"]');if(!button||!me)return;
+ const state=bindingState(),seconds=Math.max(0,Math.ceil((state.retryAt-Date.now())/1000));
+ button.disabled=state.sending||seconds>0;
+ button.textContent=state.sending?'发送中…':seconds>0?`${seconds} 秒后重发`:state.challenge?'重新获取验证码':'获取验证码';
+ button.setAttribute('aria-busy',String(state.sending));
+ if(seconds>0)state.timer=setTimeout(updateEmailBindingButton,1000);
+}
+function emailBindingHtml(){
+ const state=bindingState();
+ return `<section class="card account-card mb-3"><div class="card-body"><h2 class="card-title mb-3">登录邮箱</h2>${me.email?`<p><strong>${esc(me.email)}</strong> ${badge(me.email_verified?'已验证':'待验证',me.email_verified?'green':'orange')}</p><p class="muted mb-0">${me.email_verified?'可在登录页选择“邮箱验证码”登录此账号。原账号、权限和设备保持不变。':'邮箱尚未验证，请联系管理员处理。'}</p>`:me.password_enabled?`<p class="muted">绑定邮箱后，可用邮箱验证码登录同一个账号，原账号密码仍可使用。</p><form id="email-binding-form"><div class="mb-3"><label class="form-label" for="binding-email">绑定邮箱</label><input id="binding-email" class="form-control" type="email" name="email" autocomplete="email" maxlength="254" value="${esc(state.email)}" required></div><div class="mb-3"><label class="form-label" for="binding-code">绑定验证码</label><div class="d-flex gap-2"><input id="binding-code" class="form-control" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="6 位验证码" required><button class="btn btn-outline-primary text-nowrap" type="button" data-action="send-binding-code">获取验证码</button></div><small class="muted" id="binding-delivery">${state.challenge?'绑定验证码已发送，请检查收件箱及垃圾邮件。':'验证码 10 分钟有效；60 秒后可重发。'}</small></div><div class="mb-3"><label class="form-label" for="binding-password">确认当前密码</label><input id="binding-password" class="form-control" name="current_password" type="password" autocomplete="current-password" maxlength="128" required><small class="muted">添加登录方式需要验证当前密码。</small></div><div id="email-binding-error"></div><button class="btn btn-primary" type="submit">验证并绑定邮箱</button><p class="muted text-small mt-3 mb-0">已被其他账号使用的邮箱不能绑定；不会合并或覆盖账号。</p></form>`:'<p class="muted">当前账号不能绑定邮箱，请联系管理员。</p>'}</div></section>`;
+}
 function renderLogin(message=''){
  const emailField=document.querySelector('#email');if(emailField)emailDraft=emailField.value;
- if(chart){chart.dispose();chart=null}if(dialog.open)dialog.close();generation++;me=null;
- app.innerHTML=`<header class="login-header">${brand('Accelerator Guard')}</header><main class="login-main"><section class="card login-card"><h2>登录加速器守护</h2><p class="muted">${loginMode==='email'?'邮箱验证后自动创建普通平台账号。':'使用管理员分配的平台账号。'}</p><div class="login-tabs mb-3"><button class="btn ${loginMode==='email'?'btn-primary':''}" data-action="login-email">邮箱验证码</button><button class="btn ${loginMode==='password'?'btn-primary':''}" data-action="login-password">账号密码</button></div><form id="login-form">
+ if(chart){chart.dispose();chart=null}if(dialog.open)dialog.close();generation++;me=null;clearTimeout(emailBinding.timer);emailBinding={owner:null,timer:null};
+ app.innerHTML=`<header class="login-header">${brand('Accelerator Guard')}</header><main class="login-main"><section class="card login-card"><h2>登录加速器守护</h2><p class="muted">${loginMode==='email'?'邮箱验证后自动创建普通平台账号。':'使用已有的平台账号和密码。'}</p><div class="login-tabs mb-3"><button class="btn ${loginMode==='email'?'btn-primary':''}" data-action="login-email">邮箱验证码</button><button class="btn ${loginMode==='password'?'btn-primary':''}" data-action="login-password">账号密码</button></div><form id="login-form">
  ${loginMode==='email'?`<div class="mb-3"><label class="form-label" for="email">邮箱</label><input class="form-control" id="email" name="email" type="email" autocomplete="email" maxlength="254" required value="${esc(emailDraft)}"></div><div class="mb-3"><label class="form-label" for="email-code">验证码</label><div class="d-flex gap-2"><input class="form-control" id="email-code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="6 位验证码" required><button class="btn btn-outline-primary text-nowrap" type="button" data-action="send-email-code">获取验证码</button></div><small class="muted" id="email-delivery">验证码 10 分钟有效；60 秒后可重发。</small></div>`:`<div class="mb-3"><label class="form-label" for="username">平台账号</label><input class="form-control" id="username" name="username" autocomplete="username" maxlength="100" required></div><div class="mb-3"><label class="form-label" for="password">密码</label><div class="password-field"><input class="form-control" id="password" name="password" type="password" autocomplete="current-password" maxlength="128" required><button class="password-toggle" type="button" data-action="toggle-password">显示</button></div></div>`}
- <label class="form-check mb-3"><input class="form-check-input" name="remember" type="checkbox"><span class="form-check-label">记住登录状态 30 天</span></label><div id="form-error">${message?errorHtml(message):''}</div><button class="btn btn-primary" type="submit">${loginMode==='email'?'验证并登录':'登录'}</button></form><div class="login-help">${loginMode==='email'?'首次验证仅创建普通用户；已有邮箱账号将直接登录。':'管理员账号保留密码登录；邮箱注册不会获得管理员权限。'}</div></section><p class="login-note">平台账号与加速器账号独立。<br>客户端登录后自动绑定设备，也支持配对码手动添加。</p><p class="login-footer">加速器守护 · 开源项目 · 香港节点 · 临时测试</p></main>`;
+ <label class="form-check mb-3"><input class="form-check-input" name="remember" type="checkbox"><span class="form-check-label">记住登录状态 30 天</span></label><div id="form-error">${message?errorHtml(message):''}</div><button class="btn btn-primary" type="submit">${loginMode==='email'?'验证并登录':'登录'}</button></form><div class="login-help">${loginMode==='email'?'首次验证仅创建普通用户；已有邮箱账号将直接登录。':'密码账号可在账号设置中绑定邮箱；邮箱注册不会获得管理员权限。'}</div></section><p class="login-note">平台账号与加速器账号独立。<br>客户端登录后自动绑定设备，也支持配对码手动添加。</p><p class="login-footer">加速器守护 · 开源项目 · 香港节点 · 临时测试</p></main>`;
  updateEmailCodeButton();
 }
-const navAdmin=[['overview','总览','home'],['users','用户','users'],['all-devices','设备','devices'],['tasks','任务','tasks'],['cafe','网吧模式','shield'],['audit','审计','events'],['health','系统健康','health']];
-const navUser=[['dashboard','我的守护','home'],['devices','设备','devices'],['events','记录','events'],['remote','远程保护','shield'],['cafe','网吧模式','shield']];
+const navAdmin=[['overview','总览','home'],['users','用户','users'],['all-devices','设备','devices'],['tasks','任务','tasks'],['cafe','网吧模式','shield'],['audit','审计','events'],['health','系统健康','health'],['account','账号设置','users']];
+const navUser=[['dashboard','我的守护','home'],['devices','设备','devices'],['events','记录','events'],['remote','远程保护','shield'],['cafe','网吧模式','shield'],['account','账号设置','users']];
 function route(){const value=location.hash.slice(1);const valid=[...(me?.role==='admin'?navAdmin:navUser).map(x=>x[0]),'account','dashboard','devices','events','remote'];return valid.includes(value)?value:(me?.role==='admin'?'overview':'dashboard')}
 function shell(){const current=route();const nav=me.role==='admin'?navAdmin:navUser;app.innerHTML=`<aside class="sidebar"><button class="mobile-close" aria-label="关闭菜单" data-action="menu">×</button>${brand(me.role==='admin'?'管理控制台':'Accelerator Guard')}<nav class="nav-list">${nav.map(([id,name,i])=>`<a class="nav-item ${id===current?'active':''}" href="#${id}">${icon(i)}${name}</a>`).join('')}${me.role==='admin'?`<a class="nav-item ${current==='dashboard'?'active':''}" href="#dashboard">${icon('shield')}我的守护</a>`:''}</nav><div class="sidebar-bottom"><a class="identity" href="#account"><span class="avatar">${esc(me.display_name.slice(0,1))}</span><span>${esc(me.display_name)}<small class="muted d-block">${me.role==='admin'?'管理员':'用户'}</small></span></a><button class="btn btn-ghost-secondary w-100" data-action="logout">${icon('logout')}退出登录</button></div></aside><button class="nav-mask" data-action="menu" aria-label="关闭菜单背景"></button><div class="main"><header class="topbar"><div class="d-flex align-items-center gap-3"><button class="mobile-toggle" aria-label="展开菜单" data-action="menu">${icon('menu')}</button><span class="crumb">${me.role==='admin'?'管理控制台':'控制台'} / ${esc([...navAdmin,...navUser,['account','账号设置']].find(x=>x[0]===current)?.[1]||'我的守护')}</span></div><div class="top-actions">${badge('设备守护','blue')}<span class="wide-only muted">香港节点 · 临时测试</span><a href="#account" aria-label="账号设置"><span class="avatar avatar-sm">${esc(me.display_name.slice(0,1))}</span></a></div></header><main class="content" id="content"><div class="initial-load">正在读取状态…</div></main></div>`}
 function heading(title,subtitle,action=''){return`<div class="page-heading"><div><h1>${title}</h1><p>${subtitle}</p></div><div class="heading-actions"><button class="btn btn-outline-primary" data-action="refresh">${icon('refresh')}刷新</button>${action}</div></div>`}
@@ -66,9 +84,10 @@ async function render(rebuild=true){if(!me)return;const current=route(),gen=++ge
  }else if(current==='health'){
   const [o,h]=await Promise.all([api('/admin/overview'),api('/health')]);html=heading('系统健康','当前服务与观察调度状态；远程保护运行状态见任务页。')+`<section class="card account-card"><div class="card-body">${healthRows(o.stats)}<div class="health-row"><span>后台版本</span><span>${esc(h.version)}</span></div><div class="health-row"><span>统计记录保留</span><span>7 天</span></div><div class="health-row"><span>事件记录保留</span><span>30 天</span></div></div></section>`+footer();
  }else{
-  html=heading('账号设置','管理你的平台账号与登录密码。')+`<section class="card account-card"><div class="card-body"><div class="health-row"><span>显示名称</span><strong>${esc(me.display_name)}</strong></div><div class="health-row"><span>平台账号</span><span>${esc(me.username)}</span></div>${me.password_enabled===false?'<p class="muted mt-3">当前账号通过邮箱验证码登录，无需设置密码。</p>':`<form id="password-form"><h2 class="card-title mb-3">修改密码</h2><div class="mb-3"><label class="form-label" for="current-password">当前密码</label><input id="current-password" class="form-control" type="password" name="current_password" autocomplete="current-password" maxlength="128" required></div><div class="mb-3"><label class="form-label" for="new-password">新密码</label><input id="new-password" class="form-control" type="password" name="new_password" minlength="12" maxlength="128" autocomplete="new-password" required><small class="muted">至少 12 个字符。修改后所有网页会话都会退出。</small></div><div class="mb-3"><label class="form-label" for="confirm-password">确认新密码</label><input id="confirm-password" class="form-control" type="password" name="confirm_password" minlength="12" maxlength="128" autocomplete="new-password" required></div><div id="password-error"></div><button class="btn btn-primary" type="submit">保存新密码</button></form>`}</div></section>`;
+  const identity=await api('/me');if(gen!==generation)return;me=identity;
+  html=heading('账号设置','管理你的登录邮箱与密码。')+emailBindingHtml()+`<section class="card account-card"><div class="card-body"><div class="health-row"><span>显示名称</span><strong>${esc(me.display_name)}</strong></div><div class="health-row"><span>平台账号</span><span>${esc(me.login_username||me.username)}</span></div>${me.password_enabled===false?'<p class="muted mt-3">当前账号通过邮箱验证码登录，无需设置密码。</p>':`<form id="password-form"><h2 class="card-title mb-3">修改密码</h2><div class="mb-3"><label class="form-label" for="current-password">当前密码</label><input id="current-password" class="form-control" type="password" name="current_password" autocomplete="current-password" maxlength="128" required></div><div class="mb-3"><label class="form-label" for="new-password">新密码</label><input id="new-password" class="form-control" type="password" name="new_password" minlength="12" maxlength="128" autocomplete="new-password" required><small class="muted">至少 12 个字符。修改后所有网页会话都会退出。</small></div><div class="mb-3"><label class="form-label" for="confirm-password">确认新密码</label><input id="confirm-password" class="form-control" type="password" name="confirm_password" minlength="12" maxlength="128" autocomplete="new-password" required></div><div id="password-error"></div><button class="btn btn-primary" type="submit">保存新密码</button></form>`}</div></section>`;
  }
- if(gen!==generation||!me)return;if(chart){chart.dispose();chart=null}document.querySelector('#content').innerHTML=html;
+ if(gen!==generation||!me)return;if(chart){chart.dispose();chart=null}document.querySelector('#content').innerHTML=html;updateEmailBindingButton();
  if(current==='overview')drawChart(data.metrics);
  }catch(e){if(gen===generation&&me)document.querySelector('#content').innerHTML=heading('暂时无法读取数据','请稍后刷新重试。')+errorHtml(e.message)}
 }
@@ -88,6 +107,19 @@ async function action(button){const a=button.dataset.action;try{
   return
  }
 
+ if(a==='send-binding-code'){
+  const field=document.querySelector('#binding-email');if(!field.reportValidity())return;
+  const state=bindingState();if(state.sending||Date.now()<state.retryAt){updateEmailBindingButton();return}
+  const email=field.value.trim().toLowerCase();state.email=field.value;state.sending=true;updateEmailBindingButton();
+  try{
+   const result=await api('/account/email/code',{email});
+   if(state!==emailBinding||state.owner!==me?.id)return;
+   state.challenge={email,request_id:result.request_id};const retry=Number(result.retry_after);
+   state.retryAt=Date.now()+(Number.isFinite(retry)&&retry>0?Math.ceil(retry):60)*1000;
+   const target=document.querySelector('#binding-delivery');if(target)target.textContent='绑定验证码已发送，请检查收件箱及垃圾邮件。';
+  }finally{state.sending=false;updateEmailBindingButton()}
+  return
+ }
  if(a==='toggle-password'){const field=document.querySelector('#password');field.type=field.type==='password'?'text':'password';button.textContent=field.type==='password'?'显示':'隐藏';return}
  if(a==='menu'){document.querySelector('.sidebar').classList.toggle('open');return}
  if(a==='close'){dialog.close();return}
@@ -102,16 +134,24 @@ async function action(button){const a=button.dataset.action;try{
  if(a==='revoke'||a==='unbind'||a==='user-status'){
   const disabling=button.dataset.disabled==='true';modal(`<h2>${a==='unbind'?'解除设备绑定':a==='revoke'?'撤销设备':disabling?'停用用户':'启用用户'}</h2><p>${esc(button.dataset.name)}</p><p class="muted">${a==='unbind'?'旧设备凭据失效，之后可重新绑定到另一个平台账号。':a==='revoke'?'设备将无法继续上报，需要手动重新绑定。':disabling?'该用户的网页会话和设备授权将立即撤销。':'用户可以重新登录；原设备需要重新配对。'}</p><div class="actions"><button class="btn" data-action="close">取消</button><button class="btn btn-primary" data-action="confirm-change" data-kind="${a}" data-id="${button.dataset.id}" data-disabled="${disabling}">确认</button></div>`);return}
  if(a==='confirm-change'){button.disabled=true;await api(['revoke','unbind'].includes(button.dataset.kind)?`/devices/${button.dataset.id}/${button.dataset.kind}`:`/admin/users/${button.dataset.id}/status`,['revoke','unbind'].includes(button.dataset.kind)?{}:{disabled:button.dataset.disabled==='true'});dialog.close();toast('操作已保存');await render(false)}
- }catch(e){toast(e.message)}finally{if(a!=='send-email-code')button.disabled=false}}
+ }catch(e){toast(e.message)}finally{if(!['send-email-code','send-binding-code'].includes(a))button.disabled=false}}
 document.addEventListener('click',e=>{const b=e.target.closest('[data-action]');if(b){e.preventDefault();action(b)}});
 document.addEventListener('submit',async e=>{e.preventDefault();if(busy)return;const f=e.target,p=Object.fromEntries(new FormData(f));const b=f.querySelector('[type=submit]');busy=true;b.disabled=true;try{
  if(f.id==='login-form'){p.remember=f.elements.remember.checked;if(loginMode==='email'){p.email=p.email.trim().toLowerCase();if(!emailChallenge||emailChallenge.email!==p.email)throw new Error('请先为当前邮箱获取验证码');p.request_id=emailChallenge.request_id;await api('/email/login',p)}else await api('/login',p);me=await api('/me');location.hash=me.role==='admin'?'overview':'dashboard';await render()}
  if(f.id==='cafe-form'){await saveCafeSettings(f,p);dialog.close();toast('网吧模式设置已保存');await render(false)}
  if(f.id==='new-user-form'){await api('/admin/users',p);dialog.close();toast('用户已创建');await render(false)}
+ if(f.id==='email-binding-form'){
+  const state=bindingState();p.email=p.email.trim().toLowerCase();
+  if(!state.challenge||state.challenge.email!==p.email)throw new Error('请先为当前邮箱获取绑定验证码');
+  p.request_id=state.challenge.request_id;await api('/account/email/bind',p);
+  me=await api('/me');clearTimeout(state.timer);emailBinding={owner:null,timer:null};
+  toast('邮箱已绑定，之后可用邮箱验证码登录此账号。');await render(false);
+ }
  if(f.id==='password-form'){if(p.new_password!==p.confirm_password)throw new Error('两次新密码不一致');delete p.confirm_password;await api('/password',p);me=null;renderLogin('密码已更新，请使用新密码登录。')}
- }catch(error){const selector=f.id==='cafe-form'?'#cafe-error':f.id==='login-form'?'#form-error':f.id==='password-form'?'#password-error':'#new-user-error';const target=document.querySelector(selector);if(target)target.innerHTML=errorHtml(error.message)}finally{busy=false;b.disabled=false}});
+ }catch(error){const selector=f.id==='cafe-form'?'#cafe-error':f.id==='login-form'?'#form-error':f.id==='password-form'?'#password-error':f.id==='email-binding-form'?'#email-binding-error':'#new-user-error';const target=document.querySelector(selector);if(target)target.innerHTML=errorHtml(error.message)}finally{busy=false;b.disabled=false}});
 dialog.addEventListener('close',()=>{document.querySelector('#dialog-content').replaceChildren()});
 window.addEventListener('hashchange',()=>{if(me)render()});window.addEventListener('resize',()=>chart?.resize());
-document.addEventListener('visibilitychange',updateEmailCodeButton);
+document.addEventListener('visibilitychange',()=>{updateEmailCodeButton();updateEmailBindingButton()});
+document.addEventListener('input',e=>{if(e.target.id==='binding-email'&&me)bindingState().email=e.target.value});
 setInterval(()=>{if(me&&!dialog.open&&!busy&&!document.hidden&&!['account','users'].includes(route()))render(false)},15000);
 (async()=>{try{const r=await fetch('/api/me',{credentials:'same-origin'});if(r.ok){me=await r.json();render()}else if(r.status===401)renderLogin();else renderLogin('暂时无法连接服务，请稍后重试。')}catch{renderLogin('网络连接失败，请稍后重试。')}})();
