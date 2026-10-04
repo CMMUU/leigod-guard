@@ -24,6 +24,9 @@ async fn tick(s: &AppState) -> ApiResult<()> {
     sqlx::query("DELETE FROM email_challenges WHERE expires_at<UTC_TIMESTAMP(6)")
         .execute(&mut *tx)
         .await?;
+    sqlx::query("DELETE FROM email_binding_challenges WHERE expires_at<UTC_TIMESTAMP(6)")
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("DELETE FROM email_rate_limits WHERE expires_at<UTC_TIMESTAMP(6)")
         .execute(&mut *tx)
         .await?;

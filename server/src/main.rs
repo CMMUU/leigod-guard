@@ -2,6 +2,7 @@ mod auth;
 mod cafe;
 mod devices;
 mod email;
+mod email_binding;
 mod etalien;
 mod guard_selection;
 mod provider;
@@ -52,6 +53,9 @@ pub struct SessionUser {
     role: String,
     csrf: String,
     password_enabled: bool,
+    login_username: String,
+    email: Option<String>,
+    email_verified: bool,
 }
 pub struct ApiError(StatusCode, &'static str);
 type ApiResult<T> = Result<T, ApiError>;
@@ -169,6 +173,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/login", post(routes::login))
         .route("/email/code", post(email::send_code))
         .route("/email/login", post(email::verify_code))
+        .route("/account/email/code", post(email_binding::send_code))
+        .route("/account/email/bind", post(email_binding::bind))
         .route("/devices/register", post(devices::register))
         .route("/logout", post(routes::logout))
         .route("/me", get(routes::me))
