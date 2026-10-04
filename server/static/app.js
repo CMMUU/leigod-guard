@@ -1,6 +1,7 @@
 'use strict';
 const app=document.querySelector('#app'),dialog=document.querySelector('#dialog');
 let me=null,chart=null,generation=0,busy=false,loginMode="email",emailChallenge=null,emailRetryAt=0;
+let emailSending=false,emailCountdownTimer=null,emailDraft='';
 const paths={home:'<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/>',users:'<circle cx="12" cy="7" r="4"/><path d="M5 21v-2a7 7 0 0 1 14 0v2"/>',devices:'<rect x="3" y="3" width="18" height="13" rx="2"/><path d="M8 21h8m-4-5v5"/>',events:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M8 13h8m-8 4h6"/>',tasks:'<rect x="4" y="5" width="16" height="16" rx="2"/><path d="M9 5V3h6v2m-7 8 3 3 5-6"/>',health:'<path d="M2 12h5l3-9 4 18 3-9h5"/>',shield:'<path d="m12 2 9 4v6c0 5-9 10-9 10S3 17 3 12V6z"/><path d="m8 12 3 3 5-6"/>',refresh:'<path d="M20 7v5h-5M4 17v-5h5"/><path d="M6 6a8 8 0 0 1 13 2M5 16a8 8 0 0 0 13 2"/>',plus:'<path d="M12 5v14M5 12h14"/>',menu:'<path d="M4 6h16M4 12h16M4 18h16"/>',logout:'<path d="M9 3H4v18h5m6-14 5 5-5 5m-7-5h12"/>'};
 const icon=n=>`<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${paths[n]||paths.events}</svg>`;
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -11,11 +12,22 @@ const brand=subtitle=>`<a class="brand" href="#"><img src="/logo.png" alt=""><sp
 function toast(text){const t=document.querySelector('#toast');t.textContent=text;t.style.display='block';clearTimeout(toast.timer);toast.timer=setTimeout(()=>t.style.display='none',4500)}
 async function api(path,body){const headers={};if(body!==undefined){headers['Content-Type']='application/json';if(me)headers['X-CSRF-Token']=me.csrf}const r=await fetch('/api'+path,{method:body===undefined?'GET':'POST',headers,body:body===undefined?undefined:JSON.stringify(body),credentials:'same-origin'});const data=await r.json().catch(()=>({error:'服务返回异常，请稍后重试'}));if(!r.ok){if(r.status===401&&!['/login','/email/login'].includes(path)){me=null;renderLogin()}throw new Error(data.error||'操作失败')}return data}
 function errorHtml(message){return`<div class="error-message" role="alert">${esc(message)}</div>`}
+function updateEmailCodeButton(){
+ clearTimeout(emailCountdownTimer);emailCountdownTimer=null;
+ const button=document.querySelector('[data-action="send-email-code"]');if(!button)return;
+ const seconds=Math.max(0,Math.ceil((emailRetryAt-Date.now())/1000));
+ button.disabled=emailSending||seconds>0;
+ button.textContent=emailSending?'发送中…':seconds>0?`${seconds} 秒后重发`:emailChallenge?'重新获取验证码':'获取验证码';
+ button.setAttribute('aria-busy',String(emailSending));
+ if(seconds>0)emailCountdownTimer=setTimeout(updateEmailCodeButton,1000);
+}
 function renderLogin(message=''){
+ const emailField=document.querySelector('#email');if(emailField)emailDraft=emailField.value;
  if(chart){chart.dispose();chart=null}if(dialog.open)dialog.close();generation++;me=null;
  app.innerHTML=`<header class="login-header">${brand('Accelerator Guard')}</header><main class="login-main"><section class="card login-card"><h2>登录加速器守护</h2><p class="muted">${loginMode==='email'?'邮箱验证后自动创建普通平台账号。':'使用管理员分配的平台账号。'}</p><div class="login-tabs mb-3"><button class="btn ${loginMode==='email'?'btn-primary':''}" data-action="login-email">邮箱验证码</button><button class="btn ${loginMode==='password'?'btn-primary':''}" data-action="login-password">账号密码</button></div><form id="login-form">
- ${loginMode==='email'?`<div class="mb-3"><label class="form-label" for="email">邮箱</label><input class="form-control" id="email" name="email" type="email" autocomplete="email" maxlength="254" required value="${esc(emailChallenge?.email||'')}"></div><div class="mb-3"><label class="form-label" for="email-code">验证码</label><div class="d-flex gap-2"><input class="form-control" id="email-code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="6 位验证码" required><button class="btn btn-outline-primary text-nowrap" type="button" data-action="send-email-code">获取验证码</button></div><small class="muted" id="email-delivery">验证码 10 分钟有效；60 秒后可重发。</small></div>`:`<div class="mb-3"><label class="form-label" for="username">平台账号</label><input class="form-control" id="username" name="username" autocomplete="username" maxlength="100" required></div><div class="mb-3"><label class="form-label" for="password">密码</label><div class="password-field"><input class="form-control" id="password" name="password" type="password" autocomplete="current-password" maxlength="128" required><button class="password-toggle" type="button" data-action="toggle-password">显示</button></div></div>`}
+ ${loginMode==='email'?`<div class="mb-3"><label class="form-label" for="email">邮箱</label><input class="form-control" id="email" name="email" type="email" autocomplete="email" maxlength="254" required value="${esc(emailDraft)}"></div><div class="mb-3"><label class="form-label" for="email-code">验证码</label><div class="d-flex gap-2"><input class="form-control" id="email-code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="6 位验证码" required><button class="btn btn-outline-primary text-nowrap" type="button" data-action="send-email-code">获取验证码</button></div><small class="muted" id="email-delivery">验证码 10 分钟有效；60 秒后可重发。</small></div>`:`<div class="mb-3"><label class="form-label" for="username">平台账号</label><input class="form-control" id="username" name="username" autocomplete="username" maxlength="100" required></div><div class="mb-3"><label class="form-label" for="password">密码</label><div class="password-field"><input class="form-control" id="password" name="password" type="password" autocomplete="current-password" maxlength="128" required><button class="password-toggle" type="button" data-action="toggle-password">显示</button></div></div>`}
  <label class="form-check mb-3"><input class="form-check-input" name="remember" type="checkbox"><span class="form-check-label">记住登录状态 30 天</span></label><div id="form-error">${message?errorHtml(message):''}</div><button class="btn btn-primary" type="submit">${loginMode==='email'?'验证并登录':'登录'}</button></form><div class="login-help">${loginMode==='email'?'首次验证仅创建普通用户；已有邮箱账号将直接登录。':'管理员账号保留密码登录；邮箱注册不会获得管理员权限。'}</div></section><p class="login-note">平台账号与加速器账号独立。<br>客户端登录后自动绑定设备，也支持配对码手动添加。</p><p class="login-footer">加速器守护 · 开源项目 · 香港节点 · 临时测试</p></main>`;
+ updateEmailCodeButton();
 }
 const navAdmin=[['overview','总览','home'],['users','用户','users'],['all-devices','设备','devices'],['tasks','任务','tasks'],['cafe','网吧模式','shield'],['audit','审计','events'],['health','系统健康','health']];
 const navUser=[['dashboard','我的守护','home'],['devices','设备','devices'],['events','记录','events'],['remote','远程保护','shield'],['cafe','网吧模式','shield']];
@@ -63,13 +75,17 @@ async function render(rebuild=true){if(!me)return;const current=route(),gen=++ge
 function drawChart(rows){const el=document.querySelector('#trend');if(!el)return;if(!rows.length){el.innerHTML=empty('正在积累在线趋势','收到第一轮统计后显示真实数据。','health');return}chart=echarts.init(el,null,{renderer:'svg'});chart.setOption({animation:false,color:['#206bc4','#0ca8a0','#8659da'],tooltip:{trigger:'axis',confine:true},legend:{top:0,bottom:'auto',type:'scroll',data:['在线设备','客户端在线用户','平台登录活跃'],textStyle:{fontSize:12,color:'#667382'}},grid:{left:35,right:15,top:46,bottom:28},xAxis:{type:'time',splitNumber:4,axisLabel:{color:'#768498',fontSize:11,hideOverlap:true,formatter:'{HH}:{mm}'},axisLine:{lineStyle:{color:'#e3e9f1'}}},yAxis:{type:'value',minInterval:1,splitLine:{lineStyle:{color:'#edf1f6'}},axisLabel:{color:'#768498'}},series:[['在线设备','devices'],['客户端在线用户','users'],['平台登录活跃','web_users']].map(([name,key])=>({name,type:'line',smooth:false,showSymbol:rows.length<3,symbolSize:6,data:rows.map(r=>[r.time,r[key]]),lineStyle:{width:2}}))})}
 function modal(html){document.querySelector('#dialog-content').innerHTML=html;dialog.showModal()}
 async function action(button){const a=button.dataset.action;try{
- if(a==='login-email'||a==='login-password'){loginMode=a==='login-email'?'email':'password';emailChallenge=null;renderLogin();return}
+ if(a==='login-email'||a==='login-password'){loginMode=a==='login-email'?'email':'password';renderLogin();return}
  if(a==='send-email-code'){
   const field=document.querySelector('#email');if(!field.reportValidity())return;
-  if(Date.now()<emailRetryAt){toast(`请等待 ${Math.ceil((emailRetryAt-Date.now())/1000)} 秒后重发`);return}
-  const email=field.value.trim().toLowerCase();button.disabled=true;
-  const result=await api('/email/code',{email});emailChallenge={email,request_id:result.request_id};emailRetryAt=Date.now()+result.retry_after*1000;
-  const target=document.querySelector('#email-delivery');if(target)target.textContent='验证码已发送，请检查收件箱及垃圾邮件。';return
+  if(emailSending||Date.now()<emailRetryAt){updateEmailCodeButton();return}
+  const email=field.value.trim().toLowerCase();emailSending=true;updateEmailCodeButton();
+  try{
+   const result=await api('/email/code',{email});emailChallenge={email,request_id:result.request_id};
+   const retry=Number(result.retry_after);emailRetryAt=Date.now()+(Number.isFinite(retry)&&retry>0?Math.ceil(retry):60)*1000;
+   const target=document.querySelector('#email-delivery');if(target)target.textContent='验证码已发送，请检查收件箱及垃圾邮件。';
+  }finally{emailSending=false;updateEmailCodeButton()}
+  return
  }
 
  if(a==='toggle-password'){const field=document.querySelector('#password');field.type=field.type==='password'?'text':'password';button.textContent=field.type==='password'?'显示':'隐藏';return}
@@ -86,7 +102,7 @@ async function action(button){const a=button.dataset.action;try{
  if(a==='revoke'||a==='unbind'||a==='user-status'){
   const disabling=button.dataset.disabled==='true';modal(`<h2>${a==='unbind'?'解除设备绑定':a==='revoke'?'撤销设备':disabling?'停用用户':'启用用户'}</h2><p>${esc(button.dataset.name)}</p><p class="muted">${a==='unbind'?'旧设备凭据失效，之后可重新绑定到另一个平台账号。':a==='revoke'?'设备将无法继续上报，需要手动重新绑定。':disabling?'该用户的网页会话和设备授权将立即撤销。':'用户可以重新登录；原设备需要重新配对。'}</p><div class="actions"><button class="btn" data-action="close">取消</button><button class="btn btn-primary" data-action="confirm-change" data-kind="${a}" data-id="${button.dataset.id}" data-disabled="${disabling}">确认</button></div>`);return}
  if(a==='confirm-change'){button.disabled=true;await api(['revoke','unbind'].includes(button.dataset.kind)?`/devices/${button.dataset.id}/${button.dataset.kind}`:`/admin/users/${button.dataset.id}/status`,['revoke','unbind'].includes(button.dataset.kind)?{}:{disabled:button.dataset.disabled==='true'});dialog.close();toast('操作已保存');await render(false)}
- }catch(e){toast(e.message)}finally{button.disabled=false}}
+ }catch(e){toast(e.message)}finally{if(a!=='send-email-code')button.disabled=false}}
 document.addEventListener('click',e=>{const b=e.target.closest('[data-action]');if(b){e.preventDefault();action(b)}});
 document.addEventListener('submit',async e=>{e.preventDefault();if(busy)return;const f=e.target,p=Object.fromEntries(new FormData(f));const b=f.querySelector('[type=submit]');busy=true;b.disabled=true;try{
  if(f.id==='login-form'){p.remember=f.elements.remember.checked;if(loginMode==='email'){p.email=p.email.trim().toLowerCase();if(!emailChallenge||emailChallenge.email!==p.email)throw new Error('请先为当前邮箱获取验证码');p.request_id=emailChallenge.request_id;await api('/email/login',p)}else await api('/login',p);me=await api('/me');location.hash=me.role==='admin'?'overview':'dashboard';await render()}
@@ -96,5 +112,6 @@ document.addEventListener('submit',async e=>{e.preventDefault();if(busy)return;c
  }catch(error){const selector=f.id==='cafe-form'?'#cafe-error':f.id==='login-form'?'#form-error':f.id==='password-form'?'#password-error':'#new-user-error';const target=document.querySelector(selector);if(target)target.innerHTML=errorHtml(error.message)}finally{busy=false;b.disabled=false}});
 dialog.addEventListener('close',()=>{document.querySelector('#dialog-content').replaceChildren()});
 window.addEventListener('hashchange',()=>{if(me)render()});window.addEventListener('resize',()=>chart?.resize());
+document.addEventListener('visibilitychange',updateEmailCodeButton);
 setInterval(()=>{if(me&&!dialog.open&&!busy&&!document.hidden&&!['account','users'].includes(route()))render(false)},15000);
 (async()=>{try{const r=await fetch('/api/me',{credentials:'same-origin'});if(r.ok){me=await r.json();render()}else if(r.status===401)renderLogin();else renderLogin('暂时无法连接服务，请稍后重试。')}catch{renderLogin('网络连接失败，请稍后重试。')}})();
