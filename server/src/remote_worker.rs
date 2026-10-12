@@ -1,6 +1,6 @@
 //! MySQL durable queue. Transactions only cover decisions; all HTTP happens after commit.
 use crate::*;
-const ELIGIBLE: &str = "a.credential_state='valid' AND a.credential IS NOT NULL AND EXISTS(SELECT 1 FROM users u WHERE u.id=a.user_id AND NOT u.disabled) AND ((NOT EXISTS(SELECT 1 FROM cafe_policies c WHERE c.account_id=a.id AND c.enabled) AND EXISTS(SELECT 1 FROM remote_grants g WHERE g.account_id=a.id AND g.enabled) AND NOT EXISTS(SELECT 1 FROM remote_grants g WHERE g.account_id=a.id AND g.enabled AND (g.armed_at IS NULL OR g.last_seen IS NULL OR g.last_seen>UTC_TIMESTAMP(6)-INTERVAL 120 SECOND OR g.prepare_until>UTC_TIMESTAMP(6)))) OR EXISTS(SELECT 1 FROM cafe_policies c WHERE c.account_id=a.id AND c.enabled AND c.observed_state='running' AND c.observed_at>UTC_TIMESTAMP(6)-INTERVAL 150 SECOND AND c.started_at+INTERVAL c.max_hours HOUR<=UTC_TIMESTAMP(6)))";
+const ELIGIBLE: &str = "NOT EXISTS(SELECT 1 FROM guard_actions x WHERE x.account_id=a.id AND x.state IN ('leased','sent','unknown','restricted')) AND a.credential_state='valid' AND a.credential IS NOT NULL AND EXISTS(SELECT 1 FROM users u WHERE u.id=a.user_id AND NOT u.disabled) AND ((NOT EXISTS(SELECT 1 FROM guard_observers o WHERE o.account_id=a.id AND o.enabled) AND NOT EXISTS(SELECT 1 FROM cafe_policies c WHERE c.account_id=a.id AND c.enabled) AND EXISTS(SELECT 1 FROM remote_grants g WHERE g.account_id=a.id AND g.enabled) AND NOT EXISTS(SELECT 1 FROM remote_grants g WHERE g.account_id=a.id AND g.enabled AND (g.armed_at IS NULL OR g.last_seen IS NULL OR g.last_seen>UTC_TIMESTAMP(6)-INTERVAL 120 SECOND OR g.prepare_until>UTC_TIMESTAMP(6)))) OR EXISTS(SELECT 1 FROM cafe_policies c WHERE c.account_id=a.id AND c.enabled AND c.observed_state='running' AND c.observed_at>UTC_TIMESTAMP(6)-INTERVAL 150 SECOND AND c.started_at+INTERVAL c.max_hours HOUR<=UTC_TIMESTAMP(6)))";
 struct Job {
     id: Uuid,
     account: Uuid,
@@ -37,6 +37,9 @@ pub async fn run(s: AppState) {
         if tick(&s, healthy).await.is_err() {
             tracing::error!("remote scheduler failed; no new work dispatched");
             continue;
+        }
+        if cycles::tick(&s).await.is_err() {
+            tracing::error!("cycle scheduler unavailable");
         }
         for _ in 0..2 {
             let Ok(permit) = s.remote_slots.clone().try_acquire_owned() else {

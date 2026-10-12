@@ -134,6 +134,12 @@ pub enum Provider {
 }
 impl Provider {
     pub const ALL: [Self; 2] = [Self::Leigod, Self::Etalien];
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Leigod => "leigod",
+            Self::Etalien => "etalien",
+        }
+    }
     pub fn index(self) -> usize {
         match self {
             Self::Leigod => 0,
@@ -418,6 +424,20 @@ impl Api {
             .json(
                 &serde_json::json!({"provider":provider,"revision":revision,"run_generation":run}),
             )
+            .send()
+            .map_err(|_| Error::Network)?;
+        read_json(successful(response)?)
+    }
+    pub fn cycle(
+        &self,
+        binding: &DeviceBinding,
+        payload: &crate::cycle_protocol::CycleRequest,
+    ) -> Result<crate::cycle_protocol::CycleView, Error> {
+        let response = self
+            .client
+            .post(format!("{}/api/device/cycle", self.origin))
+            .bearer_auth(&binding.device_token)
+            .json(payload)
             .send()
             .map_err(|_| Error::Network)?;
         read_json(successful(response)?)

@@ -425,3 +425,37 @@ fn etalien_uses_distinct_routes_and_rejects_legacy_or_wrong_provider_responses()
         assert!(!r.contains("password"));
     }
 }
+
+#[test]
+fn cycle_protocol_is_separate_from_legacy_heartbeat_and_never_carries_provider_secrets() {
+    let view = crate::cycle_protocol::CycleView {
+        enabled: true,
+        mode: "coordinated".into(),
+        state: "completed".into(),
+        ..Default::default()
+    };
+    let (api, requests, task) = mock(vec![ok(&serde_json::to_string(&view).unwrap())]);
+    let binding = DeviceBinding {
+        device_id: "device-fixture".into(),
+        device_token: "d".repeat(64),
+        owner_id: "user-fixture".into(),
+        owner: "Fixture".into(),
+        sequence: 1,
+    };
+    let frame = crate::cycle_protocol::CycleRequest {
+        op: "observe".into(),
+        provider: "leigod".into(),
+        run_generation: 2,
+        grant_revision: 1,
+        sequence: 3,
+        phase: "running".into(),
+        ..Default::default()
+    };
+    assert_eq!(api.cycle(&binding, &frame).unwrap().state, "completed");
+    task.join().unwrap();
+    let requests = requests.lock().unwrap();
+    let body = &requests[0];
+    assert!(body.starts_with("POST /api/device/cycle HTTP"));
+    assert!(!body.contains("account_token"));
+    assert!(!body.contains("processes"));
+}

@@ -41,6 +41,7 @@ impl ExitGraceCountdown {
 }
 
 pub struct Shared {
+    pub cycle: crate::cycle_client::Runtime,
     pub provider: &'static str,
     /// Same observer for both providers, the UI, and platform heartbeat.
     pub game_monitor: Option<std::sync::Arc<crate::monitor::GameMonitor>>,
@@ -83,6 +84,7 @@ pub struct Shared {
 impl Default for Shared {
     fn default() -> Self {
         Self {
+            cycle: crate::cycle_client::Runtime::default(),
             provider: "leigod",
             game_monitor: None,
             status: "初始化…".into(),

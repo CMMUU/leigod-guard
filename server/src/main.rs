@@ -1,5 +1,7 @@
 mod auth;
 mod cafe;
+mod cycle_protocol;
+mod cycles;
 mod devices;
 mod email;
 mod email_binding;
@@ -66,7 +68,15 @@ impl IntoResponse for ApiError {
 }
 impl From<sqlx::Error> for ApiError {
     fn from(e: sqlx::Error) -> Self {
-        tracing::error!(error_kind=?e.as_database_error().map(|e|e.code()),"database operation failed");
+        if let sqlx::Error::ColumnDecode { index, .. } = &e {
+            tracing::error!(column=%index,"database column decode failed");
+        }
+        let mysql_number = e.as_database_error().and_then(|error| {
+            error
+                .try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>()
+                .map(|error| error.number())
+        });
+        tracing::error!(error_kind=?e.as_database_error().map(|e|e.code()),mysql_number,"database operation failed");
         Self(
             StatusCode::INTERNAL_SERVER_ERROR,
             "服务暂时不可用，请稍后重试",
@@ -156,6 +166,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let api = Router::new()
         .route("/health", get(routes::health))
+        .route("/device/cycle", post(cycles::endpoint))
         .route(
             "/device/guard",
             get(guard_selection::status).post(guard_selection::change),

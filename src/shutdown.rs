@@ -72,6 +72,9 @@ fn pause_etalien_before_deadline(
     deadline: Instant,
 ) -> String {
     let snapshot_deadline = deadline.min(Instant::now() + Duration::from_millis(250));
+    if snapshot(shared, snapshot_deadline, |s| s.cycle.required) != Some(false) {
+        return "云端协同由服务器失联保护接管，关机不独立发送暂停".into();
+    }
     let Some(_permit) =
         snapshot(config, snapshot_deadline, |c| c.permit(Provider::Etalien)).flatten()
     else {
@@ -153,6 +156,9 @@ fn pause_before_deadline(
     // Windows can synchronously invoke the UI subclass while UI code owns config.
     // Never wait indefinitely or guess that a busy/poisoned policy is enabled.
     let snapshot_deadline = deadline.min(Instant::now() + Duration::from_millis(250));
+    if snapshot(shared, snapshot_deadline, |s| s.cycle.required) != Some(false) {
+        return "云端协同由服务器失联保护接管，关机不独立发送暂停".into();
+    }
     match snapshot(config, snapshot_deadline, |c| c.strategy.pause_on_shutdown) {
         Some(false) => return "关机暂停选项已关闭，跳过".into(),
         None => return "无法及时读取关机策略，暂停未确认".into(),
@@ -340,5 +346,18 @@ mod tests {
         );
         assert!(result.contains("暂停未确认"));
         assert!(!result.contains("private-test-token"));
+    }
+    #[test]
+    fn coordinated_shutdown_never_bypasses_the_account_permit() {
+        let config = Mutex::new(Config::default());
+        let shared = Mutex::new(Shared::default());
+        shared.lock().unwrap().cycle.required = true;
+        let result = pause_before_deadline(
+            &shared,
+            &config,
+            Instant::now() + Duration::from_secs(3),
+            |_, _| panic!("must defer to coordinated protection"),
+        );
+        assert!(result.contains("云端协同"));
     }
 }

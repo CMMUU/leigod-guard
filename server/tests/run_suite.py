@@ -58,7 +58,7 @@ try:
     env.update(REMOTE_EXECUTION='true', REMOTE_KEY_FILE=str(key),
         LEIGOD_TEST_ORIGIN='http://127.0.0.1:3091', ETALIEN_TEST_ORIGIN='http://127.0.0.1:3093')
     server = start('remote')
-    for name in ('guard_selection','etalien','cafe'):
+    for name in ('cycles','guard_selection','etalien','cafe'):
         test(name)
     test('remote', dict(TEST_SERVER_PID=str(server.pid), TEST_SERVER_BINARY=binary,
                        TEST_RESTART_LOG=str(logs/'restart.log')))
@@ -73,6 +73,10 @@ try:
             assert response.code == 503 and response.headers['Retry-After'] == '60'
     print('PASS maintenance: health available, API traffic refused with retry hint')
 finally:
+    if sys.exc_info()[0]:
+        for path in logs.glob('*.log'):
+            errors=[line for line in path.read_text(errors='replace').splitlines() if 'ERROR' in line]
+            if errors: print(path.name, '\n'.join(errors[-12:]), flush=True)
     for child in children:
         if child.poll() is None:
             child.terminate()

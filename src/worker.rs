@@ -9,6 +9,73 @@ use crate::shared::{ManualCmd, Shared, StartupPauseStatus};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+/// Official billing observations re-arm each new run, independently of game exits.
+#[derive(Default)]
+struct BillingWatch {
+    next: Option<Instant>,
+    last: Option<bool>,
+    token: Option<String>,
+}
+impl BillingWatch {
+    fn update(
+        &mut self,
+        shared: &Arc<Mutex<Shared>>,
+        cfg: &Arc<Mutex<Config>>,
+        kind: Provider,
+        watch: &mut AutoPauseWatch,
+    ) -> bool {
+        let Ok(c) = cfg.lock().map(|c| c.clone()) else {
+            return false;
+        };
+        if !c.strategy.enabled {
+            return true;
+        }
+        let token = if kind == Provider::Leigod {
+            ensure_token(shared, cfg)
+        } else {
+            shared.lock().ok().and_then(|s| s.token.clone())
+        };
+        if token != self.token {
+            self.last = None;
+            self.next = None;
+            self.token = token.clone();
+        }
+        if self.next.is_none_or(|at| at <= Instant::now()) {
+            self.next = Some(Instant::now() + Duration::from_secs(30));
+            if let Some(token) = token {
+                crate::cycle_client::refresh(shared, &c, kind, &token);
+            }
+        }
+        let Ok(state) = shared.lock() else {
+            return false;
+        };
+        let fresh = state
+            .account_info_received_at
+            .is_some_and(|at| at.elapsed() < Duration::from_secs(75));
+        let paused = if fresh {
+            crate::cycle_client::paused(&state, &c, kind)
+        } else {
+            None
+        };
+        if paused == Some(false) && self.last != Some(false) {
+            watch.arm_billing(
+                state.game_monitor.as_ref().map(|m| m.latest().generation),
+                c.strategy.startup_grace_secs,
+                checked_watch(&c).is_some(),
+            );
+            crate::ui::dbglog("[billing] running observed; new startup grace armed");
+        }
+        if paused == Some(true) {
+            watch.pause_succeeded();
+        }
+        if paused.is_none() {
+            watch.observation_failed();
+        }
+        self.last = paused;
+        paused == Some(false)
+    }
+}
+
 /// 失败重试次数
 const MAX_RETRY: usize = 3;
 /// 失败后的冷却时间（秒），避免每个 tick 都打 API
@@ -64,6 +131,13 @@ impl Default for AutoPauseWatch {
 }
 
 impl AutoPauseWatch {
+    fn arm_billing(&mut self, generation: Option<u64>, grace: u64, valid: bool) {
+        *self = Self::default();
+        self.observed_generation = generation;
+        self.startup_grace_secs = grace;
+        self.configure(true, true, valid);
+    }
+
     fn configure(&mut self, enabled: bool, startup_enabled: bool, valid_watch: bool) {
         self.active = enabled && valid_watch;
         if !self.active {
@@ -606,6 +680,7 @@ pub fn run(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
 
     // 自动暂停包含一次启动补查和原有的游戏退出宽限期；不自动恢复计时。
     let mut pause_watch = AutoPauseWatch::default();
+    let mut billing = BillingWatch::default();
     let mut monitor_failed = false;
     let mut was_configured = false;
     let mut generation = None;
@@ -647,7 +722,17 @@ pub fn run(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
                 configured,
             )
         };
-        if configured && !was_configured {
+        if crate::cycle_client::required(&shared) {
+            crate::cycle_client::step(&shared, &cfg, Provider::Leigod);
+            std::thread::sleep(Duration::from_secs(interval));
+            continue;
+        }
+        let billing_running = if configured {
+            billing.update(&shared, &cfg, Provider::Leigod, &mut pause_watch)
+        } else {
+            false
+        };
+        if configured && !was_configured && !billing_running {
             pause_watch = AutoPauseWatch::default();
         }
         was_configured = configured;
@@ -745,6 +830,11 @@ pub fn run(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
             continue;
         }
 
+        if !billing_running {
+            set_status(&shared, "计时已暂停或状态待确认，继续观察下一次计时");
+            std::thread::sleep(Duration::from_secs(interval));
+            continue;
+        }
         let now = Instant::now();
         let decision = pause_watch.observe_game(now, &observation, grace_secs);
         publish_startup_status(&shared, &pause_watch, now);
@@ -794,7 +884,16 @@ pub fn run(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
                 });
                 match result {
                     Ok(msg) => {
+                        refresh_account_info(&shared, &cfg);
+                        if !shared.lock().is_ok_and(|s| {
+                            s.account_info.as_ref().and_then(api::account_paused) == Some(true)
+                        }) {
+                            pause_watch.pause_failed(Instant::now());
+                            set_status(&shared, "暂停请求已发送，官方状态尚未确认，等待查询");
+                            continue;
+                        }
                         pause_watch.pause_succeeded();
+                        billing.last = Some(true);
                         publish_startup_status(&shared, &pause_watch, Instant::now());
                         let reason = if startup {
                             "启动检查确认无名单游戏运行，暂停请求返回成功"
@@ -900,6 +999,7 @@ pub fn run_etalien(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
         }
     }
     let mut pause_watch = AutoPauseWatch::default();
+    let mut billing = BillingWatch::default();
     let mut previous_session = None;
     let mut generation = None;
     loop {
@@ -915,6 +1015,10 @@ pub fn run_etalien(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
         if generation != Some(config.selection_generation) {
             pause_watch = AutoPauseWatch::default();
             generation = Some(config.selection_generation);
+        }
+        if crate::cycle_client::required(&shared) {
+            crate::cycle_client::step(&shared, &cfg, Provider::Etalien);
+            continue;
         }
         let account = config.etalien.clone();
         let session = (
@@ -935,6 +1039,7 @@ pub fn run_etalien(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
             }
             continue;
         }
+        let billing_running = billing.update(&shared, &cfg, Provider::Etalien, &mut pause_watch);
         let watch = checked_watch(&config);
         pause_watch.configure(
             config.strategy.enabled,
@@ -965,7 +1070,10 @@ pub fn run_etalien(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
             }
         };
         publish_startup_status(&shared, &pause_watch, Instant::now());
-        if manual || matches!(decision, PauseDecision::Pause | PauseDecision::StartupPause) {
+        if manual
+            || (billing_running
+                && matches!(decision, PauseDecision::Pause | PauseDecision::StartupPause))
+        {
             let Some(_permit) = cfg
                 .lock()
                 .ok()
@@ -2185,5 +2293,83 @@ mod tests {
         watch.pause_succeeded();
         assert!(!watch.startup_status(now + Duration::from_secs(181)).pending);
         assert!(watch.startup_deferred_at.is_none());
+    }
+}
+
+#[cfg(test)]
+mod billing_cycle_tests {
+    use super::*;
+    #[test]
+    fn a_new_billing_run_rearms_after_completed_pause_and_ignores_old_game_activity() {
+        let t = Instant::now();
+        let mut watch = AutoPauseWatch::default();
+        watch.configure(true, true, true);
+        watch.observe(t, true, 90);
+        watch.pause_succeeded();
+        assert_eq!(watch.observe(t, false, 90), PauseDecision::Idle);
+        watch.arm_billing(Some(7), 180, true);
+        // The process tracker may remember a game from yesterday; this is a new billing cycle.
+        let mut observation = Observation::unknown(t);
+        observation.phase = Phase::Absent;
+        observation.generation = 7;
+        observation.activity_seen = true;
+        assert!(matches!(
+            watch.observe_game(t, &observation, 90),
+            PauseDecision::StartupWaiting {
+                remaining_secs: 180,
+                ..
+            }
+        ));
+        assert!(matches!(
+            watch.observe_game(t + Duration::from_secs(179), &observation, 90),
+            PauseDecision::StartupWaiting {
+                remaining_secs: 1,
+                ..
+            }
+        ));
+        assert_eq!(
+            watch.observe_game(t + Duration::from_secs(180), &observation, 90),
+            PauseDecision::StartupPause
+        );
+    }
+    #[test]
+    fn billing_run_game_start_at_deadline_cancels_pause_and_keeps_exit_grace() {
+        let t = Instant::now();
+        let mut watch = AutoPauseWatch::default();
+        watch.arm_billing(Some(1), 180, true);
+        let mut observation = Observation::unknown(t);
+        observation.phase = Phase::Absent;
+        observation.generation = 1;
+        watch.observe_game(t, &observation, 90);
+        observation.phase = Phase::Running;
+        observation.generation = 2;
+        observation.activity_seen = true;
+        assert_eq!(
+            watch.observe_game(t + Duration::from_secs(180), &observation, 90),
+            PauseDecision::Running
+        );
+        observation.phase = Phase::Absent;
+        assert_eq!(
+            watch.observe_game(t + Duration::from_secs(181), &observation, 90),
+            PauseDecision::GraceStarted
+        );
+        assert_eq!(
+            watch.observe_game(t + Duration::from_secs(270), &observation, 90),
+            PauseDecision::Waiting(1)
+        );
+    }
+    #[test]
+    fn startup_and_global_opt_out_are_respected_after_billing_rearms() {
+        let t = Instant::now();
+        let mut watch = AutoPauseWatch::default();
+        watch.arm_billing(None, 180, true);
+        watch.configure(true, false, true);
+        assert_eq!(watch.observe(t, false, 90), PauseDecision::Idle);
+        watch.arm_billing(None, 180, true);
+        watch.configure(false, false, true);
+        assert_eq!(
+            watch.observe(t + Duration::from_secs(180), false, 90),
+            PauseDecision::Idle
+        );
     }
 }

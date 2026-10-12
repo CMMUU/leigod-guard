@@ -2621,7 +2621,7 @@ impl App {
             if theme::switch_row(
                 ui,
                 &mut c.strategy.pause_on_startup,
-                "启动时无游戏运行则暂停计时",
+                "开始计时后无游戏运行则暂停计时",
             )
             .changed()
             {
@@ -2638,7 +2638,7 @@ impl App {
                     self.dirty = true;
                 }
             });
-            ui.label(egui::RichText::new("默认180秒（3分钟），调整会影响尚未完成的启动等待。正在准备游戏时，可在首页或托盘延后10分钟；检测到游戏就结束本次启动检查。").color(theme::MUTED).small());
+            ui.label(egui::RichText::new("默认180秒（3分钟）。约每30秒查询计时，重新计时后进入新一轮等待；准备游戏可保护10分钟。云端协同时按账号同步，修改后重新等待。").color(theme::MUTED).small());
             ui.horizontal_wrapped(|ui| {
                 ui.label("游戏启动保护（秒）:");
                 if ui
