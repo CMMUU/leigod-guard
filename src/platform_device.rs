@@ -26,6 +26,8 @@ struct Saved {
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct RemoteSaved {
     #[serde(default)]
+    cycle_consent: bool,
+    #[serde(default)]
     remote_consent: bool,
     #[serde(default)]
     pending_disable: bool,
@@ -151,6 +153,7 @@ pub(crate) struct View {
 }
 #[derive(Clone, Default)]
 pub(crate) struct RemoteView {
+    pub cycle: crate::cycle_protocol::CycleView,
     pub checked_at: Option<Instant>,
     pub status: RemoteStatus,
     pub message: String,
@@ -158,6 +161,7 @@ pub(crate) struct RemoteView {
     pub pending_disable: bool,
 }
 enum Command {
+    Cycle(Provider),
     Selection,
     Session(Session, bool),
     Bind(Session),
@@ -200,6 +204,9 @@ impl Agent {
             }
         }
         Self { sender, view }
+    }
+    pub fn cycle(&self, kind: Provider) {
+        let _ = self.sender.send(Command::Cycle(kind));
     }
     pub fn selection(&self) {
         let _ = self.sender.send(Command::Selection);
@@ -288,6 +295,14 @@ fn run(
             saved[kind].remote_consent = false;
         }
     }
+    for (kind, state) in [
+        (Provider::Leigod, &shared),
+        (Provider::Etalien, &etalien_shared),
+    ] {
+        if let Ok(mut s) = state.lock() {
+            s.cycle.required = saved[kind].cycle_consent;
+        }
+    }
     let mut sequence = saved.reserved_until;
     let run_generation = sequence.saturating_add(1);
     saved.reserved_until = run_generation.saturating_add(256);
@@ -346,6 +361,26 @@ fn run(
         }
         if let Some(command) = command {
             match command {
+                Command::Cycle(kind) => {
+                    if saved.active
+                        && saved[kind].remote_consent
+                        && config.lock().is_ok_and(|c| c.is_active(kind))
+                    {
+                        saved[kind].cycle_consent = true;
+                        if let Err(e) = store.save(&saved) {
+                            publish(&view, &ctx, &saved, &e, false);
+                            continue;
+                        }
+                        let state = if kind == Provider::Leigod {
+                            &shared
+                        } else {
+                            &etalien_shared
+                        };
+                        if let Ok(mut s) = state.lock() {
+                            s.cycle.required = true;
+                        }
+                    }
+                }
                 Command::Selection => {
                     selection_synced = false;
                     enable_requested = [false; 2];
@@ -572,6 +607,22 @@ fn run(
         match api.heartbeat(&binding, &payload) {
             Ok(()) => {
                 run_confirmed = true;
+                for (kind, state) in [
+                    (Provider::Leigod, &shared),
+                    (Provider::Etalien, &etalien_shared),
+                ] {
+                    sync_cycle(
+                        &api,
+                        &store,
+                        &mut saved,
+                        &binding,
+                        run_generation,
+                        kind,
+                        state,
+                        &config,
+                        &view,
+                    );
+                }
                 for kind in Provider::ALL {
                     if selection_synced && enable_requested[kind.index()] {
                         enable_requested[kind.index()] = false;
@@ -1311,5 +1362,84 @@ mod tests {
             .unwrap()
             .contains(&original));
         std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+fn sync_cycle(
+    api: &Api,
+    store: &Store,
+    saved: &mut Saved,
+    binding: &DeviceBinding,
+    run: i64,
+    kind: Provider,
+    shared: &Mutex<crate::shared::Shared>,
+    config: &Mutex<crate::config::Config>,
+    view: &Mutex<View>,
+) {
+    if !saved[kind].cycle_consent {
+        return;
+    }
+    let revoked = view.lock().is_ok_and(|v| {
+        v.remote[kind.index()]
+            .checked_at
+            .is_some_and(|at| at.elapsed() < Duration::from_secs(5))
+            && !v.remote[kind.index()].status.enabled
+            && !saved[kind].remote_consent
+            && !saved[kind].pending_disable
+    });
+    if revoked {
+        saved[kind].cycle_consent = false;
+        if store.save(saved).is_ok() {
+            if let Ok(mut s) = shared.lock() {
+                s.cycle = crate::cycle_client::Runtime::default();
+            }
+        }
+        return;
+    }
+    let Ok(c) = config.lock().map(|c| c.clone()) else {
+        return;
+    };
+    if !c.is_active(kind) || !saved[kind].remote_consent || saved[kind].pending_disable {
+        return;
+    }
+    let revision = saved[kind].remote_revision;
+    let enrolled = shared.lock().is_ok_and(|s| {
+        s.cycle.context.as_ref().is_some_and(|c| {
+            c.run == run
+                && c.revision == revision
+                && c.binding.device_id == binding.device_id
+                && c.enrolled
+        })
+    });
+    if !enrolled {
+        let q = crate::cycle_protocol::CycleRequest {
+            op: "enable".into(),
+            provider: kind.as_str().into(),
+            run_generation: run,
+            grant_revision: revision,
+            startup_seconds: c.strategy.startup_grace_secs.min(3600) as u32,
+            exit_seconds: c.strategy.grace_secs.min(3600) as u32,
+            ..Default::default()
+        };
+        if let Ok(v) = api.cycle(binding, &q) {
+            if let Ok(mut s) = shared.lock() {
+                s.cycle.required = true;
+                s.cycle.context = Some(crate::cycle_client::Context {
+                    binding: binding.clone(),
+                    run,
+                    revision,
+                    enrolled: true,
+                });
+                s.cycle.view = v;
+                s.cycle.sequence = 0;
+                s.cycle.next_poll = None;
+            }
+        }
+    }
+    crate::cycle_client::observe(shared, kind, api);
+    if let Ok(s) = shared.lock() {
+        if let Ok(mut v) = view.lock() {
+            v.remote[kind.index()].cycle = s.cycle.view.clone();
+        }
     }
 }

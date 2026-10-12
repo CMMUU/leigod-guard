@@ -15,6 +15,7 @@ pub(crate) enum Action {
     Bind,
     Pair,
     StopDevice,
+    EnableCycle(Provider),
     EnableRemote(Provider),
     DisableRemote(Provider),
     Refresh,
@@ -332,6 +333,11 @@ impl Panel {
                 if let Some(agent) = &self.agent {
                     agent.pair(code, self.session.clone().filter(|_| self.verified));
                     self.pair_code.clear();
+                }
+            }
+            Action::EnableCycle(provider) => {
+                if let Some(agent) = &self.agent {
+                    agent.cycle(provider);
                 }
             }
             Action::EnableRemote(provider) => {
@@ -824,6 +830,10 @@ impl Panel {
                 _ => "请查看网页任务记录",
             }
         ));
+        if remote.status.enabled && !remote.pending_disable {
+            ui.label("云端周期协同（测试）：在线空闲与失联保护按账号统一协调；网吧模式会抑制本机自动暂停。断网时等待许可，不回退独立执行。");
+            if remote.cycle.enabled { ui.label(&remote.cycle.message); } else if ui.add_enabled(!view.busy,egui::Button::new("同意并开启云端周期协同（测试）")).clicked(){self.action=Some(Action::EnableCycle(provider));}
+        }
         if remote.status.enabled || remote.pending_disable {
             if ui
                 .add_enabled(!view.busy, egui::Button::new("关闭本机远程保护"))

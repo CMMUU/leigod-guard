@@ -8,6 +8,9 @@ mod brand;
 mod brand_shell;
 mod captcha;
 mod config;
+mod cycle_client;
+#[path = "../server/src/cycle_protocol.rs"]
+mod cycle_protocol;
 mod dpapi;
 mod etalien_api;
 mod etalien_auth;

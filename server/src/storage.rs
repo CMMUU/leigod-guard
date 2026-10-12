@@ -67,6 +67,7 @@ pub async fn revoke_provider(
     device: Uuid,
     kind: provider::Kind,
 ) -> ApiResult<()> {
+    cycles::revoke(tx, device, kind).await?;
     let column = kind.revision_column();
     sqlx::query(&format!(
         "UPDATE devices SET {column}={column}+1 WHERE id=?"

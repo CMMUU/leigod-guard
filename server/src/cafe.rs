@@ -70,6 +70,11 @@ pub async fn save(
             .await?;
     }
     storage::cancel(&mut tx, id).await?;
+    cycles::invalidate(&mut tx, id).await?;
+    sqlx::query("UPDATE guard_observers SET idle_until=NULL,phase='unknown' WHERE account_id=?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
     if was_enabled && !p.enabled {
         // Leaving cafe mode must not immediately unleash stale home-device jobs.
         sqlx::query("UPDATE remote_grants SET armed_at=NULL WHERE account_id=? AND enabled")

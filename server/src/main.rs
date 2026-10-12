@@ -1,5 +1,7 @@
 mod auth;
 mod cafe;
+mod cycle_protocol;
+mod cycles;
 mod devices;
 mod email;
 mod email_binding;
@@ -156,6 +158,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let api = Router::new()
         .route("/health", get(routes::health))
+        .route("/device/cycle", post(cycles::endpoint))
         .route(
             "/device/guard",
             get(guard_selection::status).post(guard_selection::change),

@@ -18,6 +18,7 @@ pub enum Failure {
     Credential,
     Unavailable,
     InvalidAccount,
+    Restricted,
 }
 pub struct Info {
     pub key: String,
@@ -149,6 +150,7 @@ impl Provider {
         let response = self.call("/api/user/pause", token).await?;
         match number(&response["code"]) {
             Some(0 | 400803) => Ok(()),
+            Some(400855) => Err(Failure::Restricted),
             _ => Err(Failure::Unavailable),
         }
     }

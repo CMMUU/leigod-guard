@@ -422,6 +422,20 @@ impl Api {
             .map_err(|_| Error::Network)?;
         read_json(successful(response)?)
     }
+    pub fn cycle(
+        &self,
+        binding: &DeviceBinding,
+        payload: &crate::cycle_protocol::CycleRequest,
+    ) -> Result<crate::cycle_protocol::CycleView, Error> {
+        let response = self
+            .client
+            .post(format!("{}/api/device/cycle", self.origin))
+            .bearer_auth(&binding.device_token)
+            .json(payload)
+            .send()
+            .map_err(|_| Error::Network)?;
+        read_json(successful(response)?)
+    }
     pub fn heartbeat(&self, binding: &DeviceBinding, payload: &Heartbeat) -> Result<(), Error> {
         if !binding.valid() || payload.sequence < 0 {
             return Err(Error::InvalidInput);
