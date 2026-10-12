@@ -5,7 +5,7 @@ use sqlx::{MySql, Transaction};
 type Tx<'a> = Transaction<'a, MySql>;
 
 pub async fn listing(s: &AppState, user: &SessionUser) -> ApiResult<Vec<Value>> {
-    storage::json_rows(sqlx::query("SELECT d.id AS device_id,d.name AS device_name,r.provider AS provider,r.label AS label,c.id AS id,c.state AS state,c.started_at AS started_at,c.completed_at AS completed_at,o.phase AS phase,o.observed_at AS observed_at,o.executor_at AS executor_at,o.idle_until AS deadline,CASE WHEN p.enabled THEN 'cafe' ELSE 'coordinated' END AS mode,CASE WHEN o.observed_at>UTC_TIMESTAMP(6)-INTERVAL 22 SECOND AND o.phase<>'unknown' THEN 'healthy' ELSE 'unknown' END AS observer_health,CASE WHEN o.executor_at>UTC_TIMESTAMP(6)-INTERVAL 60 SECOND THEN 'healthy' ELSE 'stalled' END AS executor_health,x.state AS action_state,a.startup_seconds AS startup_seconds,a.exit_seconds AS exit_seconds,a.policy_revision AS policy_revision FROM guard_observers o JOIN devices d ON d.id=o.device_id JOIN remote_accounts r ON r.id=o.account_id JOIN guard_accounts a ON a.account_id=r.id LEFT JOIN guard_cycles c ON c.id=a.cycle_id LEFT JOIN cafe_policies p ON p.account_id=r.id LEFT JOIN guard_actions x ON x.id=(SELECT y.id FROM guard_actions y WHERE y.account_id=r.id ORDER BY y.created_at DESC LIMIT 1) WHERE o.enabled AND (? OR r.user_id=?) ORDER BY d.name LIMIT 500").bind(user.role=="admin").bind(user.id).fetch_all(&s.db).await?)
+    storage::json_rows(sqlx::query("SELECT d.id AS device_id,d.name AS device_name,r.provider AS provider,r.label AS label,c.id AS id,c.state AS state,c.started_at AS started_at,c.completed_at AS completed_at,o.phase AS phase,o.observed_at AS observed_at,o.executor_at AS executor_at,o.idle_until AS deadline,CASE WHEN p.enabled THEN 'cafe' ELSE 'coordinated' END AS mode,CASE WHEN o.observed_at>UTC_TIMESTAMP(6)-INTERVAL 22 SECOND AND o.phase<>'unknown' THEN 'healthy' ELSE 'unknown' END AS observer_health,CASE WHEN o.executor_at>UTC_TIMESTAMP(6)-INTERVAL 60 SECOND THEN 'healthy' ELSE 'stalled' END AS executor_health,x.state AS action_state,a.startup_seconds AS startup_seconds,a.exit_seconds AS exit_seconds,a.policy_revision AS policy_revision FROM guard_observers o JOIN devices d ON d.id=o.device_id JOIN remote_accounts r ON r.id=o.account_id JOIN guard_accounts a ON a.account_id=r.id LEFT JOIN guard_cycles c ON c.id=a.cycle_id LEFT JOIN cafe_policies p ON p.account_id=r.id LEFT JOIN guard_actions x ON x.id=(SELECT y.id FROM guard_actions y WHERE y.account_id=r.id AND y.cycle_id=c.id ORDER BY y.created_at DESC LIMIT 1) WHERE o.enabled AND (? OR r.user_id=?) ORDER BY d.name LIMIT 500").bind(user.role=="admin").bind(user.id).fetch_all(&s.db).await?)
 }
 
 fn conflict() -> ApiError {
@@ -342,7 +342,7 @@ async fn view(tx: &mut Tx<'_>, account: Uuid) -> ApiResult<CycleView> {
     .bind(account)
     .fetch_one(&mut **tx)
     .await?;
-    let remaining:Option<i64>=sqlx::query_scalar("SELECT GREATEST(0,TIMESTAMPDIFF(SECOND,UTC_TIMESTAMP(6),MAX(idle_until))+1) FROM guard_observers WHERE account_id=? AND enabled").bind(account).fetch_one(&mut **tx).await?;
+    let remaining:Option<i64>=sqlx::query_scalar("SELECT CAST(GREATEST(0,TIMESTAMPDIFF(SECOND,UTC_TIMESTAMP(6),MAX(idle_until))+1) AS SIGNED) FROM guard_observers WHERE account_id=? AND enabled").bind(account).fetch_one(&mut **tx).await?;
     let state: String = r
         .get::<Option<String>, _>("state")
         .unwrap_or_else(|| "awaiting_billing".into());
@@ -382,7 +382,7 @@ pub async fn tick(s: &AppState) -> ApiResult<()> {
     sqlx::query("DELETE FROM guard_actions WHERE state IN ('confirmed','cancelled') AND updated_at<UTC_TIMESTAMP(6)-INTERVAL 30 DAY").execute(&s.db).await?;
     sqlx::query("DELETE c FROM guard_cycles c LEFT JOIN guard_accounts a ON a.cycle_id=c.id WHERE a.account_id IS NULL AND c.completed_at<UTC_TIMESTAMP(6)-INTERVAL 30 DAY AND NOT EXISTS(SELECT 1 FROM guard_actions x WHERE x.cycle_id=c.id)").execute(&s.db).await?;
 
-    let accounts:Vec<Uuid>=sqlx::query_scalar("SELECT a.account_id FROM guard_accounts a JOIN remote_accounts r ON r.id=a.account_id WHERE r.credential_state='valid' AND EXISTS(SELECT 1 FROM guard_observers o WHERE o.account_id=a.account_id AND o.enabled) ORDER BY r.updated_at LIMIT 100").fetch_all(&s.db).await?;
+    let accounts:Vec<Uuid>=sqlx::query_scalar("SELECT a.account_id FROM guard_accounts a JOIN remote_accounts r ON r.id=a.account_id WHERE r.credential_state='valid' AND (EXISTS(SELECT 1 FROM guard_observers o WHERE o.account_id=a.account_id AND o.enabled) OR EXISTS(SELECT 1 FROM guard_actions x WHERE x.account_id=a.account_id AND x.state IN ('sent','unknown','restricted'))) ORDER BY r.updated_at LIMIT 100").fetch_all(&s.db).await?;
     for account in accounts {
         let Ok(slot) = s.remote_slots.clone().try_acquire_owned() else {
             break;
@@ -470,7 +470,7 @@ async fn execute(
         }
     }
     let mut tx = storage::begin(&s.db).await?;
-    sqlx::query("UPDATE guard_actions SET state=?,result=?,updated_at=UTC_TIMESTAMP(6),lease_until=UTC_TIMESTAMP(6)+INTERVAL 60 SECOND WHERE id=? AND state IN ('sent','unknown','restricted')").bind(result).bind(result).bind(id).execute(&mut *tx).await?;
+    sqlx::query("UPDATE guard_actions SET result=IF(state='restricted' AND ?='unknown',result,?),state=IF(state='restricted' AND ?='unknown',state,?),updated_at=UTC_TIMESTAMP(6),lease_until=UTC_TIMESTAMP(6)+INTERVAL 60 SECOND WHERE id=? AND state IN ('sent','unknown','restricted')").bind(result).bind(result).bind(result).bind(result).bind(id).execute(&mut *tx).await?;
     if result == "confirmed" {
         complete_cycle(&mut tx, cycle).await?;
     }

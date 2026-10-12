@@ -71,7 +71,12 @@ impl From<sqlx::Error> for ApiError {
         if let sqlx::Error::ColumnDecode { index, .. } = &e {
             tracing::error!(column=%index,"database column decode failed");
         }
-        tracing::error!(error_kind=?e.as_database_error().map(|e|e.code()),"database operation failed");
+        let mysql_number = e.as_database_error().and_then(|error| {
+            error
+                .try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>()
+                .map(|error| error.number())
+        });
+        tracing::error!(error_kind=?e.as_database_error().map(|e|e.code()),mysql_number,"database operation failed");
         Self(
             StatusCode::INTERNAL_SERVER_ERROR,
             "服务暂时不可用，请稍后重试",
