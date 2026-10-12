@@ -183,7 +183,7 @@ async fn observe(tx: &mut Tx<'_>, account: Uuid, device: Uuid, q: &CycleRequest)
     if q.sequence <= old.get::<i64, _>("sequence") {
         return Ok(());
     }
-    let row=sqlx::query("SELECT a.cycle_id,a.startup_seconds,a.exit_seconds,a.startup_enabled,c.state,c.completed_at FROM guard_accounts a LEFT JOIN guard_cycles c ON c.id=a.cycle_id WHERE a.account_id=?").bind(account).fetch_one(&mut **tx).await?;
+    let row=sqlx::query("SELECT a.cycle_id,a.startup_seconds,a.exit_seconds,a.startup_enabled,c.state,c.started_at,c.completed_at FROM guard_accounts a LEFT JOIN guard_cycles c ON c.id=a.cycle_id WHERE a.account_id=?").bind(account).fetch_one(&mut **tx).await?;
     let mut cycle: Option<Uuid> = row.get("cycle_id");
     let completed: Option<DateTime<Utc>> = row.get("completed_at");
     let billing_at = Utc::now() - chrono::Duration::seconds(q.billing_age.min(86400) as i64);
@@ -209,6 +209,9 @@ async fn observe(tx: &mut Tx<'_>, account: Uuid, device: Uuid, q: &CycleRequest)
         && q.billing_paused == Some(true)
         && cycle.is_some()
         && q.cycle_id.as_deref() == cycle.map(|v| v.to_string()).as_deref()
+        && row
+            .get::<Option<DateTime<Utc>>, _>("started_at")
+            .is_some_and(|at| billing_at >= at)
     {
         complete_cycle(tx, cycle.unwrap()).await?;
     }

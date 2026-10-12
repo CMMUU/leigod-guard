@@ -139,6 +139,8 @@ try:
     time.sleep(2.1)
     newer = a.send('observe', game_generation=1)
     assert newer['cycle_id'] != old_cycle and newer['remaining_seconds'] >= 178
+    a.send('observe', billing_paused=True, billing_age=30, game_generation=1)
+    assert a.send('status')['state'] == 'running'
     a.send('complete', action_id=action, result='confirmed')
     assert a.send('status')['state'] == 'running'
     check('unknown outcome holds writes; duplicate completion cannot finish the next cycle')
@@ -160,6 +162,14 @@ try:
     a.send('policy', policy_revision=a.send('status')['policy_revision'], startup_seconds=240, exit_seconds=120)
     v = a.send('observe')
     assert v['startup_seconds'] == 240 and v['exit_seconds'] == 120
+    revision = v['policy_revision']
+    a.send('policy', policy_revision=revision, startup_seconds=240, exit_seconds=120, startup_enabled=False)
+    a.send('policy', status=409, policy_revision=revision, startup_enabled=True)
+    a.send('observe', phase='unknown')
+    v = a.send('observe')
+    assert not v['startup_enabled'] and v['remaining_seconds'] == 0
+    a.send('policy', policy_revision=v['policy_revision'], startup_seconds=240, exit_seconds=120, startup_enabled=True)
+    a.send('observe')
     a.send('observe', status=400, run_generation=0)
     # Observer failure with normal heartbeat is not absence.
     due(aid)
