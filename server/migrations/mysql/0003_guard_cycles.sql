@@ -1,6 +1,7 @@
 -- Additive v2 protocol. Existing grants remain on v1 until explicit consent.
 CREATE TABLE guard_accounts (
  account_id BINARY(16) PRIMARY KEY, cycle_id BINARY(16) NULL,
+ startup_enabled BOOLEAN NOT NULL DEFAULT TRUE,
  startup_seconds INT NOT NULL DEFAULT 180, exit_seconds INT NOT NULL DEFAULT 90,
  policy_revision BIGINT NOT NULL DEFAULT 1,
  FOREIGN KEY(account_id) REFERENCES remote_accounts(id) ON DELETE CASCADE

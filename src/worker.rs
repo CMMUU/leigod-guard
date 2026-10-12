@@ -103,7 +103,6 @@ enum PauseDecision {
 struct AutoPauseWatch {
     exit: PauseWatch,
     startup_pending: bool,
-    billing_pending: bool,
     startup_empty_since: Option<Instant>,
     startup_deferred_at: Option<Instant>,
     startup_grace_secs: u64,
@@ -119,7 +118,6 @@ impl Default for AutoPauseWatch {
         Self {
             exit: PauseWatch::default(),
             startup_pending: true,
-            billing_pending: false,
             startup_empty_since: None,
             startup_deferred_at: None,
             startup_grace_secs: crate::config::DEFAULT_STARTUP_GRACE_SECS,
@@ -135,7 +133,6 @@ impl Default for AutoPauseWatch {
 impl AutoPauseWatch {
     fn arm_billing(&mut self, generation: Option<u64>, grace: u64, valid: bool) {
         *self = Self::default();
-        self.billing_pending = true;
         self.observed_generation = generation;
         self.startup_grace_secs = grace;
         self.configure(true, true, valid);
@@ -148,7 +145,7 @@ impl AutoPauseWatch {
             self.exit.reset();
             self.next_retry = None;
             self.disable_startup();
-        } else if !startup_enabled && !self.billing_pending {
+        } else if !startup_enabled {
             self.disable_startup();
         }
     }
@@ -158,7 +155,6 @@ impl AutoPauseWatch {
             self.next_retry = None;
         }
         self.startup_pending = false;
-        self.billing_pending = false;
         self.startup_empty_since = None;
         self.startup_deferred_at = None;
     }
@@ -488,7 +484,7 @@ fn auto_pause_guard_with_observation(
     if !cfg.strategy.enabled {
         return Err(AutoPauseBlock::Disabled);
     }
-    if startup && !cfg.strategy.pause_on_startup && !pause_watch.billing_pending {
+    if startup && !cfg.strategy.pause_on_startup {
         return Err(AutoPauseBlock::StartupDisabled);
     }
     watch.ok_or(AutoPauseBlock::InvalidWatch)?;
@@ -2363,15 +2359,13 @@ mod billing_cycle_tests {
         );
     }
     #[test]
-    fn startup_opt_out_does_not_disable_new_billing_guard_but_global_opt_out_does() {
+    fn startup_and_global_opt_out_are_respected_after_billing_rearms() {
         let t = Instant::now();
         let mut watch = AutoPauseWatch::default();
         watch.arm_billing(None, 180, true);
         watch.configure(true, false, true);
-        assert!(matches!(
-            watch.observe(t, false, 90),
-            PauseDecision::StartupWaiting { .. }
-        ));
+        assert_eq!(watch.observe(t, false, 90), PauseDecision::Idle);
+        watch.arm_billing(None, 180, true);
         watch.configure(false, false, true);
         assert_eq!(
             watch.observe(t + Duration::from_secs(180), false, 90),

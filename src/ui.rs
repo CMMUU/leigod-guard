@@ -2621,7 +2621,7 @@ impl App {
             if theme::switch_row(
                 ui,
                 &mut c.strategy.pause_on_startup,
-                "启动时无游戏运行则暂停计时",
+                "开始计时后无游戏运行则暂停计时",
             )
             .changed()
             {

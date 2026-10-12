@@ -1434,6 +1434,7 @@ fn sync_cycle(
             run_generation: run,
             grant_revision: revision,
             startup_seconds: c.strategy.startup_grace_secs.min(3600) as u32,
+            startup_enabled: c.strategy.pause_on_startup,
             exit_seconds: c.strategy.grace_secs.min(3600) as u32,
             ..Default::default()
         };

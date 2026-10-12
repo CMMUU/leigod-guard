@@ -23,7 +23,7 @@ pub struct Runtime {
     pub sequence: i64,
     pub guard_active: bool,
     pub next_poll: Option<Instant>,
-    pub local_policy: Option<(u32, u32)>,
+    pub local_policy: Option<(u32, u32, bool)>,
 }
 
 pub fn required(shared: &Mutex<Shared>) -> bool {
@@ -61,6 +61,7 @@ pub fn frame(
             run_generation: c.run,
             grant_revision: c.revision,
             sequence: s.cycle.sequence,
+            policy_revision: s.cycle.view.policy_revision,
             cycle_id: s.cycle.view.cycle_id.clone(),
             phase: phase.into(),
             game_generation: o.generation,
@@ -194,6 +195,7 @@ fn step_inner(
     let desired = (
         config.strategy.startup_grace_secs.min(3600) as u32,
         config.strategy.grace_secs.min(3600) as u32,
+        config.strategy.pause_on_startup,
     );
     let changed = shared
         .lock()
@@ -203,8 +205,15 @@ fn step_inner(
         policy.op = "policy".into();
         policy.startup_seconds = desired.0;
         policy.exit_seconds = desired.1;
-        api.cycle(&c.binding, &policy)
-            .map_err(|_| "策略变更等待云端确认")?;
+        policy.startup_enabled = desired.2;
+        if api.cycle(&c.binding, &policy).is_err() {
+            let mut status = q.clone();
+            status.op = "status".into();
+            if let Ok(v) = api.cycle(&c.binding, &status) {
+                publish(shared, &c, v);
+            }
+            return Err("策略变更等待云端确认".into());
+        }
     }
     if let Ok(mut s) = shared.lock() {
         s.cycle.local_policy = Some(desired);
@@ -214,14 +223,15 @@ fn step_inner(
         .map_err(|_| "等待云端同步，自动暂停暂缓")?;
     q.cycle_id = v.cycle_id.clone();
     publish(shared, &c, v.clone());
-    if !changed && desired != (v.startup_seconds, v.exit_seconds) {
+    if !changed && desired != (v.startup_seconds, v.exit_seconds, v.startup_enabled) {
         if let Ok(mut local) = cfg.lock() {
             local.strategy.startup_grace_secs = v.startup_seconds.into();
             local.strategy.grace_secs = v.exit_seconds.into();
+            local.strategy.pause_on_startup = v.startup_enabled;
             local.save()?;
         }
         if let Ok(mut s) = shared.lock() {
-            s.cycle.local_policy = Some((v.startup_seconds, v.exit_seconds));
+            s.cycle.local_policy = Some((v.startup_seconds, v.exit_seconds, v.startup_enabled));
         }
     }
     let manual = {
@@ -244,6 +254,9 @@ fn step_inner(
     };
     if !manual && (!config.strategy.enabled || v.mode == "cafe" || v.state != "ready") {
         return Ok(());
+    }
+    if q.billing_age > 45 || q.billing_paused != Some(false) {
+        return Err("计时状态尚未确认，自动执行暂缓".into());
     }
     if q.cycle_id.is_none() {
         return Err("尚未确认计时状态，暂停暂缓".into());
@@ -366,6 +379,7 @@ fn verify(
         || config.selection_generation != expected.selection_generation
         || (!manual
             && (!config.strategy.enabled
+                || config.strategy.pause_on_startup != expected.strategy.pause_on_startup
                 || config.strategy.grace_secs != expected.strategy.grace_secs
                 || config.strategy.startup_grace_secs != expected.strategy.startup_grace_secs))
         || (kind == Provider::Etalien

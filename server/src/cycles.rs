@@ -88,7 +88,7 @@ pub async fn endpoint(
     let account: Uuid = grant.get("account_id");
     let credential_version: i64 = grant.get("credential_version");
     if q.op == "enable" && !sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM guard_observers WHERE device_id=? AND provider=? AND account_id=? AND enabled AND grant_revision=? AND run_generation=?)").bind(device).bind(&q.provider).bind(account).bind(q.grant_revision).bind(q.run_generation).fetch_one(&mut *tx).await? {
-        sqlx::query("INSERT INTO guard_accounts(account_id,startup_seconds,exit_seconds) VALUES(?,?,?) ON DUPLICATE KEY UPDATE account_id=guard_accounts.account_id").bind(account).bind(q.startup_seconds).bind(q.exit_seconds).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO guard_accounts(account_id,startup_seconds,exit_seconds,startup_enabled) VALUES(?,?,?,?) ON DUPLICATE KEY UPDATE account_id=guard_accounts.account_id").bind(account).bind(q.startup_seconds).bind(q.exit_seconds).bind(q.startup_enabled).execute(&mut *tx).await?;
         sqlx::query("INSERT INTO guard_observers(device_id,provider,account_id,grant_revision,run_generation) VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE account_id=VALUES(account_id),grant_revision=VALUES(grant_revision),run_generation=VALUES(run_generation),enabled=true,sequence=-1,phase='unknown',idle_until=NULL,cycle_id=NULL,seen_at=NULL").bind(device).bind(kind.as_str()).bind(account).bind(q.grant_revision).bind(q.run_generation).execute(&mut *tx).await?;
         storage::cancel(&mut tx, account).await?;
         invalidate(&mut tx, account).await?;
@@ -102,7 +102,15 @@ pub async fn endpoint(
         "enable" | "status" => {}
         "observe" => observe(&mut tx, account, device, &q).await?,
         "policy" => {
-            sqlx::query("UPDATE guard_accounts SET startup_seconds=?,exit_seconds=?,policy_revision=policy_revision+1 WHERE account_id=?").bind(q.startup_seconds).bind(q.exit_seconds).bind(account).execute(&mut *tx).await?;
+            let revision: i64 =
+                sqlx::query_scalar("SELECT policy_revision FROM guard_accounts WHERE account_id=?")
+                    .bind(account)
+                    .fetch_one(&mut *tx)
+                    .await?;
+            if q.policy_revision != revision {
+                return Err(conflict());
+            }
+            sqlx::query("UPDATE guard_accounts SET startup_seconds=?,exit_seconds=?,startup_enabled=?,policy_revision=policy_revision+1 WHERE account_id=?").bind(q.startup_seconds).bind(q.exit_seconds).bind(q.startup_enabled).bind(account).execute(&mut *tx).await?;
             sqlx::query("UPDATE guard_observers SET idle_until=NULL WHERE account_id=?")
                 .bind(account)
                 .execute(&mut *tx)
@@ -116,7 +124,15 @@ pub async fn endpoint(
             let previous:Option<Uuid>=sqlx::query_scalar("SELECT id FROM guard_actions WHERE account_id=? AND request_id=? AND device_id=? AND run_generation=? AND state='leased' AND lease_until>UTC_TIMESTAMP(6)+INTERVAL 10 SECOND").bind(account).bind(&q.request_id).bind(device).bind(q.run_generation).fetch_optional(&mut *tx).await?;
             if previous.is_some() {
                 action = previous;
-            } else if eligible(&mut tx, account, false, q.manual).await? {
+            } else if !sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(SELECT 1 FROM guard_actions WHERE account_id=? AND request_id=?)",
+            )
+            .bind(account)
+            .bind(&q.request_id)
+            .fetch_one(&mut *tx)
+            .await?
+                && eligible(&mut tx, account, false, q.manual).await?
+            {
                 let cycle = uuid(&q.cycle_id)?;
                 let revision:Option<i64>=sqlx::query_scalar("SELECT c.revision FROM guard_cycles c JOIN guard_accounts a ON a.cycle_id=c.id WHERE a.account_id=? AND c.id=? AND c.state='running'").bind(account).bind(cycle).fetch_optional(&mut *tx).await?;
                 if let Some(revision) = revision {
@@ -167,7 +183,7 @@ async fn observe(tx: &mut Tx<'_>, account: Uuid, device: Uuid, q: &CycleRequest)
     if q.sequence <= old.get::<i64, _>("sequence") {
         return Ok(());
     }
-    let row=sqlx::query("SELECT a.cycle_id,a.startup_seconds,a.exit_seconds,c.state,c.completed_at FROM guard_accounts a LEFT JOIN guard_cycles c ON c.id=a.cycle_id WHERE a.account_id=?").bind(account).fetch_one(&mut **tx).await?;
+    let row=sqlx::query("SELECT a.cycle_id,a.startup_seconds,a.exit_seconds,a.startup_enabled,c.state,c.completed_at FROM guard_accounts a LEFT JOIN guard_cycles c ON c.id=a.cycle_id WHERE a.account_id=?").bind(account).fetch_one(&mut **tx).await?;
     let mut cycle: Option<Uuid> = row.get("cycle_id");
     let completed: Option<DateTime<Utc>> = row.get("completed_at");
     let billing_at = Utc::now() - chrono::Duration::seconds(q.billing_age.min(86400) as i64);
@@ -213,7 +229,10 @@ async fn observe(tx: &mut Tx<'_>, account: Uuid, device: Uuid, q: &CycleRequest)
             && old.get::<String, _>("phase") != "unknown"
             && old.get::<bool, _>("activity"));
     let idle: Option<DateTime<Utc>> = old.get("idle_until");
-    let deadline = if phase == "absent" && cycle.is_some() {
+    let deadline = if phase == "absent"
+        && cycle.is_some()
+        && (activity || row.get::<bool, _>("startup_enabled"))
+    {
         if !changed && idle.is_some() {
             idle
         } else {
@@ -316,7 +335,7 @@ async fn eligible(tx: &mut Tx<'_>, account: Uuid, cloud: bool, manual: bool) -> 
     Ok(!busy && conditions(tx, account, cloud, manual).await?)
 }
 async fn view(tx: &mut Tx<'_>, account: Uuid) -> ApiResult<CycleView> {
-    let r=sqlx::query("SELECT a.cycle_id,a.policy_revision,a.startup_seconds,a.exit_seconds,c.revision,c.state FROM guard_accounts a LEFT JOIN guard_cycles c ON c.id=a.cycle_id WHERE a.account_id=?").bind(account).fetch_one(&mut **tx).await?;
+    let r=sqlx::query("SELECT a.cycle_id,a.policy_revision,a.startup_seconds,a.exit_seconds,a.startup_enabled,c.revision,c.state FROM guard_accounts a LEFT JOIN guard_cycles c ON c.id=a.cycle_id WHERE a.account_id=?").bind(account).fetch_one(&mut **tx).await?;
     let cafe: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM cafe_policies WHERE account_id=? AND enabled)",
     )
@@ -348,6 +367,7 @@ async fn view(tx: &mut Tx<'_>, account: Uuid) -> ApiResult<CycleView> {
         revision: r.get::<Option<i64>, _>("revision").unwrap_or(0),
         policy_revision: r.get("policy_revision"),
         startup_seconds: r.get::<i32, _>("startup_seconds") as u32,
+        startup_enabled: r.get("startup_enabled"),
         exit_seconds: r.get::<i32, _>("exit_seconds") as u32,
         mode: if cafe { "cafe" } else { "coordinated" }.into(),
         state: if ready { "ready".into() } else { state },

@@ -10,6 +10,8 @@ pub struct CycleRequest {
     #[serde(default)]
     pub sequence: i64,
     #[serde(default)]
+    pub policy_revision: i64,
+    #[serde(default)]
     pub cycle_id: Option<String>,
     #[serde(default)]
     pub action_id: Option<String>,
@@ -32,6 +34,8 @@ pub struct CycleRequest {
     #[serde(default)]
     pub startup_seconds: u32,
     #[serde(default)]
+    pub startup_enabled: bool,
+    #[serde(default)]
     pub exit_seconds: u32,
     #[serde(default)]
     pub manual: bool,
@@ -46,6 +50,8 @@ pub struct CycleView {
     pub revision: i64,
     pub policy_revision: i64,
     pub startup_seconds: u32,
+    #[serde(default)]
+    pub startup_enabled: bool,
     pub exit_seconds: u32,
     pub mode: String,
     pub state: String,

@@ -76,7 +76,7 @@ class Device:
     def send(self, op, status=200, **kw):
         self.seq += 1
         p = dict(op=op, provider='leigod', run_generation=self.run, grant_revision=self.grant,
-                 sequence=self.seq, cycle_id=self.cycle, startup_seconds=180, exit_seconds=90,
+                 sequence=self.seq, cycle_id=self.cycle, startup_seconds=180, exit_seconds=90, startup_enabled=True,
                  phase='absent', observer_age=0, executor_age=0, billing_paused=False, billing_age=0)
         p.update(kw)
         out = self.req('/device/cycle', p, status)
@@ -157,10 +157,34 @@ try:
     assert a.send('claim', request_id=secrets.token_hex(16))['action_id'] is None
     sql(f"UPDATE cafe_policies SET enabled=false WHERE account_id='{aid}';")
     check('cafe mode suppresses coordinated idle pause')
-    a.send('policy', startup_seconds=240, exit_seconds=120)
+    a.send('policy', policy_revision=a.send('status')['policy_revision'], startup_seconds=240, exit_seconds=120)
     v = a.send('observe')
     assert v['startup_seconds'] == 240 and v['exit_seconds'] == 120
     a.send('observe', status=400, run_generation=0)
+    # Observer failure with normal heartbeat is not absence.
+    due(aid)
+    sql(f"UPDATE guard_observers SET observed_at=UTC_TIMESTAMP(6)-INTERVAL 60 SECOND,executor_at=UTC_TIMESTAMP(6)-INTERVAL 65 SECOND WHERE account_id='{aid}';")
+    assert a.send('claim', request_id=secrets.token_hex(16))['action_id'] is None
+    time.sleep(6)
+    stats = lambda: json.load(urllib.request.urlopen('http://127.0.0.1:3091/'))[token]
+    assert stats()['pause_calls'] == 0
+    # Healthy observer, stalled executor: cloud can use the same account cycle.
+    due(aid)
+    sql(f"UPDATE guard_observers SET executor_at=UTC_TIMESTAMP(6)-INTERVAL 65 SECOND WHERE account_id='{aid}';")
+    for _ in range(30):
+        if sql(f"SELECT state FROM guard_cycles WHERE id='{a.cycle}';") == 'completed':
+            break
+        time.sleep(1)
+    assert sql(f"SELECT state FROM guard_cycles WHERE id='{a.cycle}';") == 'completed'
+    assert stats()['pause_calls'] == 1
+    check('stale observer cannot trigger; healthy observer with stalled executor delegates once')
+    # Restarting official billing after a completed cycle needs a new observation.
+    old = a.cycle
+    time.sleep(2.1)
+    a.send('observe', billing_paused=False)
+    assert a.cycle != old
+    assert a.send('status')['remaining_seconds'] >= 238
+
 finally:
     sql(f"UPDATE remote_service SET blocked=true,reason='cycle_fixture_cleanup';")
     uid = c.call('/me')['id']
