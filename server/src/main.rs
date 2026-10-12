@@ -68,6 +68,9 @@ impl IntoResponse for ApiError {
 }
 impl From<sqlx::Error> for ApiError {
     fn from(e: sqlx::Error) -> Self {
+        if let sqlx::Error::ColumnDecode { index, .. } = &e {
+            tracing::error!(column=%index,"database column decode failed");
+        }
         tracing::error!(error_kind=?e.as_database_error().map(|e|e.code()),"database operation failed");
         Self(
             StatusCode::INTERNAL_SERVER_ERROR,
