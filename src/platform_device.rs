@@ -949,7 +949,7 @@ fn token(
         }
     }
 }
-fn token_digest(token: &RemoteCredential) -> String {
+pub(crate) fn token_digest(token: &RemoteCredential) -> String {
     format!(
         "{:x}",
         Sha256::digest(serde_json::to_vec(token).unwrap_or_default())
@@ -1429,6 +1429,7 @@ fn sync_cycle(
                     run,
                     revision,
                     enrolled: true,
+                    token_digest: saved[kind].remote_token_digest.clone(),
                 });
                 s.cycle.view = v;
                 s.cycle.sequence = 0;

@@ -58,7 +58,7 @@ try:
     env.update(REMOTE_EXECUTION='true', REMOTE_KEY_FILE=str(key),
         LEIGOD_TEST_ORIGIN='http://127.0.0.1:3091', ETALIEN_TEST_ORIGIN='http://127.0.0.1:3093')
     server = start('remote')
-    for name in ('guard_selection','etalien','cafe'):
+    for name in ('guard_selection','etalien','cafe','cycles'):
         test(name)
     test('remote', dict(TEST_SERVER_PID=str(server.pid), TEST_SERVER_BINARY=binary,
                        TEST_RESTART_LOG=str(logs/'restart.log')))

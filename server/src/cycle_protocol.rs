@@ -18,6 +18,8 @@ pub struct CycleRequest {
     #[serde(default)]
     pub phase: String,
     #[serde(default)]
+    pub game_generation: u64,
+    #[serde(default)]
     pub observer_age: u32,
     #[serde(default)]
     pub executor_age: u32,

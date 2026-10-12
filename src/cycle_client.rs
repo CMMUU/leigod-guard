@@ -11,6 +11,7 @@ pub struct Context {
     pub run: i64,
     pub revision: i64,
     pub enrolled: bool,
+    pub token_digest: String,
 }
 
 #[derive(Default)]
@@ -21,6 +22,7 @@ pub struct Runtime {
     pub executor_at: Option<Instant>,
     pub sequence: i64,
     pub next_poll: Option<Instant>,
+    pub local_policy: Option<(u32, u32)>,
 }
 
 pub fn required(shared: &Mutex<Shared>) -> bool {
@@ -56,6 +58,7 @@ pub fn frame(
             sequence: s.cycle.sequence,
             cycle_id: s.cycle.view.cycle_id.clone(),
             phase: phase.into(),
+            game_generation: o.generation,
             observer_age: if o.phase == Phase::Unknown {
                 86400
             } else {
@@ -141,6 +144,22 @@ fn step_inner(
         .token
         .clone()
         .ok_or("请登录当前加速器账号")?;
+    let credential = crate::platform_api::RemoteCredential {
+        account_token: token.clone(),
+        device_id: if kind == Provider::Etalien {
+            config.etalien.device_id.clone()
+        } else {
+            String::new()
+        },
+        paused_state: if kind == Provider::Etalien {
+            config.etalien.paused_state.unwrap_or(0)
+        } else {
+            0
+        },
+    };
+    if crate::platform_device::token_digest(&credential) != c.token_digest {
+        return Err("账号已变化，等待云端重新授权确认".into());
+    }
     let poll = shared
         .lock()
         .map_err(|_| "无法读取周期")?
@@ -160,11 +179,39 @@ fn step_inner(
             .map_or(86400, |at| at.elapsed().as_secs().min(86400) as u32);
         q.billing_paused = paused(&s, &config, kind);
     }
+    let desired = (
+        config.strategy.startup_grace_secs.min(3600) as u32,
+        config.strategy.grace_secs.min(3600) as u32,
+    );
+    let changed = shared
+        .lock()
+        .is_ok_and(|s| s.cycle.local_policy.is_some_and(|old| old != desired));
+    if changed {
+        let mut policy = q.clone();
+        policy.op = "policy".into();
+        policy.startup_seconds = desired.0;
+        policy.exit_seconds = desired.1;
+        api.cycle(&c.binding, &policy)
+            .map_err(|_| "策略变更等待云端确认")?;
+    }
+    if let Ok(mut s) = shared.lock() {
+        s.cycle.local_policy = Some(desired);
+    }
     let v = api
         .cycle(&c.binding, &q)
         .map_err(|_| "等待云端同步，自动暂停暂缓")?;
     q.cycle_id = v.cycle_id.clone();
     publish(shared, &c, v.clone());
+    if !changed && desired != (v.startup_seconds, v.exit_seconds) {
+        if let Ok(mut local) = cfg.lock() {
+            local.strategy.startup_grace_secs = v.startup_seconds.into();
+            local.strategy.grace_secs = v.exit_seconds.into();
+            local.save()?;
+        }
+        if let Ok(mut s) = shared.lock() {
+            s.cycle.local_policy = Some((v.startup_seconds, v.exit_seconds));
+        }
+    }
     let manual = {
         let mut s = shared.lock().map_err(|_| "无法读取操作")?;
         s.running_games = s
@@ -189,7 +236,15 @@ fn step_inner(
     if q.cycle_id.is_none() {
         return Err("尚未确认计时状态，暂停暂缓".into());
     }
-    verify(shared, cfg, &config, kind, &token, manual)?;
+    verify(
+        shared,
+        cfg,
+        &config,
+        kind,
+        &token,
+        manual,
+        q.game_generation,
+    )?;
     q.op = "claim".into();
     q.manual = manual;
     q.request_id = random_id()?;
@@ -209,11 +264,22 @@ fn step_inner(
     api.cycle(&c.binding, &dispatch)
         .map_err(|_| "执行许可复核未确认，等待结果核对")?;
     let dispatched = Instant::now();
+    let mut attempted = false;
     let result = if kind == Provider::Leigod {
-        verify(shared, cfg, &config, kind, &token, manual).and_then(|_| {
+        verify(
+            shared,
+            cfg,
+            &config,
+            kind,
+            &token,
+            manual,
+            q.game_generation,
+        )
+        .and_then(|_| {
             if dispatched.elapsed() > Duration::from_secs(5) {
                 return Err("许可已过期".into());
             }
+            attempted = true;
             crate::leigod_api::pause(&token)
                 .map(|_| ())
                 .map_err(|e| e.to_string())
@@ -225,10 +291,19 @@ fn step_inner(
             config.etalien.paused_state.ok_or("外星仔尚未校准")?,
             Duration::from_secs(18),
             || {
-                verify(shared, cfg, &config, kind, &token, manual)?;
+                verify(
+                    shared,
+                    cfg,
+                    &config,
+                    kind,
+                    &token,
+                    manual,
+                    q.game_generation,
+                )?;
                 if dispatched.elapsed() > Duration::from_secs(10) {
                     return Err("执行许可已过期".into());
                 }
+                attempted = true;
                 Ok(())
             },
         )
@@ -242,6 +317,8 @@ fn step_inner(
     });
     q.result = if confirmed {
         "confirmed"
+    } else if !attempted {
+        "cancelled"
     } else if result
         .as_ref()
         .is_err_and(|e| e.contains("400855") || e.contains("体验时间"))
@@ -270,6 +347,7 @@ fn verify(
     kind: Provider,
     token: &str,
     manual: bool,
+    generation: u64,
 ) -> Result<(), String> {
     let config = cfg.lock().map_err(|_| "策略不可用")?.clone();
     if !config.is_active(kind)
@@ -285,7 +363,8 @@ fn verify(
         }
         s.game_monitor.clone().ok_or("游戏观察不可用")?
     };
-    if !manual && monitor.observe_now(&config)?.phase != Phase::Absent {
+    let observation = monitor.observe_now(&config)?;
+    if !manual && (observation.phase != Phase::Absent || observation.generation != generation) {
         return Err("发现游戏或准备活动，取消本次自动暂停".into());
     }
     Ok(())

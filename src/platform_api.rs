@@ -134,6 +134,12 @@ pub enum Provider {
 }
 impl Provider {
     pub const ALL: [Self; 2] = [Self::Leigod, Self::Etalien];
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Leigod => "leigod",
+            Self::Etalien => "etalien",
+        }
+    }
     pub fn index(self) -> usize {
         match self {
             Self::Leigod => 0,

@@ -59,6 +59,7 @@ impl BillingWatch {
         };
         if paused == Some(false) && self.last != Some(false) {
             *watch = AutoPauseWatch::default();
+            watch.billing_pending = true;
             watch.observed_generation = state.game_monitor.as_ref().map(|m| m.latest().generation);
             watch.configure(true, true, checked_watch(&c).is_some());
             watch.startup_grace_secs = c.strategy.startup_grace_secs;
@@ -102,6 +103,7 @@ enum PauseDecision {
 struct AutoPauseWatch {
     exit: PauseWatch,
     startup_pending: bool,
+    billing_pending: bool,
     startup_empty_since: Option<Instant>,
     startup_deferred_at: Option<Instant>,
     startup_grace_secs: u64,
@@ -117,6 +119,7 @@ impl Default for AutoPauseWatch {
         Self {
             exit: PauseWatch::default(),
             startup_pending: true,
+            billing_pending: false,
             startup_empty_since: None,
             startup_deferred_at: None,
             startup_grace_secs: crate::config::DEFAULT_STARTUP_GRACE_SECS,
@@ -137,7 +140,7 @@ impl AutoPauseWatch {
             self.exit.reset();
             self.next_retry = None;
             self.disable_startup();
-        } else if !startup_enabled {
+        } else if !startup_enabled && !self.billing_pending {
             self.disable_startup();
         }
     }
@@ -147,6 +150,7 @@ impl AutoPauseWatch {
             self.next_retry = None;
         }
         self.startup_pending = false;
+        self.billing_pending = false;
         self.startup_empty_since = None;
         self.startup_deferred_at = None;
     }
@@ -476,7 +480,7 @@ fn auto_pause_guard_with_observation(
     if !cfg.strategy.enabled {
         return Err(AutoPauseBlock::Disabled);
     }
-    if startup && !cfg.strategy.pause_on_startup {
+    if startup && !cfg.strategy.pause_on_startup && !pause_watch.billing_pending {
         return Err(AutoPauseBlock::StartupDisabled);
     }
     watch.ok_or(AutoPauseBlock::InvalidWatch)?;
@@ -724,7 +728,7 @@ pub fn run(shared: Arc<Mutex<Shared>>, cfg: Arc<Mutex<Config>>) {
         } else {
             false
         };
-        if configured && !was_configured {
+        if configured && !was_configured && !billing_running {
             pause_watch = AutoPauseWatch::default();
         }
         was_configured = configured;

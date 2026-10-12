@@ -4,6 +4,10 @@ use crate::*;
 use sqlx::{MySql, Transaction};
 type Tx<'a> = Transaction<'a, MySql>;
 
+pub async fn listing(s: &AppState, user: &SessionUser) -> ApiResult<Vec<Value>> {
+    storage::json_rows(sqlx::query("SELECT d.id AS device_id,d.name AS device_name,r.provider AS provider,r.label AS label,c.id AS id,c.state AS state,c.started_at AS started_at,c.completed_at AS completed_at,o.phase AS phase,o.observed_at AS observed_at,o.executor_at AS executor_at,o.idle_until AS deadline,CASE WHEN p.enabled THEN 'cafe' ELSE 'coordinated' END AS mode,CASE WHEN o.observed_at>UTC_TIMESTAMP(6)-INTERVAL 22 SECOND AND o.phase<>'unknown' THEN 'healthy' ELSE 'unknown' END AS observer_health,CASE WHEN o.executor_at>UTC_TIMESTAMP(6)-INTERVAL 60 SECOND THEN 'healthy' ELSE 'stalled' END AS executor_health,x.state AS action_state,a.startup_seconds AS startup_seconds,a.exit_seconds AS exit_seconds,a.policy_revision AS policy_revision FROM guard_observers o JOIN devices d ON d.id=o.device_id JOIN remote_accounts r ON r.id=o.account_id JOIN guard_accounts a ON a.account_id=r.id LEFT JOIN guard_cycles c ON c.id=a.cycle_id LEFT JOIN cafe_policies p ON p.account_id=r.id LEFT JOIN guard_actions x ON x.id=(SELECT y.id FROM guard_actions y WHERE y.account_id=r.id ORDER BY y.created_at DESC LIMIT 1) WHERE o.enabled AND (? OR r.user_id=?) ORDER BY d.name LIMIT 500").bind(user.role=="admin").bind(user.id).fetch_all(&s.db).await?)
+}
+
 fn conflict() -> ApiError {
     ApiError(StatusCode::CONFLICT, "周期或授权已变化，请重新同步")
 }
@@ -51,10 +55,39 @@ pub async fn endpoint(
     }
     auth::throttle(&s, format!("cycle:{device}"), 120, 60)?;
     let mut tx = storage::begin(&s.db).await?;
+    if q.op == "complete" {
+        let id = uuid(&q.action_id)?;
+        let r=sqlx::query("SELECT account_id,cycle_id,state FROM guard_actions WHERE id=? AND device_id=? AND run_generation=?").bind(id).bind(device).bind(q.run_generation).fetch_optional(&mut *tx).await?.ok_or_else(conflict)?;
+        let account: Uuid = r.get("account_id");
+        let state: String = r.get("state");
+        if matches!(state.as_str(), "leased" | "sent" | "unknown" | "restricted") {
+            let result = match q.result.as_str() {
+                "confirmed" => "confirmed",
+                "cancelled" => "cancelled",
+                "restricted" => "restricted",
+                _ => "unknown",
+            };
+            sqlx::query(
+                "UPDATE guard_actions SET state=?,result=?,updated_at=UTC_TIMESTAMP(6) WHERE id=?",
+            )
+            .bind(result)
+            .bind(result)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+            if result == "confirmed" {
+                complete_cycle(&mut tx, r.get("cycle_id")).await?;
+            }
+        }
+        let response = view(&mut tx, account).await?;
+        tx.commit().await?;
+        return Ok(Json(response));
+    }
+
     let grant=sqlx::query("SELECT g.account_id,a.credential_version FROM remote_grants g JOIN devices d ON d.id=g.device_id JOIN remote_accounts a ON a.id=g.account_id WHERE g.device_id=? AND g.provider=? AND g.enabled AND g.revision=? AND g.run_generation=? AND d.run_generation=? AND d.guard_provider=g.provider AND NOT d.revoked AND a.credential_state='valid'").bind(device).bind(kind.as_str()).bind(q.grant_revision).bind(q.run_generation).bind(q.run_generation).fetch_optional(&mut *tx).await?.ok_or_else(conflict)?;
     let account: Uuid = grant.get("account_id");
     let credential_version: i64 = grant.get("credential_version");
-    if q.op == "enable" {
+    if q.op == "enable" && !sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM guard_observers WHERE device_id=? AND provider=? AND account_id=? AND enabled AND grant_revision=? AND run_generation=?)").bind(device).bind(&q.provider).bind(account).bind(q.grant_revision).bind(q.run_generation).fetch_one(&mut *tx).await? {
         sqlx::query("INSERT INTO guard_accounts(account_id,startup_seconds,exit_seconds) VALUES(?,?,?) ON DUPLICATE KEY UPDATE account_id=guard_accounts.account_id").bind(account).bind(q.startup_seconds).bind(q.exit_seconds).execute(&mut *tx).await?;
         sqlx::query("INSERT INTO guard_observers(device_id,provider,account_id,grant_revision,run_generation) VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE account_id=VALUES(account_id),grant_revision=VALUES(grant_revision),run_generation=VALUES(run_generation),enabled=true,sequence=-1,phase='unknown',idle_until=NULL,cycle_id=NULL,seen_at=NULL").bind(device).bind(kind.as_str()).bind(account).bind(q.grant_revision).bind(q.run_generation).execute(&mut *tx).await?;
         storage::cancel(&mut tx, account).await?;
@@ -88,40 +121,23 @@ pub async fn endpoint(
                 let revision:Option<i64>=sqlx::query_scalar("SELECT c.revision FROM guard_cycles c JOIN guard_accounts a ON a.cycle_id=c.id WHERE a.account_id=? AND c.id=? AND c.state='running'").bind(account).bind(cycle).fetch_optional(&mut *tx).await?;
                 if let Some(revision) = revision {
                     let id = Uuid::new_v4();
-                    sqlx::query("INSERT INTO guard_actions(id,account_id,cycle_id,device_id,run_generation,credential_version,cycle_revision,request_id,manual,lease_until) VALUES(?,?,?,?,?,?,?,?,?,UTC_TIMESTAMP(6)+INTERVAL 45 SECOND)").bind(id).bind(account).bind(cycle).bind(device).bind(q.run_generation).bind(credential_version).bind(revision).bind(&q.request_id).bind(q.manual).execute(&mut *tx).await?;
+                    sqlx::query("INSERT INTO guard_actions(id,account_id,cycle_id,device_id,run_generation,credential_version,cycle_revision,request_id,is_manual,lease_until) VALUES(?,?,?,?,?,?,?,?,?,UTC_TIMESTAMP(6)+INTERVAL 45 SECOND)").bind(id).bind(account).bind(cycle).bind(device).bind(q.run_generation).bind(credential_version).bind(revision).bind(&q.request_id).bind(q.manual).execute(&mut *tx).await?;
                     action = Some(id);
                 }
             }
         }
         "dispatch" => {
             let id = uuid(&q.action_id)?;
-            let r=sqlx::query("SELECT manual,cycle_id,cycle_revision,credential_version FROM guard_actions WHERE id=? AND account_id=? AND device_id=? AND run_generation=? AND state='leased' AND lease_until>UTC_TIMESTAMP(6)+INTERVAL 10 SECOND").bind(id).bind(account).bind(device).bind(q.run_generation).fetch_optional(&mut *tx).await?.ok_or_else(conflict)?;
+            let r=sqlx::query("SELECT is_manual,cycle_id,cycle_revision,credential_version FROM guard_actions WHERE id=? AND account_id=? AND device_id=? AND run_generation=? AND state='leased' AND lease_until>UTC_TIMESTAMP(6)+INTERVAL 10 SECOND").bind(id).bind(account).bind(device).bind(q.run_generation).fetch_optional(&mut *tx).await?.ok_or_else(conflict)?;
             let still:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM guard_accounts a JOIN guard_cycles c ON c.id=a.cycle_id WHERE a.account_id=? AND c.id=? AND c.revision=? AND c.state='running')").bind(account).bind(r.get::<Uuid,_>("cycle_id")).bind(r.get::<i64,_>("cycle_revision")).fetch_one(&mut *tx).await?;
             if !still
                 || r.get::<i64, _>("credential_version") != credential_version
-                || !conditions(&mut tx, account, false, r.get("manual")).await?
+                || !conditions(&mut tx, account, false, r.get("is_manual")).await?
             {
                 return Err(conflict());
             }
             sqlx::query("UPDATE guard_actions SET state='sent',result='awaiting_confirmation',updated_at=UTC_TIMESTAMP(6) WHERE id=?").bind(id).execute(&mut *tx).await?;
             action = Some(id);
-        }
-        "complete" => {
-            let id = uuid(&q.action_id)?;
-            let r=sqlx::query("SELECT cycle_id,state FROM guard_actions WHERE id=? AND account_id=? AND device_id=? AND run_generation=?").bind(id).bind(account).bind(device).bind(q.run_generation).fetch_optional(&mut *tx).await?.ok_or_else(conflict)?;
-            let state: String = r.get("state");
-            if matches!(state.as_str(), "leased" | "sent" | "unknown") {
-                let result = match q.result.as_str() {
-                    "confirmed" => "confirmed",
-                    "cancelled" if state == "leased" => "cancelled",
-                    "restricted" => "restricted",
-                    _ => "unknown",
-                };
-                sqlx::query("UPDATE guard_actions SET state=?,result=?,updated_at=UTC_TIMESTAMP(6) WHERE id=?").bind(result).bind(result).bind(id).execute(&mut *tx).await?;
-                if result == "confirmed" {
-                    complete_cycle(&mut tx, r.get("cycle_id")).await?;
-                }
-            }
         }
         _ => return Err(ApiError(StatusCode::BAD_REQUEST, "未知周期操作")),
     }
@@ -137,6 +153,7 @@ pub async fn endpoint(
 async fn complete_cycle(tx: &mut Tx<'_>, cycle: Uuid) -> ApiResult<()> {
     sqlx::query("UPDATE guard_cycles SET state='completed',revision=revision+1,completed_at=UTC_TIMESTAMP(6) WHERE id=? AND state='running'").bind(cycle).execute(&mut **tx).await?;
     sqlx::query("UPDATE guard_actions SET state='cancelled',result='cycle_completed' WHERE cycle_id=? AND state='leased'").bind(cycle).execute(&mut **tx).await?;
+    sqlx::query("UPDATE guard_actions SET state='confirmed',result='cycle_confirmed',updated_at=UTC_TIMESTAMP(6) WHERE cycle_id=? AND state IN ('sent','unknown','restricted')").bind(cycle).execute(&mut **tx).await?;
     Ok(())
 }
 async fn observe(tx: &mut Tx<'_>, account: Uuid, device: Uuid, q: &CycleRequest) -> ApiResult<()> {
@@ -146,7 +163,7 @@ async fn observe(tx: &mut Tx<'_>, account: Uuid, device: Uuid, q: &CycleRequest)
     ) {
         return Err(conflict());
     }
-    let old=sqlx::query("SELECT sequence,phase,cycle_id,activity,idle_until FROM guard_observers WHERE device_id=? AND provider=?").bind(device).bind(&q.provider).fetch_one(&mut **tx).await?;
+    let old=sqlx::query("SELECT sequence,phase,cycle_id,activity,idle_until,game_generation FROM guard_observers WHERE device_id=? AND provider=?").bind(device).bind(&q.provider).fetch_one(&mut **tx).await?;
     if q.sequence <= old.get::<i64, _>("sequence") {
         return Ok(());
     }
@@ -183,8 +200,9 @@ async fn observe(tx: &mut Tx<'_>, account: Uuid, device: Uuid, q: &CycleRequest)
     } else {
         "unknown"
     };
-    let changed =
-        old.get::<String, _>("phase") != phase || old.get::<Option<Uuid>, _>("cycle_id") != cycle;
+    let changed = old.get::<u64, _>("game_generation") != q.game_generation
+        || old.get::<String, _>("phase") != phase
+        || old.get::<Option<Uuid>, _>("cycle_id") != cycle;
     if changed {
         invalidate(tx, account).await?;
     }
@@ -208,7 +226,7 @@ async fn observe(tx: &mut Tx<'_>, account: Uuid, device: Uuid, q: &CycleRequest)
     } else {
         None
     };
-    sqlx::query("UPDATE guard_observers SET sequence=?,phase=?,cycle_id=?,activity=?,observed_at=UTC_TIMESTAMP(6)-INTERVAL ? SECOND,executor_at=UTC_TIMESTAMP(6)-INTERVAL ? SECOND,seen_at=UTC_TIMESTAMP(6),idle_until=?,prepare_until=UTC_TIMESTAMP(6)+INTERVAL ? SECOND,billing_at=CASE WHEN ? THEN ? ELSE billing_at END WHERE device_id=? AND provider=?").bind(q.sequence).bind(phase).bind(cycle).bind(activity).bind(q.observer_age.min(86400)).bind(q.executor_age.min(86400)).bind(deadline).bind(q.prepare_seconds).bind(billing_fresh).bind(billing_at).bind(device).bind(&q.provider).execute(&mut **tx).await?;
+    sqlx::query("UPDATE guard_observers SET game_generation=?,sequence=?,phase=?,cycle_id=?,activity=?,observed_at=UTC_TIMESTAMP(6)-INTERVAL ? SECOND,executor_at=UTC_TIMESTAMP(6)-INTERVAL ? SECOND,seen_at=UTC_TIMESTAMP(6),idle_until=?,prepare_until=UTC_TIMESTAMP(6)+INTERVAL ? SECOND,billing_at=CASE WHEN ? THEN ? ELSE billing_at END WHERE device_id=? AND provider=?").bind(q.game_generation).bind(q.sequence).bind(phase).bind(cycle).bind(activity).bind(q.observer_age.min(86400)).bind(q.executor_age.min(86400)).bind(deadline).bind(q.prepare_seconds).bind(billing_fresh).bind(billing_at).bind(device).bind(&q.provider).execute(&mut **tx).await?;
     Ok(())
 }
 
@@ -226,7 +244,7 @@ async fn conditions(tx: &mut Tx<'_>, account: Uuid, cloud: bool, manual: bool) -
     if cafe && !manual {
         return Ok(false);
     }
-    let rows=sqlx::query("SELECT g.armed_at,g.last_seen,g.prepare_until,o.enabled,o.grant_revision,g.revision,o.run_generation,g.run_generation AS grant_run,o.phase,o.observed_at,o.executor_at,o.idle_until,o.cycle_id,a.cycle_id AS current_cycle FROM remote_grants g JOIN guard_accounts a ON a.account_id=g.account_id LEFT JOIN guard_observers o ON o.device_id=g.device_id AND o.provider=g.provider AND o.account_id=g.account_id WHERE g.account_id=? AND g.enabled").bind(account).fetch_all(&mut **tx).await?;
+    let rows=sqlx::query("SELECT g.armed_at,GREATEST(g.last_seen,COALESCE(o.seen_at,g.last_seen)) AS last_seen,GREATEST(g.prepare_until,COALESCE(o.prepare_until,g.prepare_until)) AS prepare_until,o.enabled,o.grant_revision,g.revision,o.run_generation,g.run_generation AS grant_run,o.phase,o.observed_at,o.executor_at,o.idle_until,o.cycle_id,a.cycle_id AS current_cycle FROM remote_grants g JOIN guard_accounts a ON a.account_id=g.account_id LEFT JOIN guard_observers o ON o.device_id=g.device_id AND o.provider=g.provider AND o.account_id=g.account_id WHERE g.account_id=? AND g.enabled").bind(account).fetch_all(&mut **tx).await?;
     if rows.is_empty() {
         return Ok(false);
     }
@@ -247,6 +265,17 @@ async fn conditions(tx: &mut Tx<'_>, account: Uuid, cloud: bool, manual: bool) -
         }
         if r.get::<Option<DateTime<Utc>>, _>("prepare_until")
             .is_some_and(|t| t > now)
+        {
+            return Ok(false);
+        }
+        let fresh = r
+            .get::<Option<DateTime<Utc>>, _>("observed_at")
+            .is_some_and(|t| t + chrono::Duration::seconds(22) > now);
+        if fresh
+            && matches!(
+                r.get::<Option<String>, _>("phase").as_deref(),
+                Some("running" | "launching")
+            )
         {
             return Ok(false);
         }
@@ -327,6 +356,9 @@ async fn view(tx: &mut Tx<'_>, account: Uuid) -> ApiResult<CycleView> {
 
 /// Called after the existing ingress/cohort health check. Two shared slots bound HTTP.
 pub async fn tick(s: &AppState) -> ApiResult<()> {
+    sqlx::query("DELETE FROM guard_actions WHERE state IN ('confirmed','cancelled') AND updated_at<UTC_TIMESTAMP(6)-INTERVAL 30 DAY").execute(&s.db).await?;
+    sqlx::query("DELETE c FROM guard_cycles c LEFT JOIN guard_accounts a ON a.cycle_id=c.id WHERE a.account_id IS NULL AND c.completed_at<UTC_TIMESTAMP(6)-INTERVAL 30 DAY AND NOT EXISTS(SELECT 1 FROM guard_actions x WHERE x.cycle_id=c.id)").execute(&s.db).await?;
+
     let accounts:Vec<Uuid>=sqlx::query_scalar("SELECT a.account_id FROM guard_accounts a JOIN remote_accounts r ON r.id=a.account_id WHERE r.credential_state='valid' AND EXISTS(SELECT 1 FROM guard_observers o WHERE o.account_id=a.account_id AND o.enabled) ORDER BY r.updated_at LIMIT 100").fetch_all(&s.db).await?;
     for account in accounts {
         let Ok(slot) = s.remote_slots.clone().try_acquire_owned() else {
