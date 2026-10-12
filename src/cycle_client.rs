@@ -21,6 +21,7 @@ pub struct Runtime {
     pub view: CycleView,
     pub executor_at: Option<Instant>,
     pub sequence: i64,
+    pub guard_active: bool,
     pub next_poll: Option<Instant>,
     pub local_policy: Option<(u32, u32)>,
 }
@@ -41,7 +42,11 @@ pub fn frame(
     }
     s.cycle.sequence = s.cycle.sequence.saturating_add(1);
     let o = s.game_monitor.as_ref()?.latest();
-    let phase = match o.phase {
+    let phase = match if s.cycle.guard_active {
+        o.phase
+    } else {
+        Phase::Unknown
+    } {
         Phase::Running => "running",
         Phase::Launching => "launching",
         Phase::Absent => "absent",
@@ -136,7 +141,10 @@ fn step_inner(
     let config = cfg.lock().map_err(|_| "无法读取守护策略")?.clone();
     let _permit = config.permit(kind).ok_or("等待守护对象切换确认")?;
     let api = Api::new().map_err(|_| "等待云端连接")?;
-    let (c, mut q) = frame(shared, kind, true).ok_or("云端周期协同等待授权确认")?;
+    if let Ok(mut s) = shared.lock() {
+        s.cycle.guard_active = config.strategy.enabled;
+    }
+    let (c, _) = frame(shared, kind, true).ok_or("云端周期协同等待授权确认")?;
     flush(kind, &api, &c)?;
     let token = shared
         .lock()
@@ -171,6 +179,10 @@ fn step_inner(
             s.cycle.next_poll = Some(Instant::now() + Duration::from_secs(30));
         }
         refresh(shared, &config, kind, &token);
+    }
+    let (latest, mut q) = frame(shared, kind, true).ok_or("等待观察恢复")?;
+    if latest.run != c.run || latest.revision != c.revision {
+        return Err("授权已变化，重新同步".into());
     }
     {
         let s = shared.lock().map_err(|_| "无法读取计时观察")?;
@@ -228,7 +240,7 @@ fn step_inner(
                 String::new()
             }
         ));
-        s.manual_cmd.take().is_some()
+        matches!(s.manual_cmd.take(), Some(crate::shared::ManualCmd::Pause))
     };
     if !manual && (!config.strategy.enabled || v.mode == "cafe" || v.state != "ready") {
         return Ok(());
@@ -352,7 +364,15 @@ fn verify(
     let config = cfg.lock().map_err(|_| "策略不可用")?.clone();
     if !config.is_active(kind)
         || config.selection_generation != expected.selection_generation
-        || (!manual && !config.strategy.enabled)
+        || (!manual
+            && (!config.strategy.enabled
+                || config.strategy.grace_secs != expected.strategy.grace_secs
+                || config.strategy.startup_grace_secs != expected.strategy.startup_grace_secs))
+        || (kind == Provider::Etalien
+            && (!config.etalien.ready()
+                || config.etalien.device_id != expected.etalien.device_id
+                || config.etalien.paused_state != expected.etalien.paused_state
+                || config.etalien.token_enc != expected.etalien.token_enc))
     {
         return Err("守护对象或策略已变化".into());
     }

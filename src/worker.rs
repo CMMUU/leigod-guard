@@ -58,11 +58,11 @@ impl BillingWatch {
             None
         };
         if paused == Some(false) && self.last != Some(false) {
-            *watch = AutoPauseWatch::default();
-            watch.billing_pending = true;
-            watch.observed_generation = state.game_monitor.as_ref().map(|m| m.latest().generation);
-            watch.configure(true, true, checked_watch(&c).is_some());
-            watch.startup_grace_secs = c.strategy.startup_grace_secs;
+            watch.arm_billing(
+                state.game_monitor.as_ref().map(|m| m.latest().generation),
+                c.strategy.startup_grace_secs,
+                checked_watch(&c).is_some(),
+            );
             crate::ui::dbglog("[billing] running observed; new startup grace armed");
         }
         if paused == Some(true) {
@@ -133,6 +133,14 @@ impl Default for AutoPauseWatch {
 }
 
 impl AutoPauseWatch {
+    fn arm_billing(&mut self, generation: Option<u64>, grace: u64, valid: bool) {
+        *self = Self::default();
+        self.billing_pending = true;
+        self.observed_generation = generation;
+        self.startup_grace_secs = grace;
+        self.configure(true, true, valid);
+    }
+
     fn configure(&mut self, enabled: bool, startup_enabled: bool, valid_watch: bool) {
         self.active = enabled && valid_watch;
         if !self.active {
@@ -2289,5 +2297,85 @@ mod tests {
         watch.pause_succeeded();
         assert!(!watch.startup_status(now + Duration::from_secs(181)).pending);
         assert!(watch.startup_deferred_at.is_none());
+    }
+}
+
+#[cfg(test)]
+mod billing_cycle_tests {
+    use super::*;
+    #[test]
+    fn a_new_billing_run_rearms_after_completed_pause_and_ignores_old_game_activity() {
+        let t = Instant::now();
+        let mut watch = AutoPauseWatch::default();
+        watch.configure(true, true, true);
+        watch.observe(t, true, 90);
+        watch.pause_succeeded();
+        assert_eq!(watch.observe(t, false, 90), PauseDecision::Idle);
+        watch.arm_billing(Some(7), 180, true);
+        // The process tracker may remember a game from yesterday; this is a new billing cycle.
+        let mut observation = Observation::unknown(t);
+        observation.phase = Phase::Absent;
+        observation.generation = 7;
+        observation.activity_seen = true;
+        assert!(matches!(
+            watch.observe_game(t, &observation, 90),
+            PauseDecision::StartupWaiting {
+                remaining_secs: 180,
+                ..
+            }
+        ));
+        assert!(matches!(
+            watch.observe_game(t + Duration::from_secs(179), &observation, 90),
+            PauseDecision::StartupWaiting {
+                remaining_secs: 1,
+                ..
+            }
+        ));
+        assert_eq!(
+            watch.observe_game(t + Duration::from_secs(180), &observation, 90),
+            PauseDecision::StartupPause
+        );
+    }
+    #[test]
+    fn billing_run_game_start_at_deadline_cancels_pause_and_keeps_exit_grace() {
+        let t = Instant::now();
+        let mut watch = AutoPauseWatch::default();
+        watch.arm_billing(Some(1), 180, true);
+        let mut observation = Observation::unknown(t);
+        observation.phase = Phase::Absent;
+        observation.generation = 1;
+        watch.observe_game(t, &observation, 90);
+        observation.phase = Phase::Running;
+        observation.generation = 2;
+        observation.activity_seen = true;
+        assert_eq!(
+            watch.observe_game(t + Duration::from_secs(180), &observation, 90),
+            PauseDecision::Running
+        );
+        observation.phase = Phase::Absent;
+        assert_eq!(
+            watch.observe_game(t + Duration::from_secs(181), &observation, 90),
+            PauseDecision::GraceStarted
+        );
+        assert_eq!(
+            watch.observe_game(t + Duration::from_secs(270), &observation, 90),
+            PauseDecision::Waiting(1)
+        );
+    }
+    #[test]
+    fn startup_opt_out_does_not_disable_new_billing_guard_but_global_opt_out_does() {
+        let t = Instant::now();
+        let mut watch = AutoPauseWatch::default();
+        watch.arm_billing(None, 180, true);
+        watch.configure(true, false, true);
+        assert!(matches!(
+            watch.observe(t, false, 90),
+            PauseDecision::StartupWaiting { .. }
+        ));
+        watch.configure(false, false, true);
+        assert_eq!(
+            watch.observe(t + Duration::from_secs(180), false, 90),
+            PauseDecision::Idle
+        );
     }
 }

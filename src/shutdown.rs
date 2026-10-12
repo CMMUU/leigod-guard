@@ -347,4 +347,17 @@ mod tests {
         assert!(result.contains("暂停未确认"));
         assert!(!result.contains("private-test-token"));
     }
+    #[test]
+    fn coordinated_shutdown_never_bypasses_the_account_permit() {
+        let config = Mutex::new(Config::default());
+        let shared = Mutex::new(Shared::default());
+        shared.lock().unwrap().cycle.required = true;
+        let result = pause_before_deadline(
+            &shared,
+            &config,
+            Instant::now() + Duration::from_secs(3),
+            |_, _| panic!("must defer to coordinated protection"),
+        );
+        assert!(result.contains("云端协同"));
+    }
 }

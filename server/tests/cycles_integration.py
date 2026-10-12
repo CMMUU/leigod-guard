@@ -136,7 +136,7 @@ try:
     assert a.send('status')['state'] == 'completed'
     # A delayed pre-completion running sample cannot recreate a cycle.
     assert a.send('observe', billing_age=30, game_generation=1)['cycle_id'] == old_cycle
-    time.sleep(.05)
+    time.sleep(2.1)
     newer = a.send('observe', game_generation=1)
     assert newer['cycle_id'] != old_cycle and newer['remaining_seconds'] >= 178
     a.send('complete', action_id=action, result='confirmed')

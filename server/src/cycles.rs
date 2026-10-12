@@ -174,7 +174,8 @@ async fn observe(tx: &mut Tx<'_>, account: Uuid, device: Uuid, q: &CycleRequest)
     let billing_fresh = q.billing_paused.is_some() && q.billing_age <= 45;
     if billing_fresh
         && q.billing_paused == Some(false)
-        && (cycle.is_none() || completed.is_some_and(|at| billing_at > at))
+        && (cycle.is_none()
+            || completed.is_some_and(|at| billing_at > at + chrono::Duration::seconds(2)))
     {
         let id = Uuid::new_v4();
         sqlx::query("INSERT INTO guard_cycles(id,account_id) VALUES(?,?)")
@@ -207,8 +208,10 @@ async fn observe(tx: &mut Tx<'_>, account: Uuid, device: Uuid, q: &CycleRequest)
         invalidate(tx, account).await?;
     }
     let same_cycle = old.get::<Option<Uuid>, _>("cycle_id") == cycle;
-    let activity =
-        matches!(phase, "running" | "launching") || (same_cycle && old.get::<bool, _>("activity"));
+    let activity = matches!(phase, "running" | "launching")
+        || (same_cycle
+            && old.get::<String, _>("phase") != "unknown"
+            && old.get::<bool, _>("activity"));
     let idle: Option<DateTime<Utc>> = old.get("idle_until");
     let deadline = if phase == "absent" && cycle.is_some() {
         if !changed && idle.is_some() {

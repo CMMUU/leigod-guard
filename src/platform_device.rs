@@ -558,6 +558,22 @@ fn run(
                         &config,
                         kind,
                     );
+                    let state = if kind == Provider::Leigod {
+                        &shared
+                    } else {
+                        &etalien_shared
+                    };
+                    sync_cycle(
+                        &api,
+                        &store,
+                        &mut saved,
+                        &binding,
+                        run_generation,
+                        kind,
+                        state,
+                        &config,
+                        &view,
+                    );
                 }
             } else {
                 for kind in Provider::ALL {
